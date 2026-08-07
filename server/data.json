@@ -1,0 +1,30 @@
+{
+  "users": [
+    {
+      "id": "admin-1",
+      "name": "System Admin",
+      "email": "admin@meridian.edu",
+      "password": "admin123",
+      "role": "admin"
+    },
+    {
+      "id": "user-1785975159646",
+      "name": "Ada",
+      "email": "ada@example.edu",
+      "password": "secret123",
+      "role": "student"
+    }
+  ],
+  "levels": [
+    {
+      "id": "level-1785975159774",
+      "name": "Level 500",
+      "order": 5,
+      "status": "active",
+      "createdAt": "2026-08-06T00:12:39.774Z"
+    }
+  ],
+  "courses": [],
+  "materials": [],
+  "quizzes": []
+}

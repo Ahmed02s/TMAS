@@ -1,0 +1,10 @@
+{
+  "description": "Streamlines project submissions with an intuitive interface ensuring timely, well-organized task management for professionals and teams.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

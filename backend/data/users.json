@@ -1,0 +1,22 @@
+[
+  {
+    "id": "user-1",
+    "name": "Ahmed",
+    "email": "saakaahmed2002@gmail.com",
+    "role": "student",
+    "password": "123456789",
+    "level": "Level 400",
+    "program": "Computer Science",
+    "status": "active"
+  },
+  {
+    "id": "user-2",
+    "name": "Ahmed",
+    "email": "saakamed3@gmail.com",
+    "role": "lecturer",
+    "password": "123456789",
+    "level": null,
+    "program": null,
+    "status": "pending"
+  }
+]

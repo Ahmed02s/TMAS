@@ -1,0 +1,1414 @@
+import { useEffect, useState, useRef } from 'react'
+import Icon from '../components/Icon'
+import type { AppView } from '../App'
+import CourseModal, { type CourseFormValues } from '../components/CourseModal'
+import { API_BASE } from '../config'
+const savedUser = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('tmas-user') || 'null') : null
+
+type Tab = 'overview' | 'levels' | 'courses' | 'lecturers' | 'students' | 'analytics'
+
+const navItems: { key: Tab; label: string; icon: string }[] = [
+  { key: 'overview', label: 'Overview', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
+  { key: 'levels', label: 'Academic Levels', icon: 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10' },
+  { key: 'courses', label: 'Courses', icon: 'M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253' },
+  { key: 'lecturers', label: 'Lecturers', icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z' },
+  { key: 'students', label: 'Students', icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z' },
+  { key: 'analytics', label: 'Analytics', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
+]
+
+function Badge({ children, variant }: { children: React.ReactNode; variant: 'success' | 'warning' | 'danger' | 'default' }) {
+  const cls = {
+    success: 'bg-green-100 text-green-800',
+    warning: 'bg-amber-100 text-amber-800',
+    danger: 'bg-red-100 text-red-800',
+    default: 'bg-secondary text-secondary-foreground',
+  }[variant]
+  return <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${cls}`}>{children}</span>
+}
+
+function ProgressBar({ value }: { value: number }) {
+  const color = value >= 80 ? 'bg-success' : value >= 60 ? 'bg-warning' : 'bg-danger'
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${value}%` }} />
+      </div>
+      <span className="text-xs font-mono text-muted-foreground w-8 text-right">{value}%</span>
+    </div>
+  )
+}
+
+export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void }) {
+  const [tab, setTab] = useState<Tab>('overview')
+  const [lecturerSubTab, setLecturerSubTab] = useState<'pending' | 'approved'>('pending')
+  const [levelFilter, setLevelFilter] = useState('All Levels')
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [levels, setLevels] = useState<Array<{ id: string; name: string; order: number; status: string; created_at?: string }>>([])
+  const [newLevelName, setNewLevelName] = useState('')
+  const [newLevelOrder, setNewLevelOrder] = useState('')
+  const [statusMessage, setStatusMessage] = useState('')
+  const [isSavingLevel, setIsSavingLevel] = useState(false)
+  const [actionLoadingLecturerIds, setActionLoadingLecturerIds] = useState<string[]>([])
+
+  const [students, setStudents] = useState<Array<{ id: string; name: string; email: string; level?: string; role: string; status: string; created_at?: string; courses?: number; completion?: number; enrolled?: number }>>([])
+  const [dashboardLecturers, setDashboardLecturers] = useState<Array<{ id: string; name: string; email: string; role: string; status: string; program?: string; created_at?: string }>>([])
+  const [allCourses, setAllCourses] = useState<Array<{ id?: string; code: string; title: string; level: string; lecturer: string; enrolled: number; status: string; avgScore: number; progress: number; materials: number }>>([])
+  const [materialsCount, setMaterialsCount] = useState(0)
+  const [availableQuizzesCount, setAvailableQuizzesCount] = useState(0)
+  const [completedQuizzesCount, setCompletedQuizzesCount] = useState(0)
+  const [courseModalOpen, setCourseModalOpen] = useState(false)
+  const [selectedCourse, setSelectedCourse] = useState<CourseFormValues | null>(null)
+  const [courseModalError, setCourseModalError] = useState('')
+  const [isSavingCourse, setIsSavingCourse] = useState(false)
+
+  const [searchQuery, setSearchQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('All Status')
+  const [selectedLecturerIds, setSelectedLecturerIds] = useState<string[]>([])
+  const [selectedCourseIds, setSelectedCourseIds] = useState<string[]>([])
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([])
+  const [csvModalOpen, setCsvModalOpen] = useState(false)
+  const [csvRawText, setCsvRawText] = useState('')
+  const [isImportingCsv, setIsImportingCsv] = useState(false)
+  const [announcementModalOpen, setAnnouncementModalOpen] = useState(false)
+  const [announcementMsg, setAnnouncementMsg] = useState('')
+  const [announcementTarget, setAnnouncementTarget] = useState('All Users')
+
+  async function handleBulkLecturers(status: 'active' | 'rejected') {
+    if (!selectedLecturerIds.length) return
+    if (!window.confirm(`Are you sure you want to ${status === 'active' ? 'approve' : 'reject'} ${selectedLecturerIds.length} lecturer registration(s)?`)) return
+    for (const id of selectedLecturerIds) {
+      await setLecturerStatus(id, status)
+    }
+    setSelectedLecturerIds([])
+  }
+
+  async function handleBulkArchiveCourses() {
+    if (!selectedCourseIds.length) return
+    if (!window.confirm(`Are you sure you want to archive ${selectedCourseIds.length} selected course(s)?`)) return
+    for (const id of selectedCourseIds) {
+      try {
+        await fetch(`${API_BASE}/api/courses/${id}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ status: 'archived' }),
+        })
+      } catch {}
+    }
+    setAllCourses(prev => prev.map(c => selectedCourseIds.includes(c.id || '') ? { ...c, status: 'archived' } : c))
+    setSelectedCourseIds([])
+  }
+
+  async function handleImportCsvStudents() {
+    if (!csvRawText.trim()) return
+    setIsImportingCsv(true)
+    const lines = csvRawText.split('\n').filter(l => l.trim())
+    let count = 0
+    for (const line of lines) {
+      const parts = line.split(',').map(s => s.trim())
+      if (parts.length >= 2) {
+        const name = parts[0]
+        const email = parts[1]
+        const level = parts[2] || 'Level 100'
+        const program = parts[3] || 'Computer Science'
+        try {
+          await fetch(`${API_BASE}/api/auth/register`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              name,
+              email,
+              password: 'Password123!',
+              role: 'student',
+              level,
+              program,
+            }),
+          })
+          count++
+        } catch (err) {}
+      }
+    }
+    setIsImportingCsv(false)
+    setCsvModalOpen(false)
+    setCsvRawText('')
+    alert(`Successfully imported ${count} student(s)!`)
+    const res = await fetch(`${API_BASE}/api/dashboard/students`)
+    if (res.ok) {
+      const d = await res.json()
+      if (Array.isArray(d.students)) setStudents(d.students)
+    }
+  }
+
+  async function handleBroadcastAnnouncement() {
+    if (!announcementMsg.trim()) return
+    const targetRole = announcementTarget === 'Students Only' ? 'student' : announcementTarget === 'Lecturers Only' ? 'lecturer' : 'all'
+    try {
+      const { dispatchPushNotification } = await import('../utils/notifications')
+      await dispatchPushNotification({
+        title: 'Institutional Announcement',
+        message: announcementMsg,
+        target_role: targetRole,
+        type: 'warning',
+      })
+    } catch {}
+    alert(`Announcement broadcast sent to ${announcementTarget}!`)
+    setAnnouncementModalOpen(false)
+    setAnnouncementMsg('')
+  }
+
+  const [notifications, setNotifications] = useState<Array<{ id: string; title: string; message: string; type?: string; read?: boolean; created_at?: string }>>([])
+  const seenNotifIdsRef = useRef<Set<string>>(new Set())
+  const isInitialNotifLoadRef = useRef(true)
+
+  useEffect(() => {
+    async function loadDashboard() {
+      try {
+        const [studentsRes, lecturersRes, levelsRes, coursesRes, materialsRes, availableQuizzesRes, completedQuizzesRes, notifRes] = await Promise.all([
+          fetch(`${API_BASE}/api/dashboard/students`),
+          fetch(`${API_BASE}/api/dashboard/lecturers`),
+          fetch(`${API_BASE}/api/levels`),
+          fetch(`${API_BASE}/api/courses`),
+          fetch(`${API_BASE}/api/materials`),
+          fetch(`${API_BASE}/api/quizzes/available`),
+          fetch(`${API_BASE}/api/quizzes/completed`),
+          fetch(`${API_BASE}/api/notifications?role=admin`),
+        ])
+
+        if (studentsRes.ok) {
+          const data = await studentsRes.json()
+          if (Array.isArray(data.students)) setStudents(data.students)
+        }
+        if (lecturersRes.ok) {
+          const data = await lecturersRes.json()
+          if (Array.isArray(data.lecturers)) setDashboardLecturers(data.lecturers)
+        }
+        if (levelsRes.ok) {
+          const data = await levelsRes.json()
+          if (Array.isArray(data.levels)) setLevels(data.levels)
+        }
+        if (coursesRes.ok) {
+          const data = await coursesRes.json()
+          if (Array.isArray(data.courses)) setAllCourses(data.courses.map((course: any) => ({
+            id: course.id,
+            code: course.code ?? `COURSE-${course.id}`,
+            title: course.title,
+            level: course.level ?? 'N/A',
+            lecturer: course.lecturer ?? 'Unassigned',
+            enrolled: Number(course.enrolled ?? course.progress ?? 0),
+            status: course.status ?? 'active',
+            avgScore: Number(course.avg_score ?? 0),
+            progress: Number(course.progress ?? 0),
+            materials: Number(course.materials ?? 0),
+          })))
+        }
+
+        if (materialsRes.ok) {
+          const data = await materialsRes.json()
+          if (Array.isArray(data.materials)) setMaterialsCount(data.materials.length)
+        }
+
+        if (availableQuizzesRes.ok) {
+          const data = await availableQuizzesRes.json()
+          if (Array.isArray(data.quizzes)) setAvailableQuizzesCount(data.quizzes.length)
+        }
+
+        if (completedQuizzesRes.ok) {
+          const data = await completedQuizzesRes.json()
+          if (Array.isArray(data.quizzes)) setCompletedQuizzesCount(data.quizzes.length)
+        }
+
+        if (notifRes.ok) {
+          const data = await notifRes.json()
+          const list = data.notifications || []
+          setNotifications(list)
+
+          // Trigger push notification popups for new incoming notifications
+          let hasNew = false
+          for (const n of list) {
+            if (!seenNotifIdsRef.current.has(n.id)) {
+              seenNotifIdsRef.current.add(n.id)
+              if (!isInitialNotifLoadRef.current) {
+                hasNew = true
+                try {
+                  const { triggerWebPushNotification, playNotificationChime } = await import('../utils/notifications')
+                  triggerWebPushNotification(n.title, { body: n.message })
+                  playNotificationChime()
+                } catch {}
+              }
+            }
+          }
+          if (isInitialNotifLoadRef.current) {
+            isInitialNotifLoadRef.current = false
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load dashboard data', err)
+      }
+    }
+
+    loadDashboard()
+    const interval = setInterval(loadDashboard, 10000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const pendingLecturers = dashboardLecturers.filter(l => l.status === 'pending').map(l => ({
+    id: l.id,
+    name: l.name,
+    email: l.email,
+    dept: l.program || 'Unknown',
+    applied: l.created_at ? new Date(l.created_at).toLocaleDateString() : 'Recently',
+  }))
+
+  const approvedLecturers = dashboardLecturers.filter(l => l.status === 'active' || l.status === 'suspended').map(l => ({
+    id: l.id,
+    name: l.name,
+    email: l.email,
+    dept: l.program || 'Unassigned',
+    courses: 0,
+    students: 0,
+    status: l.status || 'active',
+    lastActive: l.created_at ? new Date(l.created_at).toLocaleDateString() : 'Today',
+  }))
+
+  const visiblePending = pendingLecturers
+
+  const totalStudents = students.length
+  const activeCourses = allCourses.filter(course => course.status.toLowerCase() === 'active').length
+  const avgCourseScore = allCourses.length ? Math.round(allCourses.reduce((sum, course) => sum + course.avgScore, 0) / allCourses.length) : 0
+  const materialsUploaded = materialsCount
+  const inactiveStudents = students.filter(student => student.status !== 'active').length
+  const totalQuizCount = availableQuizzesCount + completedQuizzesCount
+  const quizCompletionRate = totalQuizCount ? Math.round((completedQuizzesCount / totalQuizCount) * 100) : 0
+  const quizTrend = totalQuizCount ? `${completedQuizzesCount} completed / ${totalQuizCount} total` : 'No quizzes available yet'
+  const coursesByLevel = levels.map(level => {
+    const levelCourses = allCourses.filter(course => course.level === level.name)
+    const levelStudents = students.filter(student => student.level === level.name)
+    return {
+      id: level.id,
+      level: level.name,
+      courseCount: levelCourses.length,
+      studentCount: levelStudents.length,
+      percentage: totalStudents ? Math.round((levelStudents.length / totalStudents) * 100) : 0,
+      status: level.status,
+      created_at: level.created_at,
+      order: level.order,
+    }
+  })
+  const studentsByLevel = coursesByLevel.map(group => ({
+    level: group.level,
+    count: group.studentCount,
+    percentage: group.percentage,
+  }))
+  const topCourses = [...allCourses]
+    .sort((a, b) => b.avgScore - a.avgScore || b.progress - a.progress)
+    .slice(0, 5)
+
+  const activityNotifs = [
+    {
+      icon: 'robot',
+      text: `${visiblePending.length} lecturer registration request${visiblePending.length === 1 ? '' : 's'} waiting review`,
+      time: visiblePending.length ? 'Now' : 'No new notifications',
+      color: 'bg-blue-100 text-blue-700',
+    },
+    {
+      icon: 'book',
+      text: `${materialsCount} learning material${materialsCount === 1 ? '' : 's'} indexed`,
+      time: 'Today',
+      color: 'bg-green-100 text-green-700',
+    },
+    {
+      icon: 'robot',
+      text: `${availableQuizzesCount} quiz${availableQuizzesCount === 1 ? '' : 'zes'} available for students`,
+      time: 'This week',
+      color: 'bg-purple-100 text-purple-700',
+    },
+    {
+      icon: 'trophy',
+      text: `${completedQuizzesCount} completed quiz${completedQuizzesCount === 1 ? '' : 'zes'}`,
+      time: 'This week',
+      color: 'bg-success/20 text-success',
+    },
+  ]
+
+  const recentActivity = [
+    ...visiblePending.slice(0, 3).map((l) => ({
+      icon: 'robot',
+      text: `${l.name} requested lecturer access in ${l.dept}`,
+      time: l.applied,
+      color: 'bg-blue-100 text-blue-700',
+    })),
+    {
+      icon: 'book',
+      text: `${materialsCount} new material${materialsCount === 1 ? '' : 's'} available for review`,
+      time: 'Today',
+      color: 'bg-green-100 text-green-700',
+    },
+    {
+      icon: 'robot',
+      text: `${completedQuizzesCount} quiz${completedQuizzesCount === 1 ? '' : 'zes'} were completed`,
+      time: 'This week',
+      color: 'bg-purple-100 text-purple-700',
+    },
+  ]
+
+  async function setLecturerStatus(lecturerId: string, status: 'active' | 'rejected' | 'suspended') {
+    setActionLoadingLecturerIds(ids => [...ids, lecturerId])
+    try {
+      const response = await fetch(`${API_BASE}/api/dashboard/lecturers/${lecturerId}/status`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.detail || data.error || 'Could not update lecturer status')
+      }
+
+      setDashboardLecturers(prev => prev.map(lecturer =>
+        lecturer.id === lecturerId ? { ...lecturer, status } : lecturer,
+      ))
+
+      try {
+        const { dispatchPushNotification } = await import('../utils/notifications')
+        if (status === 'active') {
+          await dispatchPushNotification({
+            title: 'Account Approved / Reinstated!',
+            message: 'Your lecturer account status is active. You can now access the portal.',
+            target_role: 'lecturer',
+            type: 'success',
+          })
+        } else if (status === 'suspended') {
+          await dispatchPushNotification({
+            title: 'Account Suspended',
+            message: 'Your lecturer account has been suspended by Administrator.',
+            target_role: 'lecturer',
+            type: 'danger',
+          })
+        }
+      } catch {}
+    } catch (error) {
+      console.error('Failed to update lecturer status', error)
+    } finally {
+      setActionLoadingLecturerIds(ids => ids.filter(id => id !== lecturerId))
+    }
+  }
+
+  async function handleCreateLevel() {
+    if (!newLevelName.trim()) {
+      setStatusMessage('Please enter a level name')
+      return
+    }
+
+    setIsSavingLevel(true)
+    setStatusMessage('')
+
+    try {
+      const response = await fetch(`${API_BASE}/api/levels`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: newLevelName.trim(), order: Number(newLevelOrder || levels.length + 1), status: 'active' }),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.error || 'Could not create level')
+      }
+
+      setLevels(prev => [data.level, ...prev])
+      setNewLevelName('')
+      setNewLevelOrder('')
+      setStatusMessage(`Created ${data.level.name}`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Could not create level')
+    } finally {
+      setIsSavingLevel(false)
+    }
+  }
+
+  function openCourseModal(course?: CourseFormValues) {
+    setSelectedCourse(course ?? null)
+    setCourseModalError('')
+    setCourseModalOpen(true)
+  }
+
+  async function handleSaveCourse(course: CourseFormValues) {
+    setIsSavingCourse(true)
+    setCourseModalError('')
+
+    try {
+      const endpoint = course.id ? `${API_BASE}/api/courses/${course.id}` : `${API_BASE}/api/courses`
+      const method = course.id ? 'PATCH' : 'POST'
+      const response = await fetch(endpoint, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          code: course.code,
+          title: course.title,
+          level: course.level,
+          lecturer: course.lecturer,
+          status: course.status,
+        }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || data.error || 'Could not save course')
+
+      const savedCourse = data.course ?? data
+      const normalizedCourse = {
+        id: savedCourse.id ?? course.id,
+        code: savedCourse.code ?? course.code,
+        title: savedCourse.title ?? course.title,
+        level: savedCourse.level ?? course.level,
+        lecturer: (savedCourse.lecturer ?? course.lecturer) || 'Unassigned',
+        enrolled: Number(savedCourse.enrolled ?? savedCourse.progress ?? 0),
+        status: savedCourse.status ?? course.status,
+        avgScore: Number(savedCourse.avg_score ?? savedCourse.avgScore ?? 0),
+        progress: Number(savedCourse.progress ?? 0),
+        materials: Number(savedCourse.materials ?? 0),
+      }
+
+      setAllCourses(prev => {
+        if (course.id) {
+          return prev.map(c => (c.id === course.id ? normalizedCourse : c))
+        }
+        return [normalizedCourse, ...prev]
+      })
+      setCourseModalOpen(false)
+      setSelectedCourse(null)
+    } catch (err) {
+      setCourseModalError(err instanceof Error ? err.message : 'Could not save course')
+      console.error('Save course failed', err)
+    } finally {
+      setIsSavingCourse(false)
+    }
+  }
+
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+
+  return (
+    <div className="flex h-screen bg-background overflow-hidden font-sans relative">
+
+      {/* ── Mobile Overlay ── */}
+      {mobileNavOpen && (
+        <div className="fixed inset-0 z-40 bg-black/60 md:hidden" onClick={() => setMobileNavOpen(false)} />
+      )}
+
+      {/* ── Sidebar ── */}
+      <aside className={`fixed md:static inset-y-0 left-0 z-50 bg-sidebar flex flex-col border-r border-white/5 shrink-0 transition-transform duration-200 ${mobileNavOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`} style={{ width: '15rem' }}>
+        <div className="px-5 py-5 border-b border-white/5 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center shrink-0">
+              <span className="text-white text-sm font-bold font-mono">T</span>
+            </div>
+            <div>
+              <p className="text-sidebar-foreground font-semibold text-sm">TMAS</p>
+              <p className="text-sidebar-muted text-xs">Meridian University</p>
+            </div>
+          </div>
+          <button onClick={() => setMobileNavOpen(false)} className="md:hidden text-sidebar-muted hover:text-sidebar-foreground p-1">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+
+        <div className="px-3 py-4 flex-1 overflow-y-auto">
+          <p className="text-sidebar-muted text-xs font-semibold uppercase tracking-widest px-3 mb-3">Administration</p>
+          <nav className="space-y-1">
+            {navItems.map(item => (
+              <button
+                key={item.key}
+                onClick={() => {
+                  setTab(item.key)
+                  setMobileNavOpen(false)
+                }}
+                className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${tab === item.key ? 'bg-primary text-white' : 'text-sidebar-foreground/65 hover:text-sidebar-foreground hover:bg-white/5'}`}
+              >
+                <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
+                </svg>
+                {item.label}
+                {item.key === 'lecturers' && visiblePending.length > 0 && (
+                  <span className="ml-auto bg-accent text-white text-xs rounded-full px-1.5 py-0.5 leading-none">{visiblePending.length}</span>
+                )}
+              </button>
+            ))}
+          </nav>
+        </div>
+
+        <div className="px-4 py-4 border-t border-white/5">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center shrink-0">
+              <span className="text-white text-xs font-bold">{savedUser?.name ? savedUser.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() : 'AD'}</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sidebar-foreground text-xs font-semibold truncate">{savedUser?.name || 'System Administrator'}</p>
+              <p className="text-sidebar-muted text-xs truncate">{savedUser?.email || 'med3719@gmail.com'}</p>
+            </div>
+            <button onClick={() => {
+              localStorage.removeItem('tmas-token')
+              localStorage.removeItem('tmas-user')
+              onNavigate('login')
+            }} className="text-sidebar-muted hover:text-sidebar-foreground transition-colors" title="Logout">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* ── Main Content ── */}
+      <main className="flex-1 flex flex-col overflow-hidden">
+
+        {/* Top bar */}
+        <header className="h-14 bg-card border-b border-border flex items-center justify-between px-4 sm:px-6 shrink-0 gap-4">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setMobileNavOpen(true)} className="md:hidden text-muted-foreground hover:text-foreground p-1">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
+            </button>
+            <h1 className="text-foreground font-semibold text-sm capitalize hidden sm:block">
+              {tab === 'overview' ? 'Dashboard Overview' : tab === 'levels' ? 'Academic Levels' : tab === 'courses' ? 'Course Management' : tab === 'lecturers' ? 'Lecturer Management' : tab === 'students' ? 'Student Management' : 'Analytics'}
+            </h1>
+          </div>
+
+          <div className="flex-1 max-w-md">
+            <div className="relative">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search name, email, course code, level..."
+                className="w-full pl-9 pr-4 py-1.5 bg-muted/70 border border-border rounded-xl text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+              <svg className="w-4 h-4 text-muted-foreground absolute left-3 top-2" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 sm:gap-3">
+            <button
+              onClick={async () => {
+                const { requestPushPermission, triggerWebPushNotification, playNotificationChime } = await import('../utils/notifications')
+                const granted = await requestPushPermission()
+                triggerWebPushNotification('🔔 TMAS Push Notification System Active!', {
+                  body: 'Web Push alerts and real-time notification engine are fully working on your device.',
+                })
+                playNotificationChime()
+                alert(granted ? '🔔 Browser Push Notification Dispatched! Check your desktop/mobile notifications.' : '🔔 Sound chime played! (Enable browser notification permissions to see desktop popups).')
+              }}
+              className="flex items-center gap-1.5 text-xs font-semibold bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 px-2.5 sm:px-3 py-1.5 rounded-xl transition-colors shrink-0"
+              title="Test Instant Web Push Notification"
+            >
+              <Icon name="bolt" size={14} />
+              <span className="hidden sm:inline">Test Push</span>
+            </button>
+            <button
+              onClick={() => setAnnouncementModalOpen(true)}
+              className="flex items-center gap-1.5 text-xs font-semibold bg-accent/15 hover:bg-accent/25 text-accent border border-accent/30 px-2.5 sm:px-3 py-1.5 rounded-xl transition-colors shrink-0"
+              title="Broadcast Announcement"
+            >
+              <Icon name="celebrate" size={14} />
+              <span className="hidden sm:inline">Broadcast</span>
+            </button>
+            <div className="relative">
+              <button onClick={() => setNotifOpen(!notifOpen)} className="relative p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted transition-colors">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-accent"></span>
+              </button>
+              {notifOpen && (
+                <div className="absolute right-0 top-10 w-80 bg-card border border-border rounded-2xl shadow-xl z-50 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+                    <p className="font-semibold text-foreground text-sm">Notifications</p>
+                    <span className="text-xs text-muted-foreground">{notifications.length} new</span>
+                  </div>
+                  <div className="max-h-72 overflow-y-auto">
+                    {notifications.map((a, i) => (
+                      <div key={i} className="flex items-start gap-3 px-4 py-3 hover:bg-muted/50 border-b border-border/50 last:border-0 transition-colors">
+                        <span className={`text-sm rounded-full px-2 py-0.5 ${a.color}`}><Icon name={a.icon} size={16} /></span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-foreground text-xs leading-snug">{a.text}</p>
+                          <p className="text-muted-foreground text-xs mt-0.5">{a.time}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center">
+              <span className="text-white text-xs font-bold">SA</span>
+            </div>
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-6">
+
+          {/* ── OVERVIEW ── */}
+          {tab === 'overview' && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {[
+                  { label: 'Total Students', val: String(students.length), sub: 'Current student records', color: 'text-blue-600', bg: 'bg-blue-50' },
+                  { label: 'Active Courses', val: String(allCourses.filter(course => course.status.toLowerCase() === 'active').length), sub: 'Across levels', color: 'text-purple-600', bg: 'bg-purple-50' },
+                  { label: 'Pending Approvals', val: String(visiblePending.length), sub: 'Lecturers waiting', color: 'text-amber-600', bg: 'bg-amber-50' },
+                  { label: 'Avg Completion Rate', val: `${students.length ? Math.round(students.reduce((sum, student) => sum + (Number((student as any).completion) || 0), 0) / students.length) : 0}%`, sub: 'Estimated progress average', color: 'text-green-600', bg: 'bg-green-50' },
+                ].map((s, i) => (
+                  <div key={i} className="bg-card border border-border rounded-2xl p-5">
+                    <div className={`inline-flex p-2 rounded-xl ${s.bg} mb-3`}>
+                      <div className={`w-4 h-4 rounded-full ${s.color.replace('text-', 'bg-').replace('-600', '-500')}`} />
+                    </div>
+                    <p className="text-2xl font-bold font-mono text-foreground">{s.val}</p>
+                    <p className="text-sm font-medium text-foreground mt-0.5">{s.label}</p>
+                    <p className="text-xs text-muted-foreground mt-1">{s.sub}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2 bg-card border border-border rounded-2xl overflow-hidden">
+                  <div className="px-6 py-4 border-b border-border flex items-center justify-between">
+                    <h3 className="font-semibold text-foreground">Pending Lecturer Approvals</h3>
+                    <button onClick={() => setTab('lecturers')} className="text-xs text-primary hover:underline">View all</button>
+                  </div>
+                  {visiblePending.length === 0 ? (
+                    <div className="px-6 py-10 text-center text-muted-foreground text-sm">All caught up — no pending approvals.</div>
+                  ) : (
+                    <div className="divide-y divide-border">
+                      {visiblePending.slice(0, 4).map(l => (
+                        <div key={l.id} className="flex items-center gap-4 px-6 py-4">
+                          <div className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center shrink-0">
+                            <span className="text-primary text-xs font-bold">{l.name.charAt(0)}</span>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-foreground truncate">{l.name}</p>
+                            <p className="text-xs text-muted-foreground">{l.dept} · {l.applied}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setLecturerStatus(l.id, 'active')}
+                              disabled={actionLoadingLecturerIds.includes(l.id)}
+                              className="px-3 py-1.5 bg-success/10 hover:bg-success/20 text-success text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
+                            >
+                              {actionLoadingLecturerIds.includes(l.id) ? 'Approving...' : 'Approve'}
+                            </button>
+                            <button
+                              onClick={() => setLecturerStatus(l.id, 'rejected')}
+                              disabled={actionLoadingLecturerIds.includes(l.id)}
+                              className="px-3 py-1.5 bg-danger/10 hover:bg-danger/20 text-danger text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
+                            >
+                              {actionLoadingLecturerIds.includes(l.id) ? 'Rejecting...' : 'Reject'}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-card border border-border rounded-2xl overflow-hidden">
+                  <div className="px-5 py-4 border-b border-border">
+                    <h3 className="font-semibold text-foreground text-sm">Recent Activity</h3>
+                  </div>
+                  <div className="divide-y divide-border">
+                    {recentActivity.length > 0 ? recentActivity.slice(0, 5).map((a, i) => (
+                      <div key={i} className="flex items-start gap-3 px-5 py-3.5">
+                        <span className={`text-base rounded-full px-2 py-1 ${a.color}`}>{a.icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs text-foreground leading-snug">{a.text}</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">{a.time}</p>
+                        </div>
+                      </div>
+                    )) : (
+                      <div className="px-5 py-6 text-sm text-muted-foreground">No recent activity yet.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-card border border-border rounded-2xl overflow-hidden">
+                <div className="px-6 py-4 border-b border-border">
+                  <h3 className="font-semibold text-foreground">Level Overview</h3>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border bg-muted/40">
+                        <th className="text-left px-6 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Level</th>
+                        <th className="text-left px-6 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Courses</th>
+                        <th className="text-left px-6 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Students</th>
+                        <th className="text-left px-6 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Enrollment %</th>
+                        <th className="text-left px-6 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {coursesByLevel.map((group, i) => {
+                        const pct = group.percentage
+                        return (
+                          <tr key={group.level || i} className="hover:bg-muted/30 transition-colors">
+                            <td className="px-6 py-4 font-semibold text-foreground font-mono text-sm">{group.level}</td>
+                            <td className="px-6 py-4 text-muted-foreground">{group.courseCount}</td>
+                            <td className="px-6 py-4 text-foreground font-mono font-medium">{group.studentCount}</td>
+                            <td className="px-6 py-4 w-40"><ProgressBar value={pct} /></td>
+                            <td className="px-6 py-4"><Badge variant="success">{levels.find(level => level.name === group.level)?.status ?? 'active'}</Badge></td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── LEVELS ── */}
+          {tab === 'levels' && (
+            <div className="space-y-5">
+              <div className="flex items-center justify-between">
+                <p className="text-muted-foreground text-sm">Manage the academic level structure for Meridian University.</p>
+                <button
+                  onClick={handleCreateLevel}
+                  disabled={isSavingLevel}
+                  className="flex items-center gap-2 bg-primary text-primary-foreground text-sm font-semibold px-4 py-2.5 rounded-xl hover:bg-blue-950 transition-colors disabled:opacity-60"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
+                  {isSavingLevel ? 'Saving...' : 'Add Level'}
+                </button>
+              </div>
+              <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
+                <div className="flex items-center gap-3">
+                  <input
+                    value={newLevelName}
+                    onChange={e => setNewLevelName(e.target.value)}
+                    placeholder="Enter level name (e.g. Level 500)"
+                    className="flex-1 px-3 py-2 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                </div>
+                {statusMessage && <p className="text-sm text-primary">{statusMessage}</p>}
+              </div>
+              <div className="bg-card border border-border rounded-2xl overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/40">
+                      {['Level Name', 'Courses', 'Students', 'Status', 'Created', 'Actions'].map(h => (
+                        <th key={h} className="text-left px-6 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {coursesByLevel.map((group, i) => (
+                      <tr key={group.id || i} className="hover:bg-muted/30 transition-colors">
+                        <td className="px-6 py-4 font-bold text-foreground font-mono">{group.level}</td>
+                        <td className="px-6 py-4 text-muted-foreground">{group.courseCount}</td>
+                        <td className="px-6 py-4 text-foreground font-mono font-semibold">{group.studentCount}</td>
+                        <td className="px-6 py-4"><Badge variant="success">{group.status}</Badge></td>
+                        <td className="px-6 py-4 text-muted-foreground text-xs">{group.created_at ? new Date(group.created_at).toLocaleDateString() : 'New'}</td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={async () => {
+                                const levelObj = levels.find(l => l.name === group.level) || group
+                                if (!levelObj.id) return
+                                const newName = window.prompt('Edit Level name', group.level)
+                                if (!newName || !newName.trim()) return
+                                try {
+                                  const res = await fetch(`${API_BASE}/api/levels/${levelObj.id}`, {
+                                    method: 'PATCH',
+                                    headers: { 'content-type': 'application/json' },
+                                    body: JSON.stringify({ name: newName.trim() }),
+                                  })
+                                  const d = await res.json()
+                                  if (!res.ok) throw new Error(d.detail || d.error || 'Could not update level')
+                                  setLevels(prev => prev.map(l => l.id === levelObj.id ? { ...l, name: newName.trim() } : l))
+                                } catch (err) {
+                                  console.error('Update level failed', err)
+                                  window.alert(err instanceof Error ? err.message : 'Could not update level')
+                                }
+                              }}
+                              className="text-xs font-medium text-primary hover:underline"
+                            >
+                              Edit
+                            </button>
+                            <span className="text-border">|</span>
+                            <button
+                              onClick={async () => {
+                                const levelObj = levels.find(l => l.name === group.level) || group
+                                if (!levelObj.id) return
+                                const newStatus = group.status === 'archived' ? 'active' : 'archived'
+                                try {
+                                  const res = await fetch(`${API_BASE}/api/levels/${levelObj.id}`, {
+                                    method: 'PATCH',
+                                    headers: { 'content-type': 'application/json' },
+                                    body: JSON.stringify({ status: newStatus }),
+                                  })
+                                  const d = await res.json()
+                                  if (!res.ok) throw new Error(d.detail || d.error || 'Could not archive level')
+                                  setLevels(prev => prev.map(l => l.id === levelObj.id ? { ...l, status: newStatus } : l))
+                                } catch (err) {
+                                  console.error('Archive level failed', err)
+                                  window.alert(err instanceof Error ? err.message : 'Could not archive level')
+                                }
+                              }}
+                              className="text-xs font-medium text-muted-foreground hover:text-foreground"
+                            >
+                              {group.status === 'archived' ? 'Unarchive' : 'Archive'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ── COURSES ── */}
+          {tab === 'courses' && (
+            <div className="space-y-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <select value={levelFilter} onChange={e => setLevelFilter(e.target.value)} className="px-3 py-2 bg-card border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30">
+                    <option>All Levels</option>
+                    {levels.map(l => <option key={l.name}>{l.name}</option>)}
+                  </select>
+                  <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="px-3 py-2 bg-card border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30">
+                    <option>All Status</option>
+                    <option>Active</option>
+                    <option>Archived</option>
+                  </select>
+                  {selectedCourseIds.length > 0 && (
+                    <button
+                      onClick={handleBulkArchiveCourses}
+                      className="px-3.5 py-2 bg-danger/10 hover:bg-danger/20 text-danger text-xs font-semibold rounded-xl transition-colors flex items-center gap-1.5"
+                    >
+                      <span>Archive Selected ({selectedCourseIds.length})</span>
+                    </button>
+                  )}
+                </div>
+                <button onClick={() => openCourseModal()} className="flex items-center gap-2 bg-primary text-primary-foreground text-sm font-semibold px-4 py-2.5 rounded-xl hover:bg-blue-950 transition-colors">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
+                  Add Course
+                </button>
+              </div>
+              <div className="bg-card border border-border rounded-2xl overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/40">
+                      <th className="px-4 py-3 text-left">
+                        <input
+                          type="checkbox"
+                          checked={selectedCourseIds.length > 0 && selectedCourseIds.length === allCourses.length}
+                          onChange={e => {
+                            if (e.target.checked) {
+                              setSelectedCourseIds(allCourses.map(c => c.id || '').filter(Boolean))
+                            } else {
+                              setSelectedCourseIds([])
+                            }
+                          }}
+                          className="rounded border-border text-primary focus:ring-primary/30"
+                        />
+                      </th>
+                      {['Code', 'Course Title', 'Level', 'Lecturer', 'Enrolled', 'Status', 'Actions'].map(h => (
+                        <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {allCourses.filter(c => {
+                      const matchesLevel = levelFilter === 'All Levels' || c.level === levelFilter
+                      const matchesStatus = statusFilter === 'All Status' || c.status.toLowerCase() === statusFilter.toLowerCase()
+                      const matchesSearch = !searchQuery || `${c.code} ${c.title} ${c.level} ${c.lecturer}`.toLowerCase().includes(searchQuery.toLowerCase())
+                      return matchesLevel && matchesStatus && matchesSearch
+                    }).map((c, i) => (
+                      <tr key={i} className="hover:bg-muted/30 transition-colors">
+                        <td className="px-4 py-3.5">
+                          <input
+                            type="checkbox"
+                            checked={selectedCourseIds.includes(c.id || '')}
+                            onChange={e => {
+                              if (!c.id) return
+                              if (e.target.checked) {
+                                setSelectedCourseIds(prev => [...prev, c.id!])
+                              } else {
+                                setSelectedCourseIds(prev => prev.filter(id => id !== c.id))
+                              }
+                            }}
+                            className="rounded border-border text-primary focus:ring-primary/30"
+                          />
+                        </td>
+                        <td className="px-4 py-3.5 font-mono text-xs font-bold text-primary">{c.code}</td>
+                        <td className="px-4 py-3.5 text-foreground font-medium max-w-48 truncate">{c.title}</td>
+                        <td className="px-4 py-3.5"><span className="text-xs bg-secondary text-secondary-foreground px-2 py-0.5 rounded-full font-medium">{c.level}</span></td>
+                        <td className="px-4 py-3.5 text-muted-foreground text-xs">{c.lecturer}</td>
+                        <td className="px-4 py-3.5 text-foreground font-mono font-semibold text-sm">{c.enrolled}</td>
+                        <td className="px-4 py-3.5"><Badge variant={c.status === 'Active' ? 'success' : 'default'}>{c.status}</Badge></td>
+                        <td className="px-4 py-3.5">
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => openCourseModal(c)} className="text-xs font-medium text-primary hover:underline">Edit</button>
+                            <span className="text-border">|</span>
+                            <button
+                              onClick={() => openCourseModal({
+                                code: `${c.code}-COPY`,
+                                title: `${c.title} (Copy)`,
+                                level: c.level,
+                                lecturer: c.lecturer,
+                                status: 'active'
+                              })}
+                              className="text-xs font-medium text-amber-600 hover:underline"
+                              title="Duplicate course setup"
+                            >
+                              Duplicate
+                            </button>
+                            <span className="text-border">|</span>
+                            <button
+                              onClick={async () => {
+                                if (!c.id) return
+                                const newStatus = c.status === 'archived' ? 'active' : 'archived'
+                                try {
+                                  const res = await fetch(`${API_BASE}/api/courses/${c.id}`, {
+                                    method: 'PATCH',
+                                    headers: { 'content-type': 'application/json' },
+                                    body: JSON.stringify({ status: newStatus }),
+                                  })
+                                  const d = await res.json()
+                                  if (!res.ok) throw new Error(d.detail || d.error || 'Could not archive course')
+                                  setAllCourses(prev => prev.map(item => item.id === c.id ? { ...item, status: newStatus } : item))
+                                } catch (err) {
+                                  console.error('Archive course failed', err)
+                                  window.alert(err instanceof Error ? err.message : 'Could not archive course')
+                                }
+                              }}
+                              className="text-xs font-medium text-muted-foreground hover:text-foreground"
+                            >
+                              {c.status === 'archived' ? 'Unarchive' : 'Archive'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ── LECTURERS ── */}
+          {tab === 'lecturers' && (
+            <div className="space-y-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex bg-muted rounded-xl p-1 w-fit">
+                  {([['pending', `Pending (${visiblePending.length})`], ['approved', 'Approved']] as [string, string][]).map(([key, label]) => (
+                    <button key={key} onClick={() => setLecturerSubTab(key as 'pending' | 'approved')} className={`px-5 py-2 text-sm font-medium rounded-lg transition-all ${lecturerSubTab === key ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {lecturerSubTab === 'pending' && selectedLecturerIds.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleBulkLecturers('active')}
+                      className="px-3.5 py-1.5 bg-success text-success-foreground text-xs font-semibold rounded-xl transition-colors hover:bg-emerald-600 shadow-sm"
+                    >
+                      ✓ Approve Selected ({selectedLecturerIds.length})
+                    </button>
+                    <button
+                      onClick={() => handleBulkLecturers('rejected')}
+                      className="px-3.5 py-1.5 bg-danger/10 hover:bg-danger/20 text-danger text-xs font-semibold rounded-xl transition-colors"
+                    >
+                      ✗ Reject Selected ({selectedLecturerIds.length})
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {lecturerSubTab === 'pending' && (
+                <div className="bg-card border border-border rounded-2xl overflow-x-auto">
+                  {visiblePending.length === 0 ? (
+                    <div className="px-6 py-16 text-center">
+                      <p className="text-2xl mb-2"><Icon name="trophy" size={36} /></p>
+                      <p className="font-semibold text-foreground">All approvals processed</p>
+                      <p className="text-muted-foreground text-sm mt-1">No pending lecturer registrations.</p>
+                    </div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border bg-muted/40">
+                          <th className="px-5 py-3 text-left">
+                            <input
+                              type="checkbox"
+                              checked={selectedLecturerIds.length > 0 && selectedLecturerIds.length === visiblePending.length}
+                              onChange={e => {
+                                if (e.target.checked) {
+                                  setSelectedLecturerIds(visiblePending.map(l => l.id))
+                                } else {
+                                  setSelectedLecturerIds([])
+                                }
+                              }}
+                              className="rounded border-border text-primary focus:ring-primary/30"
+                            />
+                          </th>
+                          {['Name', 'Email', 'Department', 'Applied', 'Actions'].map(h => (
+                            <th key={h} className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {visiblePending.filter(l => !searchQuery || `${l.name} ${l.email} ${l.dept}`.toLowerCase().includes(searchQuery.toLowerCase())).map(l => (
+                          <tr key={l.id} className="hover:bg-muted/30 transition-colors">
+                            <td className="px-5 py-4">
+                              <input
+                                type="checkbox"
+                                checked={selectedLecturerIds.includes(l.id)}
+                                onChange={e => {
+                                  if (e.target.checked) {
+                                    setSelectedLecturerIds(prev => [...prev, l.id])
+                                  } else {
+                                    setSelectedLecturerIds(prev => prev.filter(id => id !== l.id))
+                                  }
+                                }}
+                                className="rounded border-border text-primary focus:ring-primary/30"
+                              />
+                            </td>
+                            <td className="px-5 py-4">
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-full bg-secondary flex items-center justify-center shrink-0">
+                                  <span className="text-primary text-xs font-bold">{l.name.charAt(0)}</span>
+                                </div>
+                                <span className="font-semibold text-foreground">{l.name}</span>
+                              </div>
+                            </td>
+                            <td className="px-5 py-4 text-muted-foreground text-xs">{l.email}</td>
+                            <td className="px-5 py-4 text-muted-foreground text-sm">{l.dept}</td>
+                            <td className="px-5 py-4 text-muted-foreground text-xs">{l.applied}</td>
+                            <td className="px-5 py-4">
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => setLecturerStatus(l.id, 'active')}
+                                  disabled={actionLoadingLecturerIds.includes(l.id)}
+                                  className="px-3 py-1.5 bg-success/10 hover:bg-success/20 text-success text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
+                                >
+                                  {actionLoadingLecturerIds.includes(l.id) ? 'Approving...' : '✓ Approve'}
+                                </button>
+                                <button
+                                  onClick={() => setLecturerStatus(l.id, 'rejected')}
+                                  disabled={actionLoadingLecturerIds.includes(l.id)}
+                                  className="px-3 py-1.5 bg-danger/10 hover:bg-danger/20 text-danger text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
+                                >
+                                  {actionLoadingLecturerIds.includes(l.id) ? 'Rejecting...' : '✗ Reject'}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
+
+              {lecturerSubTab === 'approved' && (
+                <div className="bg-card border border-border rounded-2xl overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border bg-muted/40">
+                        {['Name', 'Email', 'Department', 'Status', 'Last Active', 'Actions'].map(h => (
+                          <th key={h} className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {approvedLecturers.map(l => (
+                        <tr key={l.id} className="hover:bg-muted/30 transition-colors">
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                                <span className="text-primary text-xs font-bold">{l.name.charAt(0)}</span>
+                              </div>
+                              <span className="font-semibold text-foreground">{l.name}</span>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4 text-muted-foreground text-xs">{l.email}</td>
+                          <td className="px-5 py-4 text-muted-foreground text-sm">{l.dept}</td>
+                          <td className="px-5 py-4">
+                            {l.status === 'suspended' ? (
+                              <span className="inline-flex items-center gap-1.5 text-xs font-bold text-danger bg-danger/10 px-2.5 py-1 rounded-full border border-danger/20">
+                                <i className="fa-solid fa-user-slash text-[10px]" />
+                                <span>Suspended</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 text-xs font-bold text-success bg-success/10 px-2.5 py-1 rounded-full border border-success/20">
+                                <i className="fa-solid fa-user-check text-[10px]" />
+                                <span>Active</span>
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-5 py-4 text-muted-foreground text-xs">{l.lastActive}</td>
+                          <td className="px-5 py-4">
+                            {l.status === 'suspended' ? (
+                              <button
+                                onClick={() => setLecturerStatus(l.id, 'active')}
+                                disabled={actionLoadingLecturerIds.includes(l.id)}
+                                className="px-3.5 py-1.5 bg-success/15 hover:bg-success/25 text-success font-semibold text-xs rounded-xl transition-colors disabled:opacity-60 flex items-center gap-1.5 shadow-xs"
+                                title="Reinstate lecturer access"
+                              >
+                                <i className="fa-solid fa-rotate-left text-xs" />
+                                <span>{actionLoadingLecturerIds.includes(l.id) ? 'Reinstating...' : 'Reinstate Lecturer'}</span>
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  if (window.confirm(`Are you sure you want to suspend ${l.name}? They will lose access to TMAS until reinstated.`)) {
+                                    setLecturerStatus(l.id, 'suspended')
+                                  }
+                                }}
+                                disabled={actionLoadingLecturerIds.includes(l.id)}
+                                className="px-3.5 py-1.5 bg-danger/10 hover:bg-danger/20 text-danger font-semibold text-xs rounded-xl transition-colors disabled:opacity-60 flex items-center gap-1.5"
+                                title="Suspend lecturer access"
+                              >
+                                <i className="fa-solid fa-ban text-xs" />
+                                <span>{actionLoadingLecturerIds.includes(l.id) ? 'Suspending...' : 'Suspend'}</span>
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── STUDENTS ── */}
+          {tab === 'students' && (
+            <div className="space-y-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-muted-foreground text-sm">{students.length} student{students.length === 1 ? '' : 's'} registered.</p>
+                <button
+                  onClick={() => setCsvModalOpen(true)}
+                  className="flex items-center gap-2 bg-primary text-primary-foreground text-xs font-semibold px-3.5 py-2 rounded-xl hover:bg-blue-950 transition-colors shadow-sm"
+                >
+                  <Icon name="upload" size={14} />
+                  <span>Import Students (CSV)</span>
+                </button>
+              </div>
+              <div className="bg-card border border-border rounded-2xl overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/40">
+                      {['Student', 'Email', 'Level', 'Courses', 'Completion', 'Enrolled', 'Status'].map(h => (
+                        <th key={h} className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {students.filter(s => !searchQuery || `${s.name} ${s.email} ${s.level}`.toLowerCase().includes(searchQuery.toLowerCase())).map((s, i) => (
+                      <tr key={i} className="hover:bg-muted/30 transition-colors">
+                        <td className="px-5 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center shrink-0">
+                              <span className="text-muted-foreground text-xs font-bold">{s.name.charAt(0)}</span>
+                            </div>
+                            <span className="font-semibold text-foreground">{s.name}</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-4 text-muted-foreground text-xs">{s.email}</td>
+                        <td className="px-5 py-4"><span className="text-xs bg-secondary text-secondary-foreground px-2 py-0.5 rounded-full font-medium">{s.level}</span></td>
+                        <td className="px-5 py-4 text-foreground font-mono font-semibold">{s.courses}</td>
+                        <td className="px-5 py-4 w-36"><ProgressBar value={s.completion ?? 0} /></td>
+                        <td className="px-5 py-4 text-muted-foreground text-xs">{s.enrolled ?? 0}</td>
+                        <td className="px-5 py-4">
+                          <select
+                            value={s.status || 'active'}
+                            onChange={async e => {
+                              const newStatus = e.target.value
+                              try {
+                                const res = await fetch(`${API_BASE}/api/dashboard/students/${s.id}`, {
+                                  method: 'PATCH',
+                                  headers: { 'content-type': 'application/json' },
+                                  body: JSON.stringify({ status: newStatus }),
+                                })
+                                const d = await res.json()
+                                if (!res.ok) throw new Error(d.detail || d.error || 'Could not update student status')
+                                setStudents(prev => prev.map(st => st.id === s.id ? { ...st, status: d.student.status } : st))
+                              } catch (err) {
+                                console.error('Update student status failed', err)
+                                window.alert(err instanceof Error ? err.message : 'Could not update student status')
+                              }
+                            }}
+                            className={`px-2.5 py-1 text-xs font-semibold rounded-lg border focus:outline-none transition-colors ${
+                              s.status === 'active' ? 'bg-green-100 text-green-800 border-green-300' :
+                              s.status === 'suspended' ? 'bg-amber-100 text-amber-800 border-amber-300' :
+                              'bg-red-100 text-red-800 border-red-300'
+                            }`}
+                          >
+                            <option value="active">Active</option>
+                            <option value="suspended">Suspended</option>
+                            <option value="revoked">Revoked</option>
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ── ANALYTICS ── */}
+          {tab === 'analytics' && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {[
+                  { label: 'Institution Avg Score', val: `${avgCourseScore}%`, trend: `${activeCourses} active courses`, color: 'text-blue-600' },
+                  { label: 'Inactive Students', val: String(inactiveStudents), trend: totalStudents ? `out of ${totalStudents}` : 'No students yet', color: 'text-danger' },
+                  { label: 'Quiz Completion', val: `${quizCompletionRate}%`, trend: quizTrend, color: 'text-success' },
+                  { label: 'Materials Uploaded', val: String(materialsUploaded), trend: `${materialsCount} materials indexed`, color: 'text-purple-600' },
+                ].map((s, i) => (
+                  <div key={i} className="bg-card border border-border rounded-2xl p-5">
+                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-2">{s.label}</p>
+                    <p className={`text-3xl font-bold font-mono ${s.color}`}>{s.val}</p>
+                    <p className="text-xs text-muted-foreground mt-1.5">{s.trend}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid lg:grid-cols-2 gap-6">
+                <div className="bg-card border border-border rounded-2xl p-6">
+                  <h3 className="font-semibold text-foreground mb-5">Completion Rate by Level</h3>
+                  <div className="space-y-4">
+                    {studentsByLevel.length > 0 ? studentsByLevel.map((l, i) => (
+                      <div key={i}>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-sm font-medium text-foreground font-mono">{l.level}</span>
+                          <span className="text-xs text-muted-foreground">{l.count} students · {l.percentage}%</span>
+                        </div>
+                        <div className="h-2.5 bg-muted rounded-full overflow-hidden">
+                          <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${l.percentage}%` }} />
+                        </div>
+                      </div>
+                    )) : (
+                      <div className="text-sm text-muted-foreground">No student level data available yet.</div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-card border border-border rounded-2xl p-6">
+                  <h3 className="font-semibold text-foreground mb-5">Top Performing Courses</h3>
+                  <div className="space-y-3">
+                    {topCourses.length > 0 ? topCourses.map((course, i) => (
+                      <div key={i} className="flex items-center gap-4">
+                        <span className="text-primary font-mono text-xs font-bold w-14">{course.code}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs text-foreground truncate">{course.title}</span>
+                            <span className="text-xs font-mono font-bold text-foreground ml-2">{course.avgScore}%</span>
+                          </div>
+                          <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                            <div className="h-full bg-accent rounded-full" style={{ width: `${course.avgScore}%` }} />
+                          </div>
+                        </div>
+                      </div>
+                    )) : (
+                      <div className="text-sm text-muted-foreground">No course analytics available yet.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+      <CourseModal
+        open={courseModalOpen}
+        onClose={() => setCourseModalOpen(false)}
+        onSubmit={handleSaveCourse}
+        initialCourse={selectedCourse ?? undefined}
+        levels={levels.map(level => level.name)}
+        lecturers={dashboardLecturers.filter(l => l.status === 'active').map(l => l.name)}
+        saving={isSavingCourse}
+        errorMessage={courseModalError}
+      />
+
+      {/* CSV Student Import Modal */}
+      {csvModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setCsvModalOpen(false)}>
+          <div className="w-full max-w-lg bg-card border border-border rounded-3xl shadow-2xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <h3 className="font-semibold text-foreground text-base">Bulk Student Import (CSV)</h3>
+              <button onClick={() => setCsvModalOpen(false)} className="text-muted-foreground hover:text-foreground">✕</button>
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Paste CSV records below (Format: <code>Full Name, Email, Level, Program</code>). One student per line:
+            </p>
+            <textarea
+              rows={6}
+              value={csvRawText}
+              onChange={e => setCsvRawText(e.target.value)}
+              placeholder="John Smith, john.smith@student.edu, Level 100, Computer Science&#10;Alice Brown, alice.brown@student.edu, Level 200, Software Engineering"
+              className="w-full rounded-2xl border border-border bg-muted p-3 text-xs font-mono text-foreground outline-none focus:ring-2 focus:ring-primary/20"
+            />
+            <div className="flex justify-end gap-3 pt-2">
+              <button onClick={() => setCsvModalOpen(false)} className="px-4 py-2 border border-border text-xs rounded-xl hover:bg-muted text-foreground">Cancel</button>
+              <button
+                onClick={handleImportCsvStudents}
+                disabled={isImportingCsv || !csvRawText.trim()}
+                className="px-4 py-2 bg-primary text-primary-foreground text-xs font-semibold rounded-xl hover:bg-blue-950 disabled:opacity-60 transition-colors"
+              >
+                {isImportingCsv ? 'Importing...' : 'Batch Import Students'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Broadcast Announcement Modal */}
+      {announcementModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setAnnouncementModalOpen(false)}>
+          <div className="w-full max-w-md bg-card border border-border rounded-3xl shadow-2xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <h3 className="font-semibold text-foreground text-base">Broadcast Announcement</h3>
+              <button onClick={() => setAnnouncementModalOpen(false)} className="text-muted-foreground hover:text-foreground">✕</button>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-foreground mb-1">Target Audience</label>
+              <select
+                value={announcementTarget}
+                onChange={e => setAnnouncementTarget(e.target.value)}
+                className="w-full px-3 py-2 bg-muted border border-border rounded-xl text-xs text-foreground outline-none"
+              >
+                <option>All Users</option>
+                <option>All Lecturers</option>
+                <option>All Students</option>
+                <option>Level 100 Students</option>
+                <option>Level 200 Students</option>
+                <option>Level 300 Students</option>
+                <option>Level 400 Students</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-foreground mb-1">Announcement Message</label>
+              <textarea
+                rows={4}
+                value={announcementMsg}
+                onChange={e => setAnnouncementMsg(e.target.value)}
+                placeholder="Type system alert or institutional announcement..."
+                className="w-full rounded-2xl border border-border bg-muted p-3 text-xs text-foreground outline-none focus:ring-2 focus:ring-primary/20"
+              />
+            </div>
+            <div className="flex justify-end gap-3 pt-2">
+              <button onClick={() => setAnnouncementModalOpen(false)} className="px-4 py-2 border border-border text-xs rounded-xl hover:bg-muted text-foreground">Cancel</button>
+              <button
+                onClick={handleBroadcastAnnouncement}
+                disabled={!announcementMsg.trim()}
+                className="px-4 py-2 bg-accent text-accent-foreground text-xs font-semibold rounded-xl hover:bg-amber-600 disabled:opacity-60 transition-colors"
+              >
+                Send Broadcast
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

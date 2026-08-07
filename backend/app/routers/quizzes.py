@@ -1,0 +1,1223 @@
+import random
+import re
+import json
+from pathlib import Path
+import httpx
+from datetime import datetime, timedelta, timezone
+from typing import Any
+import re as _re
+from postgrest import exceptions as _postgrest_exceptions
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
+from app.core.config import QROK_API_KEY, QROK_API_URL
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+
+
+def _clean_material_title(title: str) -> str:
+    title = re.sub(r'\.[^.]+$', '', title)
+    title = title.replace('_', ' ').replace('-', ' ')
+    title = re.sub(r'^\s*\d+[\s._-]*', '', title)
+    title = re.sub(r'\b(lecture|lectures|notes|note|slide|slides|pptx|ppt|pdf|docx|doc)\b', '', title, flags=re.IGNORECASE)
+    title = re.sub(r'\s+', ' ', title).strip()
+    title = re.sub(r'\s*[:\-\(\)]\s*', ' ', title).strip()
+    if not title or re.fullmatch(r'\d+', title):
+        return 'course concept'
+    title = title.title()
+    return title
+
+router = APIRouter(prefix='/api/quizzes', tags=['quizzes'])
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    cleaned = value.strip()
+    if cleaned.endswith('Z'):
+        cleaned = cleaned[:-1] + '+00:00'
+    try:
+        return datetime.fromisoformat(cleaned)
+    except ValueError:
+        for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S%z', '%Y-%m-%dT%H:%M:%S%z'):
+            try:
+                return datetime.strptime(cleaned, fmt)
+            except ValueError:
+                continue
+        return None
+
+
+def _format_datetime(value: datetime) -> str:
+    formatted = value.replace(microsecond=0).isoformat()
+    if formatted.endswith('+00:00'):
+        formatted = formatted[:-6] + 'Z'
+    return formatted
+
+
+def _grade_from_score(score: int) -> str:
+    if score >= 90:
+        return 'A'
+    if score >= 80:
+        return 'B'
+    if score >= 70:
+        return 'C'
+    if score >= 60:
+        return 'D'
+    return 'F'
+
+
+def _build_question_seed(course: str, material_titles: list[str], difficulty: str, index: int) -> int:
+    base = f"{course}|{'|'.join(material_titles)}|{difficulty}|{index}"
+    return abs(hash(base)) % (2**32)
+
+
+def _normalize_tier(tier: str) -> str:
+    tier = (tier or '').strip().title()
+    if tier in {'Foundational', 'Intermediate', 'Mastery'}:
+        return tier
+    return 'Foundational'
+
+
+def _tier_default_difficulty(tier: str) -> str:
+    if tier == 'Foundational':
+        return 'Easy'
+    if tier == 'Intermediate':
+        return 'Medium'
+    if tier == 'Mastery':
+        return 'Hard'
+    return 'Mixed'
+
+
+def _quiz_is_open(quiz: dict[str, Any], now: datetime) -> bool:
+    open_dt = _parse_datetime(quiz.get('open_date'))
+    close_dt = _parse_datetime(quiz.get('close_date'))
+    if open_dt and now < open_dt:
+        return False
+    if close_dt and now > close_dt:
+        return False
+    return True
+
+
+def _normalize_difficulty(difficulty: str, rng: random.Random) -> str:
+    difficulty = difficulty.strip().capitalize()
+    if difficulty in {'Easy', 'Medium', 'Hard'}:
+        return difficulty
+    return rng.choice(['Easy', 'Medium', 'Hard'])
+
+
+def _extract_text_from_docx(path: str) -> str:
+    try:
+        import docx
+        doc = docx.Document(path)
+        text = '\n'.join(p.text for p in doc.paragraphs if p.text.strip())
+        if text.strip():
+            return text
+    except Exception:
+        pass
+    try:
+        import zipfile
+        lines = []
+        with zipfile.ZipFile(path, 'r') as z:
+            if 'word/document.xml' in z.namelist():
+                xml_content = z.read('word/document.xml').decode('utf-8', errors='ignore')
+                texts = re.findall(r'<w:t[^>]*>(.*?)</w:t>', xml_content)
+                if texts:
+                    lines.extend(t.strip() for t in texts if t.strip())
+        return '\n'.join(lines)
+    except Exception:
+        return ''
+
+
+def _extract_text_from_pptx(path: str) -> str:
+    try:
+        from pptx import Presentation
+        presentation = Presentation(path)
+        lines: list[str] = []
+        for slide in presentation.slides:
+            for shape in slide.shapes:
+                if hasattr(shape, 'text'):
+                    text = shape.text.strip()
+                    if text:
+                        lines.append(text)
+        if lines:
+            return '\n'.join(lines)
+    except Exception:
+        pass
+    try:
+        import zipfile
+        lines = []
+        with zipfile.ZipFile(path, 'r') as z:
+            for name in sorted(z.namelist()):
+                if name.startswith('ppt/slides/slide') and name.endswith('.xml'):
+                    xml_content = z.read(name).decode('utf-8', errors='ignore')
+                    texts = re.findall(r'<a:t[^>]*>(.*?)</a:t>', xml_content)
+                    if texts:
+                        slide_num = re.search(r'slide(\d+)\.xml', name)
+                        lines.append(f"--- Slide {slide_num.group(1) if slide_num else ''} ---")
+                        lines.extend(t.strip() for t in texts if t.strip())
+        return '\n'.join(lines)
+    except Exception:
+        return ''
+
+
+def _extract_text_from_pdf(path: str) -> str:
+    try:
+        import pypdf
+        reader = pypdf.PdfReader(path)
+        text = '\n'.join(page.extract_text() for page in reader.pages if page.extract_text())
+        if text.strip():
+            return text
+    except Exception:
+        pass
+    try:
+        import PyPDF2
+        reader = PyPDF2.PdfReader(path)
+        text = '\n'.join(page.extract_text() for page in reader.pages if page.extract_text())
+        if text.strip():
+            return text
+    except Exception:
+        pass
+    try:
+        content = Path(path).read_bytes().decode('utf-8', errors='ignore')
+        matches = re.findall(r'\((.*?)\)\s*Tj|\((.*?)\)\s*TJ', content)
+        lines = [m[0] or m[1] for m in matches if (m[0] or m[1]).strip()]
+        return '\n'.join(lines)
+    except Exception:
+        return ''
+
+
+def _extract_text_from_file(path: str) -> str:
+    if not path:
+        return ''
+    file = Path(path)
+    if not file.exists():
+        return ''
+    suffix = file.suffix.lower()
+    try:
+        if suffix in {'.txt', '.md', '.py', '.json', '.csv'}:
+            return file.read_text(encoding='utf-8', errors='ignore')
+        if suffix in {'.docx', '.doc'}:
+            return _extract_text_from_docx(str(file))
+        if suffix in {'.pptx', '.ppt'}:
+            return _extract_text_from_pptx(str(file))
+        if suffix == '.pdf':
+            return _extract_text_from_pdf(str(file))
+    except Exception:
+        return ''
+    return ''
+
+
+def _summarize_material_text(text: str, fallback: str) -> str:
+    if not text or len(text.strip()) < 50:
+        return _clean_material_title(fallback)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return _clean_material_title(fallback)
+    summary = lines[0]
+    if len(summary) < 40 and len(lines) > 1:
+        summary = summary + ' ' + lines[1][:120]
+    summary = re.sub(r'\s+', ' ', summary).strip()
+    return summary[:400]
+
+
+def _infer_topic_context(topic: str, course: str) -> dict[str, str]:
+    normalized = topic.strip().lower()
+    descriptor = topic
+    if 'specification' in normalized or 'requirements' in normalized:
+        return {
+            'descriptor': 'the concept of specification and requirements',
+            'correct': f'defining the expected behavior and constraints of a system in {course}',
+            'wrong1': f'a mathematical proof technique unrelated to {course}',
+            'wrong2': f'a design aesthetic topic not central to {course}',
+            'wrong3': f'a historical overview unrelated to the course objectives',
+            'fill_blank': 'requirements',
+            'short': f'It explains how to document what a system should do in {course}.',
+            'true_statement': f"In {course}, '{topic}' most likely refers to defining what a system must do.",
+        }
+    if 'design' in normalized or 'architecture' in normalized:
+        return {
+            'descriptor': 'the concept of software design',
+            'correct': f'planning the structure and organization of software for {course}',
+            'wrong1': f'writing documentation unrelated to software structure',
+            'wrong2': f'creating artwork rather than technical solutions',
+            'wrong3': f'covering only hardware installation details',
+            'fill_blank': 'design',
+            'short': f'It explains how to organize software components to meet {course} goals.',
+            'true_statement': f"In {course}, '{topic}' most likely refers to planning the structure of a software system.",
+        }
+    if 'algorithm' in normalized or 'complexity' in normalized:
+        return {
+            'descriptor': 'the concept of algorithms and analysis',
+            'correct': f'defining efficient problem-solving steps for {course}',
+            'wrong1': f'comparing unrelated business strategies',
+            'wrong2': f'describing artistic techniques outside of {course}',
+            'wrong3': f'listing administrative procedures rather than computation',
+            'fill_blank': 'algorithm',
+            'short': f'It explains how to solve problems efficiently in {course}.',
+            'true_statement': f"In {course}, '{topic}' most likely refers to an algorithmic process or analysis.",
+        }
+    if 'data structure' in normalized or 'data' in normalized or 'tree' in normalized or 'graph' in normalized:
+        return {
+            'descriptor': 'the concept of data organization',
+            'correct': f'structuring data so it can be accessed and used efficiently in {course}',
+            'wrong1': f'describing unrelated physical storage hardware',
+            'wrong2': f'explaining only aesthetic presentation details',
+            'wrong3': f'covering only the history of computing without practical use',
+            'fill_blank': 'structure',
+            'short': f'It explains how to organize and access data effectively in {course}.',
+            'true_statement': f"In {course}, '{topic}' most likely refers to organizing data for efficient use.",
+        }
+    return {
+        'descriptor': f'the concept of {topic}',
+        'correct': f'clarifying how {topic} supports the learning goals of {course}',
+        'wrong1': f'focusing on unrelated historical details outside {course}',
+        'wrong2': f'describing design choices unrelated to {course} outcomes',
+        'wrong3': f'presenting a topic that does not contribute to practical understanding in {course}',
+        'fill_blank': topic.lower(),
+        'short': f'It explains how {topic} is used to meet the course objectives in {course}.',
+        'true_statement': f"In {course}, '{topic}' most likely refers to an important course concept.",
+    }
+
+
+def _generate_fallback_question(course: str, material_titles: list[str], difficulty: str, question_type: str, index: int) -> dict[str, Any]:
+    topic = (material_titles or [course])[index % (len(material_titles) or 1)]
+    topic_ctx = _infer_topic_context(topic, course)
+    marks_map = {'Easy': 1, 'Medium': 2, 'Hard': 3}
+    marks = marks_map.get(difficulty, 2)
+
+    if question_type == 'True/False':
+        return {
+            'id': index + 1,
+            'type': 'True/False',
+            'difficulty': difficulty,
+            'topic': topic,
+            'marks': marks,
+            'question': topic_ctx['true_statement'],
+            'options': ['True', 'False'],
+            'answer': 'True',
+            'explanation': topic_ctx['short'],
+        }
+    elif question_type == 'Fill in the Blank':
+        return {
+            'id': index + 1,
+            'type': 'Fill in the Blank',
+            'difficulty': difficulty,
+            'topic': topic,
+            'marks': marks,
+            'question': f"In {course}, the core focus of '{topic}' relates to _____.",
+            'options': [],
+            'answer': topic_ctx['fill_blank'],
+            'explanation': topic_ctx['short'],
+        }
+    elif question_type == 'Short Answer':
+        return {
+            'id': index + 1,
+            'type': 'Short Answer',
+            'difficulty': difficulty,
+            'topic': topic,
+            'marks': marks,
+            'question': f"Briefly explain the primary role of '{topic}' in the context of {course}.",
+            'options': [],
+            'answer': topic_ctx['correct'],
+            'explanation': topic_ctx['short'],
+        }
+    else:  # MCQ
+        options = [
+            topic_ctx['correct'],
+            topic_ctx['wrong1'],
+            topic_ctx['wrong2'],
+            topic_ctx['wrong3'],
+        ]
+        return {
+            'id': index + 1,
+            'type': 'MCQ',
+            'difficulty': difficulty,
+            'topic': topic,
+            'marks': marks,
+            'question': f"Which statement best describes '{topic}' in {course}?",
+            'options': options,
+            'answer': topic_ctx['correct'],
+            'explanation': topic_ctx['short'],
+        }
+
+
+def _generate_question(course: str, material_titles: list[str], difficulty: str, question_type: str, index: int) -> dict[str, Any]:
+    llm_q = _call_llm_for_questions(course, material_titles, question_type, difficulty, index)
+    if not llm_q:
+        llm_q = _generate_fallback_question(course, material_titles, difficulty, question_type, index)
+
+    llm_q['id'] = index + 1
+    llm_q['type'] = question_type
+    llm_q['difficulty'] = llm_q.get('difficulty', difficulty)
+    llm_q['marks'] = int(llm_q.get('marks', 0) or 0)
+    return llm_q
+
+
+def _call_llm_for_questions(course: str, material_titles: list[str], question_type: str, difficulty: str, index: int) -> dict[str, Any] | None:
+    prompt = (
+        f"Generate a single {question_type} question for the course '{course}' at {difficulty} difficulty.\n"
+        f"Base the question on these materials: {', '.join(material_titles)}.\n"
+        "Return ONLY a JSON object with keys:\n"
+        "- question: string\n"
+        "- options: array of strings (for MCQ specify 4 options; for True/False specify ['True', 'False']; for Short Answer/Fill in the Blank leave as empty array [])\n"
+        "- answer: string (matching exact correct option text for MCQ/True/False, or answer text for short answer)\n"
+        "- explanation: string\n"
+        "- difficulty: string ('Easy', 'Medium', or 'Hard')\n"
+        "- marks: integer (1 for Easy, 2 for Medium, 3 for Hard)\n"
+        "Do not output markdown codeblocks or extra text."
+    )
+
+    from app.core.config import GEMINI_API_KEY, OPENAI_API_KEY
+
+    raw_text = None
+
+    # Step 1: Try Primary (Groq / Qrok)
+    if QROK_API_KEY:
+        try:
+            api_url = QROK_API_URL or 'https://api.groq.com/openai/v1/chat/completions'
+            headers = {"Authorization": f"Bearer {QROK_API_KEY}", "Content-Type": "application/json"}
+            body = {
+                "model": "llama-3.3-70b-versatile",
+                "messages": [
+                    {"role": "system", "content": "You are a professional university professor creating high quality exam questions. Output strictly valid JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.3,
+                "max_tokens": 512,
+                "response_format": {"type": "json_object"}
+            }
+            with httpx.Client(timeout=12.0) as client:
+                resp = client.post(api_url, headers=headers, json=body)
+                if resp.status_code == 200:
+                    raw_text = resp.json()['choices'][0]['message']['content']
+        except Exception:
+            pass
+
+    # Step 2: Try Secondary (Google Gemini 1.5 Flash)
+    if not raw_text and GEMINI_API_KEY:
+        try:
+            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+            g_body = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"response_mime_type": "application/json"}
+            }
+            with httpx.Client(timeout=12.0) as client:
+                g_resp = client.post(gemini_url, json=g_body)
+                if g_resp.status_code == 200:
+                    raw_text = g_resp.json()['candidates'][0]['content']['parts'][0]['text']
+        except Exception:
+            pass
+
+    # Step 3: Try Tertiary (OpenAI gpt-4o-mini)
+    if not raw_text and OPENAI_API_KEY:
+        try:
+            o_url = "https://api.openai.com/v1/chat/completions"
+            o_headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+            o_body = {
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": {"type": "json_object"}
+            }
+            with httpx.Client(timeout=12.0) as client:
+                o_resp = client.post(o_url, headers=o_headers, json=o_body)
+                if o_resp.status_code == 200:
+                    raw_text = o_resp.json()['choices'][0]['message']['content']
+        except Exception:
+            pass
+
+    if not raw_text:
+        return None
+
+    try:
+        json_text = json.loads(raw_text)
+    except Exception:
+        m = re.search(r"\{.*\}", raw_text, re.S)
+        json_text = json.loads(m.group(0)) if m else None
+
+    if not isinstance(json_text, dict):
+        return None
+
+    question_text = json_text.get('question', '').strip()
+    if not question_text:
+        return None
+
+    options = json_text.get('options', []) or []
+    if not isinstance(options, list):
+        options = []
+    options = [str(opt).strip() for opt in options if opt is not None]
+
+    raw_ans = json_text.get('answer', '')
+    answer = str(raw_ans).strip() if raw_ans is not None else ''
+
+    if options and answer.isdigit():
+        idx = int(answer)
+        if 0 <= idx < len(options):
+            answer = options[idx]
+        elif 1 <= idx <= len(options):
+            answer = options[idx - 1]
+
+    explanation = str(json_text.get('explanation', '') or '').strip()
+    normalized_difficulty = json_text.get('difficulty', difficulty)
+    marks = int(json_text.get('marks', {'Easy': 1, 'Medium': 2, 'Hard': 3}.get(normalized_difficulty, 2)))
+
+    return {
+        'id': index + 1,
+        'type': question_type,
+        'difficulty': normalized_difficulty,
+        'topic': (material_titles or [course])[index % (len(material_titles) or 1)],
+        'marks': marks,
+        'question': question_text,
+        'options': options,
+        'answer': answer,
+        'explanation': explanation or f"Base answer on {(material_titles or [course])[0]} in context of {course}.",
+    }
+
+
+
+def _is_missing_table_error(exc: Exception) -> bool:
+    message = str(exc)
+    if 'column of' in message:
+        return False
+    return 'Could not find the table' in message or ("Could not find the '" in message and "' table" in message) or ('relation "' in message and 'does not exist' in message) or ('relation' in message and 'does not exist' in message)
+
+
+def _finalize_overdue_attempts(quizzes: list[dict[str, Any]], student_id: str) -> list[dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    overdue_quiz_ids = []
+    for quiz in quizzes:
+        due_dt = _parse_datetime(quiz.get('due_date'))
+        if due_dt and due_dt < now:
+            overdue_quiz_ids.append(quiz.get('id'))
+
+    if not overdue_quiz_ids:
+        return quizzes
+
+    try:
+        response = supabase.table('quiz_attempts').select('quiz_id').eq('student_id', student_id).in_('quiz_id', [qid for qid in overdue_quiz_ids if qid is not None]).execute()
+    except _postgrest_exceptions.APIError as exc:
+        if _is_missing_table_error(exc):
+            return quizzes
+        raise
+
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase fetch quiz attempts failed'))
+
+    existing_attempts = {attempt['quiz_id'] for attempt in response.data or []}
+    missing = [quiz for quiz in quizzes if quiz.get('id') not in existing_attempts and quiz.get('id') in overdue_quiz_ids]
+    if not missing:
+        return quizzes
+
+    insert_records = []
+    for quiz in missing:
+        out_of = quiz.get('questions') or 0
+        insert_records.append({
+            'quiz_id': quiz.get('id'),
+            'student_id': student_id,
+            'score': 0,
+            'out_of': out_of,
+            'grade': 'F',
+            'passed': False,
+            'status': 'missed',
+            'attempted_at': datetime.now(timezone.utc).isoformat(),
+        })
+
+    if insert_records:
+        insert_response = _safe_insert('quiz_attempts', insert_records)
+        if supabase_failed(insert_response):
+            raise HTTPException(status_code=502, detail=supabase_error_message(insert_response, 'Supabase insert overdue quiz attempts failed'))
+
+    return quizzes
+
+
+def _safe_insert(table_name: str, record: dict | list[dict]) -> Any:
+    """Insert a record or list of records into `table_name`, removing any keys reported
+    as missing by PostgREST and retrying. Returns the supabase response object.
+    """
+    payload = record
+    # normalize to list for uniform processing
+    is_list = isinstance(payload, list)
+    rows = payload if is_list else [payload]
+    while True:
+        try:
+            resp = supabase.table(table_name).insert(rows if is_list else rows[0]).execute()
+            return resp
+        except _postgrest_exceptions.APIError as exc:
+            msg = str(exc)
+            if _is_missing_table_error(exc):
+                raise HTTPException(status_code=502, detail=f"Database schema not ready: table '{table_name}' is missing")
+            m = _re.search(r"Could not find the '([^']+)' column of '([^']+)'", msg)
+            if not m:
+                raise
+            missing_col = m.group(1)
+            # remove the key from all rows and retry
+            changed = False
+            for r in rows:
+                if missing_col in r:
+                    r.pop(missing_col, None)
+                    changed = True
+            if not changed:
+                # nothing to remove, re-raise
+                raise
+        except Exception:
+            raise
+
+
+def _safe_update(table_name: str, payload: dict, in_key: str | None = None, in_values: list | None = None) -> Any:
+    body = payload.copy()
+    while True:
+        try:
+            q = supabase.table(table_name).update(body)
+            if in_key and in_values is not None:
+                q = q.in_(in_key, in_values)
+            resp = q.execute()
+            return resp
+        except Exception as exc:
+            msg = str(exc)
+            m = _re.search(r"Could not find the '([^']+)' column of '([^']+)'", msg)
+            if not m:
+                raise
+            missing_col = m.group(1)
+            if missing_col in body:
+                body.pop(missing_col, None)
+                continue
+            raise
+
+
+class GenerateQuizRequest(BaseModel):
+    course: str
+    material_ids: list[int] = Field(default_factory=list)
+    question_count: int = Field(default=10, ge=1, le=50)
+    difficulty: str = 'Mixed'
+    tier: str = 'Foundational'
+    generate_all_tiers: bool = False
+    question_types: list[str] = Field(default_factory=lambda: ['MCQ', 'True/False', 'Fill in the Blank'])
+    time_limit: int = Field(default=45, ge=5)
+    passing_score: int = Field(default=60, ge=0, le=100)
+    attempts: int = Field(default=1, ge=1)
+    due_in_days: int = Field(default=7, ge=1, le=30)
+    open_date: str | None = None
+    close_date: str | None = None
+
+
+class PublishQuizRequest(BaseModel):
+    title: str | None = None
+    course: str | None = None
+    questions: list[dict[str, Any]] = Field(default_factory=list)
+    time_limit: int | None = None
+    passing_score: int = Field(default=60, ge=0, le=100)
+    attempts: int = Field(default=1, ge=1)
+    due_date: str | None = None
+    difficulty: str = 'Mixed'
+    tier: str = 'Foundational'
+    open_date: str | None = None
+    close_date: str | None = None
+    material_id: int | None = None
+    material_ids: list[int] = Field(default_factory=list)
+    quizzes: list[dict[str, Any]] | None = None
+
+
+class QuizSubmissionRequest(BaseModel):
+    student_id: str
+    answers: dict[str, str]
+
+
+def _get_student_attempts(quiz_id: int, student_id: str) -> list[dict[str, Any]]:
+    try:
+        response = supabase.table('quiz_attempts').select('*').eq('quiz_id', quiz_id).eq('student_id', student_id).execute()
+    except _postgrest_exceptions.APIError as exc:
+        if _is_missing_table_error(exc):
+            return []
+        raise
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase fetch student quiz attempts failed'))
+    return response.data or []
+
+
+def _fetch_student_attempt_counts(student_id: str) -> dict[int, int]:
+    try:
+        response = supabase.table('quiz_attempts').select('quiz_id').eq('student_id', student_id).execute()
+    except _postgrest_exceptions.APIError as exc:
+        if _is_missing_table_error(exc):
+            return {}
+        raise
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase fetch student quiz attempts failed'))
+
+    counts: dict[int, int] = {}
+    for attempt in response.data or []:
+        quiz_id = attempt.get('quiz_id')
+        if quiz_id is not None:
+            counts[quiz_id] = counts.get(quiz_id, 0) + 1
+    return counts
+
+
+def _extract_level_digit(text: str | None) -> str | None:
+    if not text:
+        return None
+    m = _re.search(r'\d{3}', str(text))
+    return m.group(0)[0] if m else None
+
+
+def _clean_code_str(s: str | None) -> str:
+    return _re.sub(r'[^a-zA-Z0-9]', '', s or '').lower()
+
+
+def _fetch_allowed_course_codes(level: str | None, program: str | None) -> list[str]:
+    if not level:
+        return []
+    response = supabase.table('courses').select('code', 'title', 'level', 'program').execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase fetch allowed course codes failed'))
+
+    target_digit = _extract_level_digit(level)
+    normalized_program = program.strip().lower() if program else ''
+    allowed_codes: set[str] = set()
+
+    for course in response.data or []:
+        course_program = str(course.get('program') or '').strip().lower()
+        if normalized_program and course_program and course_program != normalized_program:
+            continue
+
+        c_level = str(course.get('level') or '')
+        c_code = str(course.get('code') or '')
+        c_title = str(course.get('title') or '')
+        c_digit = _extract_level_digit(c_level) or _extract_level_digit(c_code)
+
+        if (level.lower() in c_level.lower()) or (c_level.lower() in level.lower()) or (target_digit and c_digit and target_digit == c_digit):
+            if c_code:
+                allowed_codes.add(c_code)
+                allowed_codes.add(_clean_code_str(c_code))
+            if c_title:
+                allowed_codes.add(c_title)
+
+    return list(allowed_codes)
+
+
+def _student_level_program(student_id: str) -> tuple[str | None, str | None]:
+    response = supabase.table('users').select('level,program,role').eq('id', student_id).limit(1).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase fetch student profile failed'))
+    if not response.data:
+        raise HTTPException(status_code=404, detail='Student not found')
+    student = response.data[0]
+    if student.get('role') != 'student':
+        raise HTTPException(status_code=403, detail='User is not a student')
+    return student.get('level'), student.get('program')
+
+
+def _is_course_allowed_for_student(course_code: str, level: str | None, program: str | None, quiz_title: str = '') -> bool:
+    if not level:
+        return True
+    allowed_codes = set(_fetch_allowed_course_codes(level, program))
+    target_digit = _extract_level_digit(level)
+    q_digit = _extract_level_digit(course_code) or _extract_level_digit(quiz_title)
+    clean_q = _clean_code_str(course_code)
+    return (
+        course_code in allowed_codes
+        or clean_q in allowed_codes
+        or (target_digit is not None and q_digit is not None and target_digit == q_digit)
+    )
+
+
+
+def _normalize_question_types(question_types: list[str]) -> list[str]:
+    valid_types = ['MCQ', 'True/False', 'Fill in the Blank', 'Short Answer']
+    normalized = [qt for qt in question_types if qt in valid_types]
+    return normalized or ['MCQ', 'True/False', 'Fill in the Blank']
+
+
+@router.post('/generate')
+def generate_quiz(payload: GenerateQuizRequest) -> dict[str, Any]:
+    ensure_supabase_enabled()
+    try:
+        if payload.material_ids:
+            response = supabase.table('materials').select('*').in_('id', payload.material_ids).execute()
+        else:
+            response = supabase.table('materials').select('*').eq('course', payload.course).execute()
+        if supabase_failed(response):
+            raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase list materials failed'))
+        materials = response.data or []
+        if not materials:
+            raise HTTPException(status_code=404, detail='No processed materials found for this course')
+
+        # Inherit course from material if specified
+        mat_course = next((m.get('course') for m in materials if m.get('course')), None)
+        effective_course = mat_course or payload.course
+
+        raw_titles = [material.get('name', '') for material in materials]
+        material_titles = [_clean_material_title(title) for title in raw_titles]
+        material_texts = []
+        for material in materials:
+            path = material.get('path', '') or material.get('file_path', '')
+            text = ''
+            if path and Path(path).exists():
+                text = _extract_text_from_file(path)
+            if not text and material.get('name'):
+                mat_name = material.get('name', '')
+                c_name = material.get('course') or effective_course
+                local_dir = UPLOAD_DIR / c_name
+                if local_dir.exists():
+                    for f in local_dir.iterdir():
+                        if f.is_file() and (f.name == mat_name or mat_name in f.name):
+                            text = _extract_text_from_file(str(f))
+                            break
+            if not text:
+                text = material.get('text_content', '') or material.get('name', '')
+            material_texts.append(text)
+        summarized_titles = [_summarize_material_text(text, raw_titles[i]) for i, text in enumerate(material_texts)]
+
+        question_types = _normalize_question_types(payload.question_types)
+        normalized_tier = _normalize_tier(payload.tier)
+        now = datetime.now(timezone.utc)
+        open_dt = _parse_datetime(payload.open_date) if payload.open_date else now
+        close_dt = _parse_datetime(payload.close_date) if payload.close_date else now + timedelta(days=payload.due_in_days)
+        if open_dt is None:
+            open_dt = now
+        if close_dt is None:
+            close_dt = now + timedelta(days=payload.due_in_days)
+        if close_dt <= open_dt:
+            close_dt = open_dt + timedelta(days=payload.due_in_days)
+
+        base_window = close_dt - open_dt
+        if base_window.total_seconds() <= 0:
+            base_window = timedelta(days=payload.due_in_days)
+
+        def build_quiz_set(tier: str, offset: int) -> dict[str, Any]:
+            effective_difficulty = payload.difficulty if payload.difficulty != 'Mixed' else _tier_default_difficulty(tier)
+            questions: list[dict[str, Any]] = []
+            for index in range(payload.question_count):
+                question_type = question_types[index % len(question_types)]
+                questions.append(_generate_question(effective_course, summarized_titles, effective_difficulty, question_type, index + offset * 1000))
+            tier_open = open_dt + offset * base_window
+            tier_close = tier_open + base_window
+            return {
+                'title': f"AI Generated {tier} Quiz for {effective_course}",
+                'course': effective_course,
+                'questions': len(questions),
+                'time_limit': payload.time_limit,
+                'passing_score': payload.passing_score,
+                'attempts': payload.attempts,
+                'due_date': _format_datetime(tier_close),
+                'open_date': _format_datetime(tier_open),
+                'close_date': _format_datetime(tier_close),
+                'difficulty': effective_difficulty,
+                'tier': tier,
+                'material_ids': [material.get('id') for material in materials],
+                'questions': questions,
+            }
+
+        if payload.generate_all_tiers:
+            quiz_sets = []
+            questions_by_tier: dict[str, list[dict[str, Any]]] = {}
+            for offset, tier in enumerate(['Foundational', 'Intermediate', 'Mastery']):
+                quiz_set = build_quiz_set(tier, offset)
+                questions_by_tier[tier] = quiz_set.pop('questions')
+                quiz_sets.append(quiz_set)
+
+            return {
+                'quiz_sets': quiz_sets,
+                'questions_by_tier': questions_by_tier,
+                'materials': materials,
+            }
+
+        questions: list[dict[str, Any]] = []
+        for index in range(payload.question_count):
+            question_type = question_types[index % len(question_types)]
+            questions.append(_generate_question(effective_course, summarized_titles, payload.difficulty if payload.difficulty != 'Mixed' else _tier_default_difficulty(normalized_tier), question_type, index))
+
+        return {
+            'quiz': {
+                'title': f"AI Generated {normalized_tier} Quiz for {effective_course}",
+                'course': effective_course,
+                'questions': len(questions),
+                'time_limit': payload.time_limit,
+                'passing_score': payload.passing_score,
+                'attempts': payload.attempts,
+                'due_date': _format_datetime(close_dt),
+                'open_date': _format_datetime(open_dt),
+                'close_date': _format_datetime(close_dt),
+                'difficulty': payload.difficulty if payload.difficulty != 'Mixed' else _tier_default_difficulty(normalized_tier),
+                'tier': normalized_tier,
+                'material_ids': [material.get('id') for material in materials],
+            },
+            'questions': questions,
+            'materials': materials,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Quiz generation exception: {e}")
+        raise HTTPException(status_code=500, detail=f"Quiz generation error: {str(e)}")
+
+
+
+@router.post('/publish')
+def publish_quiz(payload: PublishQuizRequest) -> dict[str, Any]:
+    ensure_supabase_enabled()
+
+    # If multiple quiz sets are provided (tiered generation), publish each separately
+    if payload.quizzes:
+        published: list[dict[str, Any]] = []
+        all_questions: dict[int, list[dict[str, Any]]] = {}
+        for q in payload.quizzes:
+            due_dt = _parse_datetime(q.get('due_date'))
+            if due_dt is None:
+                raise HTTPException(status_code=400, detail='Quiz due date must be a valid ISO datetime string')
+            open_dt = _parse_datetime(q.get('open_date')) if q.get('open_date') else datetime.now(timezone.utc)
+            close_dt = _parse_datetime(q.get('close_date')) if q.get('close_date') else due_dt
+            if close_dt is None:
+                raise HTTPException(status_code=400, detail='Quiz close date must be a valid ISO datetime string')
+            if open_dt is None:
+                open_dt = datetime.now(timezone.utc)
+            if close_dt < open_dt:
+                raise HTTPException(status_code=400, detail='Quiz close date must be after open date')
+
+            now = datetime.now(timezone.utc)
+            status = 'available' if open_dt <= now <= close_dt else 'scheduled' if open_dt > now else 'closed'
+            normalized_tier = _normalize_tier(q.get('tier') or payload.tier)
+            # Derive a sensible title: prefer provided title, otherwise build one from tier+course
+            derived_course = q.get('course') or payload.course
+            derived_title = q.get('title') or payload.title or f"AI Generated {normalized_tier} Quiz for {derived_course}"
+
+            quiz_record = {
+                'title': derived_title,
+                'course': q.get('course') or payload.course,
+                'questions': len(q.get('questions', []) or []),
+                'time_limit': q.get('time_limit') if q.get('time_limit') is not None else payload.time_limit,
+                'passing_score': q.get('passing_score', payload.passing_score),
+                'attempts': q.get('attempts', payload.attempts),
+                'due_date': q.get('due_date'),
+                'open_date': _format_datetime(open_dt),
+                'close_date': _format_datetime(close_dt),
+                'status': status,
+                'difficulty': q.get('difficulty', payload.difficulty),
+                'tier': normalized_tier,
+                'material_id': q.get('material_id') or payload.material_id,
+                'material_ids': q.get('material_ids', payload.material_ids or []),
+            }
+            quiz_response = _safe_insert('quizzes', quiz_record)
+            if supabase_failed(quiz_response):
+                raise HTTPException(status_code=502, detail=supabase_error_message(quiz_response, 'Supabase insert quiz failed'))
+            if not quiz_response.data:
+                raise HTTPException(status_code=502, detail='Failed to create quiz')
+
+            created_quiz = quiz_response.data[0]
+            question_rows = []
+            for question in q.get('questions', []):
+                question_rows.append({
+                    'quiz_id': created_quiz['id'],
+                    'question': question.get('question', ''),
+                    'options': question.get('options', []),
+                    'correct': question.get('answer', ''),
+                })
+            questions_response = _safe_insert('quiz_questions', question_rows)
+            if supabase_failed(questions_response):
+                raise HTTPException(status_code=502, detail=supabase_error_message(questions_response, 'Supabase insert quiz questions failed'))
+
+            m_ids = q.get('material_ids') or payload.material_ids or []
+            if m_ids:
+                update_response = _safe_update('materials', {'quiz_generated': True}, 'id', m_ids)
+                if supabase_failed(update_response):
+                    raise HTTPException(status_code=502, detail=supabase_error_message(update_response, 'Supabase update materials failed'))
+
+            published.append(created_quiz)
+            all_questions[created_quiz['id']] = questions_response.data or []
+
+        return {'quizzes': published, 'questions': all_questions}
+
+    # Single-quiz publish (backwards compatible)
+    raw_due = payload.due_date or payload.close_date or (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    due_dt = _parse_datetime(raw_due) or (datetime.now(timezone.utc) + timedelta(days=7))
+
+    open_dt = _parse_datetime(payload.open_date) if payload.open_date else datetime.now(timezone.utc)
+    close_dt = _parse_datetime(payload.close_date) if payload.close_date else due_dt
+    if close_dt is None:
+        raise HTTPException(status_code=400, detail='Quiz close date must be a valid ISO datetime string')
+    if open_dt is None:
+        open_dt = datetime.now(timezone.utc)
+    if close_dt < open_dt:
+        raise HTTPException(status_code=400, detail='Quiz close date must be after open date')
+
+    now = datetime.now(timezone.utc)
+    status = 'available' if open_dt <= now <= close_dt else 'scheduled' if open_dt > now else 'closed'
+    normalized_tier = _normalize_tier(payload.tier)
+
+    # Derive title when not provided to reflect the publishing course
+    derived_course = payload.course
+    derived_title = payload.title or f"AI Generated {normalized_tier} Quiz for {derived_course}"
+
+    quiz_record = {
+        'title': derived_title,
+        'course': payload.course,
+        'questions': len(payload.questions),
+        'time_limit': payload.time_limit,
+        'passing_score': payload.passing_score,
+        'attempts': payload.attempts,
+        'due_date': payload.due_date,
+        'open_date': _format_datetime(open_dt),
+        'close_date': _format_datetime(close_dt),
+        'status': status,
+        'difficulty': payload.difficulty,
+        'tier': normalized_tier,
+        'material_id': payload.material_id,
+        'material_ids': payload.material_ids,
+    }
+    quiz_response = _safe_insert('quizzes', quiz_record)
+    if supabase_failed(quiz_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(quiz_response, 'Supabase insert quiz failed'))
+    if not quiz_response.data:
+        raise HTTPException(status_code=502, detail='Failed to create quiz')
+
+    quiz = quiz_response.data[0]
+    question_rows = []
+    for question in payload.questions:
+        question_rows.append({
+            'quiz_id': quiz['id'],
+            'question': question.get('question', ''),
+            'options': question.get('options', []),
+            'correct': question.get('answer', ''),
+        })
+    questions_response = _safe_insert('quiz_questions', question_rows)
+    if supabase_failed(questions_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(questions_response, 'Supabase insert quiz questions failed'))
+
+    if payload.material_ids:
+        update_response = _safe_update('materials', {'quiz_generated': True}, 'id', payload.material_ids)
+        if supabase_failed(update_response):
+            raise HTTPException(status_code=502, detail=supabase_error_message(update_response, 'Supabase update materials failed'))
+
+    return {'quiz': quiz, 'questions': questions_response.data or []}
+
+
+@router.post('/{quiz_id}/submit')
+def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest) -> dict[str, Any]:
+    ensure_supabase_enabled()
+    response = supabase.table('quizzes').select('*').eq('id', quiz_id).limit(1).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase get quiz failed'))
+    if not response.data:
+        raise HTTPException(status_code=404, detail='Quiz not found')
+    quiz = response.data[0]
+
+    student_level, student_program = _student_level_program(payload.student_id)
+    if not _is_course_allowed_for_student(quiz.get('course', ''), student_level, student_program):
+        raise HTTPException(status_code=403, detail='Student is not allowed to access this quiz')
+
+    now = datetime.now(timezone.utc)
+    open_dt = _parse_datetime(quiz.get('open_date'))
+    close_dt = _parse_datetime(quiz.get('close_date'))
+    if open_dt and now < open_dt:
+        raise HTTPException(status_code=403, detail='Quiz is not open yet')
+    if close_dt and now > close_dt:
+        _finalize_overdue_attempts([quiz], payload.student_id)
+        raise HTTPException(status_code=403, detail='Quiz deadline has passed')
+
+    attempts = _get_student_attempts(quiz_id, payload.student_id)
+    if len(attempts) >= 1:
+        raise HTTPException(status_code=403, detail='No attempts remaining for this quiz')
+
+    questions_response = supabase.table('quiz_questions').select('*').eq('quiz_id', quiz_id).execute()
+    if supabase_failed(questions_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(questions_response, 'Supabase get quiz questions failed'))
+    questions = questions_response.data or []
+
+    correct = 0
+    for idx, question in enumerate(questions):
+        answer = payload.answers.get(str(idx), '').strip().lower()
+        if answer and question.get('correct', '').strip().lower() == answer:
+            correct += 1
+
+    total_questions = len(questions)
+    score = round((correct / total_questions) * 100) if total_questions else 0
+    passed = score >= (quiz.get('passing_score') or 0)
+    grade = _grade_from_score(score)
+
+    attempt_record = {
+        'quiz_id': quiz_id,
+        'student_id': payload.student_id,
+        'score': score,
+        'out_of': total_questions,
+        'grade': grade,
+        'passed': passed,
+        'status': 'completed',
+        'attempted_at': datetime.now(timezone.utc).isoformat(),
+    }
+    insert_response = _safe_insert('quiz_attempts', attempt_record)
+    if supabase_failed(insert_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(insert_response, 'Supabase insert quiz attempt failed'))
+
+    return {'attempt': attempt_record, 'quiz': quiz}
+
+
+def _quiz_is_expired(quiz: dict[str, Any], now: datetime) -> bool:
+    close_dt = _parse_datetime(quiz.get('close_date')) or _parse_datetime(quiz.get('due_date'))
+    if close_dt and now > close_dt:
+        return True
+    return False
+
+
+def _quiz_is_locked(quiz: dict[str, Any], now: datetime) -> bool:
+    open_dt = _parse_datetime(quiz.get('open_date'))
+    if open_dt and now < open_dt:
+        return True
+    return False
+
+
+@router.get('/available')
+def list_available_quizzes(level: str | None = None, program: str | None = None, student_id: str | None = None) -> dict[str, Any]:
+    ensure_supabase_enabled()
+    response = supabase.table('quizzes').select('*').execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase list available quizzes failed'))
+
+    all_quizzes = response.data or []
+    target_digit = _extract_level_digit(level) if level else None
+    allowed_codes = set(_fetch_allowed_course_codes(level, program)) if level else set()
+
+    attempts_by_quiz: dict[int, int] = {}
+    if student_id:
+        attempts_by_quiz = _fetch_student_attempt_counts(student_id)
+
+    now = datetime.now(timezone.utc)
+    quizzes: list[dict[str, Any]] = []
+    for quiz in all_quizzes:
+        if _quiz_is_expired(quiz, now):
+            continue
+
+        quiz_dict = dict(quiz)
+        if _quiz_is_locked(quiz_dict, now):
+            quiz_dict['status'] = 'scheduled'
+            quiz_dict['is_locked'] = True
+        else:
+            quiz_dict['status'] = 'available'
+            quiz_dict['is_locked'] = False
+
+        if student_id:
+            quiz_id = quiz_dict.get('id')
+            if quiz_id is not None and attempts_by_quiz.get(quiz_id, 0) >= 1:
+                continue
+
+        if level:
+            quiz_course = str(quiz_dict.get('course') or '')
+            quiz_title = str(quiz_dict.get('title') or '')
+            clean_q = _clean_code_str(quiz_course)
+            q_digit = _extract_level_digit(quiz_course) or _extract_level_digit(quiz_title)
+
+            matches_level = (
+                quiz_course in allowed_codes
+                or clean_q in allowed_codes
+                or (target_digit is not None and q_digit is not None and target_digit == q_digit)
+            )
+            if not matches_level:
+                continue
+
+        quizzes.append(quiz_dict)
+    return {'quizzes': quizzes}
+
+
+@router.get('/completed')
+def list_completed_quizzes(student_id: str | None = None, level: str | None = None, program: str | None = None) -> dict[str, Any]:
+    ensure_supabase_enabled()
+    if not student_id:
+        return {'quizzes': []}
+
+    try:
+        attempts_response = supabase.table('quiz_attempts').select('*').eq('student_id', student_id).execute()
+    except Exception:
+        return {'quizzes': []}
+    if supabase_failed(attempts_response):
+        return {'quizzes': []}
+    attempts = attempts_response.data or []
+    if not attempts:
+        return {'quizzes': []}
+
+    attempts_by_quiz: dict[int, dict[str, Any]] = {}
+    for attempt in attempts:
+        quiz_id = attempt.get('quiz_id')
+        if quiz_id is None:
+            continue
+        existing = attempts_by_quiz.get(quiz_id)
+        if existing is None or (attempt.get('attempted_at') or '') > (existing.get('attempted_at') or ''):
+            attempts_by_quiz[quiz_id] = attempt
+
+    quiz_ids = [quiz_id for quiz_id in attempts_by_quiz.keys()]
+    if not quiz_ids:
+        return {'quizzes': []}
+
+    quiz_response = supabase.table('quizzes').select('*').in_('id', quiz_ids).execute()
+    if supabase_failed(quiz_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(quiz_response, 'Supabase fetch quizzes failed'))
+
+    quizzes_by_id = {quiz['id']: quiz for quiz in (quiz_response.data or []) if quiz.get('id') is not None}
+    allowed_codes = None
+    if level:
+        allowed_codes = set(_fetch_allowed_course_codes(level, program))
+
+    completed = []
+    for attempt in attempts_by_quiz.values():
+        quiz_id = attempt.get('quiz_id')
+        if quiz_id is None:
+            continue
+        quiz = quizzes_by_id.get(quiz_id)
+        if not quiz:
+            continue
+        if level and not _is_course_allowed_for_student(quiz.get('course', ''), level, program, quiz.get('title', '')):
+            continue
+        completed.append({
+            'quiz_id': quiz_id,
+            'title': quiz.get('title'),
+            'course': quiz.get('course'),
+            'score': attempt.get('score', 0),
+            'out_of': attempt.get('out_of', 0),
+            'date': attempt.get('attempted_at'),
+            'grade': attempt.get('grade', ''),
+            'passed': attempt.get('passed', False),
+        })
+
+    return {'quizzes': completed}
+
+
+@router.get('/{quiz_id}')
+def get_quiz_details(quiz_id: int, level: str | None = None, program: str | None = None, student_id: str | None = None) -> dict[str, Any]:
+    ensure_supabase_enabled()
+    response = supabase.table('quizzes').select('*').eq('id', quiz_id).limit(1).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase get quiz failed'))
+    if not response.data:
+        raise HTTPException(status_code=404, detail='Quiz not found')
+
+    quiz = response.data[0]
+    now = datetime.now(timezone.utc)
+    if _quiz_is_expired(quiz, now):
+        raise HTTPException(status_code=403, detail='Quiz deadline has passed')
+    if _quiz_is_locked(quiz, now):
+        open_dt_str = quiz.get('open_date') or 'scheduled open time'
+        raise HTTPException(status_code=403, detail=f"Quiz is locked until {open_dt_str}")
+
+    if level:
+        if not _is_course_allowed_for_student(quiz.get('course', ''), level, program, quiz.get('title', '')):
+            raise HTTPException(status_code=403, detail='Quiz is not available for this student level/program')
+
+    questions_response = supabase.table('quiz_questions').select('*').eq('quiz_id', quiz_id).execute()
+    if supabase_failed(questions_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(questions_response, 'Supabase get quiz questions failed'))
+
+    raw_questions = questions_response.data or []
+    seed_key = f"{quiz_id}_{student_id or 'random'}"
+    rng = random.Random(abs(hash(seed_key)))
+
+    questions = []
+    for q in raw_questions:
+        q_copy = dict(q)
+        opts = q_copy.get('options')
+        if isinstance(opts, list) and len(opts) > 1:
+            opts_copy = list(opts)
+            rng.shuffle(opts_copy)
+            q_copy['options'] = opts_copy
+        questions.append(q_copy)
+
+    rng.shuffle(questions)
+    return {'quiz': quiz, 'questions': questions}
