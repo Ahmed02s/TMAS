@@ -32,9 +32,41 @@ export async function requestPushPermission(): Promise<boolean> {
 
 /**
  * Trigger a native browser push notification popup on the user's OS/device
+ * Includes fallback to ServiceWorker showNotification and In-App Banner Toast for mobile Safari/Chrome.
  */
 export function triggerWebPushNotification(title: string, options?: { body?: string; icon?: string }) {
-  if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+  if (typeof window === 'undefined') return
+
+  // 1. In-app banner popup fallback for mobile browsers where native OS push may be restricted
+  showInAppToast(title, options?.body)
+
+  // 2. ServiceWorker notification (preferred for mobile Android/iOS PWAs)
+  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    navigator.serviceWorker.ready
+      .then(reg => {
+        reg.showNotification(title, {
+          body: options?.body || '',
+          icon: options?.icon || '/favicon.ico',
+        })
+      })
+      .catch(() => {
+        // Fallback to classic Notification object
+        if ('Notification' in window && Notification.permission === 'granted') {
+          try {
+            new Notification(title, {
+              body: options?.body || '',
+              icon: options?.icon || '/favicon.ico',
+            })
+          } catch (e) {
+            console.warn('Native notification trigger warning:', e)
+          }
+        }
+      })
+    return
+  }
+
+  // 3. Classic Notification API for desktop browsers
+  if ('Notification' in window && Notification.permission === 'granted') {
     try {
       new Notification(title, {
         body: options?.body || '',
@@ -44,6 +76,31 @@ export function triggerWebPushNotification(title: string, options?: { body?: str
       console.warn('Native notification trigger warning:', e)
     }
   }
+}
+
+/**
+ * Display a subtle floating top toast on screen for mobile browsers
+ */
+
+export function showInAppToast(title: string, body?: string) {
+  if (typeof document === 'undefined') return
+  const toast = document.createElement('div')
+  toast.className =
+    'fixed top-4 left-1/2 -translate-x-1/2 z-[9999] w-[92%] max-w-md bg-slate-900/95 text-white backdrop-blur border border-amber-500/40 p-4 rounded-2xl shadow-2xl transition-all duration-300 flex items-start gap-3 animate-in fade-in slide-in-from-top-4'
+  toast.innerHTML = `
+    <div class="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 text-lg">🔔</div>
+    <div class="flex-1 min-w-0">
+      <p class="font-semibold text-xs sm:text-sm text-amber-300 truncate">${title}</p>
+      ${body ? `<p class="text-xs text-slate-300 mt-0.5 line-clamp-2">${body}</p>` : ''}
+    </div>
+    <button class="text-slate-400 hover:text-white p-1 text-xs" onclick="this.parentElement.remove()">✕</button>
+  `
+  document.body.appendChild(toast)
+  setTimeout(() => {
+    toast.style.opacity = '0'
+    toast.style.transform = 'translate(-50%, -20px)'
+    setTimeout(() => toast.remove(), 300)
+  }, 4500)
 }
 
 /**

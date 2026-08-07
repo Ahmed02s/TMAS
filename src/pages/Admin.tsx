@@ -640,12 +640,12 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6">
 
           {/* ── OVERVIEW ── */}
           {tab === 'overview' && (
             <div className="space-y-6">
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                 {[
                   { label: 'Total Students', val: String(students.length), sub: 'Current student records', color: 'text-blue-600', bg: 'bg-blue-50' },
                   { label: 'Active Courses', val: String(allCourses.filter(course => course.status.toLowerCase() === 'active').length), sub: 'Across levels', color: 'text-purple-600', bg: 'bg-purple-50' },
@@ -1258,7 +1258,7 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
           {/* ── ANALYTICS ── */}
           {tab === 'analytics' && (
             <div className="space-y-6">
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                 {[
                   { label: 'Institution Avg Score', val: `${avgCourseScore}%`, trend: `${activeCourses} active courses`, color: 'text-blue-600' },
                   { label: 'Inactive Students', val: String(inactiveStudents), trend: totalStudents ? `out of ${totalStudents}` : 'No students yet', color: 'text-danger' },
