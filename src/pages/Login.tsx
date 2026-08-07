@@ -253,7 +253,7 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
                     {isSubmitting ? 'Signing in...' : 'Sign In'}
                   </button>
                   {statusMessage && (
-                    <p className="text-sm text-center text-danger mt-2">{statusMessage}</p>
+                    <p className={`text-sm text-center mt-2 ${statusMessage.toLowerCase().includes('success') || statusMessage.toLowerCase().includes('created') ? 'text-emerald-600 font-medium' : 'text-danger'}`}>{statusMessage}</p>
                   )}
                 </div>
 
@@ -376,7 +376,7 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
                     {isSubmitting ? 'Working...' : role === 'lecturer' ? 'Submit for Approval' : 'Create Account'}
                   </button>
                   {statusMessage && (
-                    <p className="text-sm text-center text-primary">{statusMessage}</p>
+                    <p className={`text-sm text-center ${statusMessage.toLowerCase().includes('success') || statusMessage.toLowerCase().includes('created') ? 'text-emerald-600 font-medium' : 'text-primary'}`}>{statusMessage}</p>
                   )}
                   {role === 'lecturer' && (
                     <p className="text-xs text-muted-foreground text-center leading-relaxed">
