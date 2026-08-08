@@ -1,19 +1,18 @@
 import { useState, useEffect, useMemo, useRef, type ChangeEvent } from 'react'
-import Icon from '../components/Icon'
 import type { AppView } from '../App'
 import { API_BASE } from '../config'
 import ProfileModal from '../components/ProfileModal'
 
 type Tab = 'overview' | 'courses' | 'materials' | 'students' | 'quizgen' | 'quizreview' | 'analytics'
 
-const navItems: { key: Tab; label: string; icon: string }[] = [
-  { key: 'overview', label: 'Overview', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
-  { key: 'courses', label: 'My Courses', icon: 'M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253' },
-  { key: 'materials', label: 'Materials', icon: 'M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12' },
-  { key: 'students', label: 'Students', icon: 'M12 14l9-5-9-5-9 5 9 5zm0 7l9-5-9-5-9 5 9 5z' },
-  { key: 'quizgen', label: '3-Tier Quiz Wizard', icon: 'M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z' },
-  { key: 'quizreview', label: 'Quiz Review', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4' },
-  { key: 'analytics', label: 'Analytics', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
+const navItems: { key: Tab; label: string; iconClass: string }[] = [
+  { key: 'overview',   label: 'Overview',          iconClass: 'fa-house' },
+  { key: 'courses',    label: 'My Courses',        iconClass: 'fa-book-open' },
+  { key: 'materials',  label: 'Materials',         iconClass: 'fa-cloud-arrow-up' },
+  { key: 'students',   label: 'Students',          iconClass: 'fa-users' },
+  { key: 'quizgen',    label: '3-Tier Quiz Wizard', iconClass: 'fa-wand-magic-sparkles' },
+  { key: 'quizreview', label: 'Quiz Review',       iconClass: 'fa-clipboard-check' },
+  { key: 'analytics',  label: 'Analytics',         iconClass: 'fa-chart-column' },
 ]
 
 function ProgressBar({ value }: { value: number }) {
@@ -524,7 +523,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
             </div>
           </div>
           <button onClick={() => setMobileNavOpen(false)} className="md:hidden text-sidebar-muted hover:text-sidebar-foreground p-1">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+            <i className="fa-solid fa-xmark text-lg" />
           </button>
         </div>
 
@@ -540,9 +539,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                 }}
                 className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${tab === item.key ? 'bg-primary text-white' : 'text-sidebar-foreground/65 hover:text-sidebar-foreground hover:bg-white/5'}`}
               >
-                <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
-                </svg>
+                <i className={`fa-solid ${item.iconClass} w-4 shrink-0`} />
                 {item.label}
                 {item.key === 'quizreview' && generatedState.filter(q => !approved.includes(q.id)).length > 0 && (
                   <span className="ml-auto bg-accent text-white text-xs rounded-full px-1.5 py-0.5 leading-none">
@@ -568,9 +565,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
               localStorage.removeItem('tmas-user')
               onNavigate('login')
             }} className="text-sidebar-muted hover:text-sidebar-foreground transition-colors" title="Logout">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-              </svg>
+              <i className="fa-solid fa-right-from-bracket" />
             </button>
           </div>
         </div>
@@ -581,7 +576,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
         <header className="h-14 bg-card border-b border-border flex items-center justify-between px-4 sm:px-6 shrink-0">
           <div className="flex items-center gap-3">
             <button onClick={() => setMobileNavOpen(true)} className="md:hidden text-muted-foreground hover:text-foreground p-1">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
+              <i className="fa-solid fa-bars text-lg" />
             </button>
             <h1 className="text-foreground font-semibold text-sm">
               {tab === 'overview' ? 'My Dashboard' : tab === 'courses' ? 'My Teaching Assignments' : tab === 'materials' ? 'Learning Materials' : tab === 'quizgen' ? 'AI Quiz Generator' : tab === 'quizreview' ? 'Quiz Review' : 'Course Analytics'}
@@ -592,11 +587,11 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
               onClick={async () => {
                 const { requestPushPermission, triggerWebPushNotification, playNotificationChime } = await import('../utils/notifications')
                 const granted = await requestPushPermission()
-                triggerWebPushNotification('🔔 TMAS Push Notification System Active!', {
+                triggerWebPushNotification('TMAS Push Notification System Active!', {
                   body: 'Web Push alerts and real-time notification engine are fully working on your device.',
                 })
                 playNotificationChime()
-                alert(granted ? '🔔 Browser Push Notification Dispatched! Check your desktop/mobile notifications.' : '🔔 Sound chime played! (Enable browser notification permissions to see desktop popups).')
+                alert(granted ? 'Browser Push Notification Dispatched! Check your desktop/mobile notifications.' : 'Sound chime played! (Enable browser notification permissions to see desktop popups).')
               }}
               className="flex items-center gap-1.5 text-xs font-semibold bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 px-2.5 py-1 rounded-full transition-colors"
               title="Test Instant Web Push Notification"
@@ -639,8 +634,11 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                     { label: 'Pending Reviews', val: String(pendingReviews), sub: 'Questions to approve', color: 'text-accent', bg: 'bg-amber-50' },
                   ].map((s, i) => (
                     <div key={i} className="bg-card border border-border rounded-2xl p-5">
-                      <div className={`inline-flex p-2 rounded-xl ${s.bg} mb-3`}>
-                        <div className="w-4 h-4" />
+                      <div className="inline-flex p-2 rounded-xl bg-muted mb-3 text-muted-foreground">
+                        {i === 0 && <i className="fa-solid fa-book-open" />}
+                        {i === 1 && <i className="fa-solid fa-users" />}
+                        {i === 2 && <i className="fa-solid fa-chart-line" />}
+                        {i === 3 && <i className="fa-solid fa-hourglass-half" />}
                       </div>
                       <p className="text-2xl font-bold font-mono text-foreground">{s.val}</p>
                       <p className="text-sm font-medium text-foreground mt-0.5">{s.label}</p>
@@ -697,7 +695,12 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                       { label: 'View Analytics', desc: 'Student performance data', action: () => setTab('analytics'), icon: 'analytics' },
                     ].map((qa, i) => (
                       <button key={i} onClick={qa.action} className="w-full flex items-center gap-3 bg-card border border-border rounded-xl p-4 hover:border-primary/30 hover:shadow-sm transition-all text-left group">
-                        <span className="text-xl"><Icon name={qa.icon} /></span>
+                        <span className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary shrink-0">
+                          {qa.icon === 'upload' && <i className="fa-solid fa-cloud-arrow-up" />}
+                          {qa.icon === 'robot' && <i className="fa-solid fa-wand-magic-sparkles" />}
+                          {qa.icon === 'clipboard' && <i className="fa-solid fa-clipboard-check" />}
+                          {qa.icon === 'analytics' && <i className="fa-solid fa-chart-column" />}
+                        </span>
                         <div>
                           <p className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">{qa.label}</p>
                           <p className="text-xs text-muted-foreground">{qa.desc}</p>
@@ -874,7 +877,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                         </td>
                         <td className="px-5 py-3.5">
                           {m.quizGenerated
-                            ? <span className="text-xs text-success font-semibold">✓ Generated</span>
+                            ? <span className="text-xs text-success font-semibold"><i className="fa-solid fa-check mr-1" />Generated</span>
                             : <button onClick={() => setTab('quizgen')} className="text-xs text-primary hover:underline font-medium">Generate</button>}
                         </td>
                       </tr>
@@ -909,7 +912,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                       <div className="px-6 py-4 border-b border-border flex items-center justify-between gap-4">
                         <div>
                           <p className="text-sm font-semibold text-foreground">{course.code} — {course.title}</p>
-                          <p className="text-xs text-muted-foreground">{course.level || '—'} · {course.program || '—'}</p>
+                          <p className="text-xs text-muted-foreground">{course.level || '-'} <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {course.program || '-'}</p>
                         </div>
                         <span className="text-xs text-muted-foreground">{students.length} student{students.length === 1 ? '' : 's'}</span>
                       </div>
@@ -930,7 +933,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                 <td className="px-5 py-4 text-foreground font-semibold">{student.name}</td>
                                 <td className="px-5 py-4 text-muted-foreground text-xs">{student.email}</td>
                                 <td className="px-5 py-4 text-muted-foreground text-xs">{student.level || '—'}</td>
-                                <td className="px-5 py-4 text-muted-foreground text-xs">{student.program || '—'}</td>
+                                <td className="px-5 py-4 text-muted-foreground text-xs">{student.level || '-'} <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {student.program || '-'}</td>
                                 <td className="px-5 py-4"><span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${student.status === 'active' ? 'bg-success/10 text-success' : student.status === 'suspended' ? 'bg-warning/10 text-warning' : 'bg-danger/10 text-danger'}`}>{student.status || 'active'}</span></td>
                               </tr>
                             ))}
@@ -1283,7 +1286,13 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                         <div key={tier} className={`bg-card border-2 ${themeColor} rounded-2xl p-4 sm:p-6 space-y-4 shadow-sm`}>
                           <div className="flex items-center justify-between pb-3 border-b border-border">
                             <h4 className="font-display text-lg font-bold text-foreground flex items-center gap-2">
-                              <span>{tier === 'Foundational' ? '🟢' : tier === 'Intermediate' ? '🟡' : '🟣'}</span>
+                              <span>
+                                {tier === 'Foundational'
+                                  ? <i className="fa-solid fa-circle-dot text-emerald-500" />
+                                  : tier === 'Intermediate'
+                                  ? <i className="fa-solid fa-circle-dot text-amber-500" />
+                                  : <i className="fa-solid fa-circle-dot text-purple-500" />}
+                              </span>
                               <span>{tier} Tier</span>
                             </h4>
                             <span className="text-xs font-mono font-bold bg-muted px-2.5 py-1 rounded-lg">
@@ -1462,7 +1471,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                       <div key={i} className="bg-muted/40 rounded-xl p-4">
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-sm font-semibold text-foreground">{d.level}</span>
-                          <span className="text-xs text-muted-foreground">{d.count} questions · {d.correct}% avg correct</span>
+                          <span className="text-xs text-muted-foreground">{d.count} questions <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {d.correct} correct</span>
                         </div>
                         <div className="h-2 bg-muted rounded-full overflow-hidden">
                           <div className={`h-full rounded-full ${d.color}`} style={{ width: `${d.correct}%` }} />

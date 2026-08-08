@@ -127,12 +127,12 @@ function mapCompletedQuiz(quiz: Record<string, any>): CompletedQuiz {
   }
 }
 
-const navItems: { key: Tab; label: string; icon: string }[] = [
-  { key: 'overview', label: 'Overview', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
-  { key: 'courses', label: 'My Courses', icon: 'M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253' },
-  { key: 'quizzes', label: 'Quizzes', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2' },
-  { key: 'grades', label: 'My Grades', icon: 'M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z' },
-  { key: 'progress', label: 'My Progress', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
+const navItems: { key: Tab; label: string; iconClass: string }[] = [
+  { key: 'overview',  label: 'Overview',    iconClass: 'fa-house' },
+  { key: 'courses',   label: 'My Courses',  iconClass: 'fa-book-open' },
+  { key: 'quizzes',  label: 'Quizzes',     iconClass: 'fa-clipboard-list' },
+  { key: 'grades',   label: 'My Grades',   iconClass: 'fa-award' },
+  { key: 'progress', label: 'My Progress', iconClass: 'fa-chart-line' },
 ]
 
 function ProgressRing({ value, size = 64 }: { value: number; size?: number }) {
@@ -593,7 +593,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
             </div>
             <div>
               <p className="font-semibold text-sm">{selectedQuiz?.title ?? 'Quiz Attempt'}</p>
-              <p className="text-primary-foreground/70 text-xs">{selectedQuiz?.course ?? 'Course'} · Question {currentQ + 1} of {activeQuizQuestions.length}</p>
+              <p className="text-primary-foreground/70 text-xs">{selectedQuiz?.course ?? 'Course'} <i className="fa-solid fa-chevron-right text-[10px] mx-0.5 opacity-50" /> Question {currentQ + 1} of {activeQuizQuestions.length}</p>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -655,7 +655,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                   disabled={currentQ === 0}
                   className="px-6 py-3 border border-border rounded-xl text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
-                  ← Previous
+                  <i className="fa-solid fa-arrow-left" /> Previous
                 </button>
                 {currentQ < activeQuizQuestions.length - 1 ? (
                   <button
@@ -663,7 +663,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                     disabled={!quizAnswers[currentQ]}
                     className="px-6 py-3 bg-primary text-white rounded-xl text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-blue-950 transition-colors"
                   >
-                    Next →
+                    Next <i className="fa-solid fa-arrow-right" />
                   </button>
                 ) : (
                   <button
@@ -719,7 +719,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
           <div className="bg-card border border-border rounded-3xl p-6 sm:p-10 shadow-2xl">
             <div className="text-5xl mb-4">{score >= 60 ? <Icon name="celebrate" size={48} /> : <Icon name="book" size={48} />}</div>
             <h2 className="font-display text-2xl sm:text-3xl text-foreground mb-2">{score >= 60 ? 'Quiz Passed!' : 'Keep Studying'}</h2>
-            <p className="text-muted-foreground text-sm mb-6">{selectedQuiz?.title ?? 'Quiz Attempt'} · {selectedQuiz?.course ?? 'Course'}</p>
+            <p className="text-muted-foreground text-sm mb-6">{selectedQuiz?.title ?? 'Quiz Attempt'} <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {selectedQuiz?.course ?? 'Course'}</p>
             <div className="flex justify-center mb-6">
               <ProgressRing value={score} size={96} />
             </div>
@@ -761,13 +761,13 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                             <p className="mt-2 text-xs font-semibold text-foreground">{q.question}</p>
                             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                               <span className="text-danger font-medium">Your Answer: {q.studentAns || 'Unanswered'}</span>
-                              <span className="text-muted-foreground">•</span>
+                              <span className="text-muted-foreground"><i className="fa-solid fa-circle text-[6px] opacity-40" /></span>
                               <span className="text-success font-medium">Correct: {q.correct}</span>
                             </div>
                           </div>
                         ) : (
                           <div className="space-y-1.5">
-                            <span className="text-[10px] uppercase font-bold tracking-wider bg-accent/20 text-accent px-2 py-0.5 rounded-full">💡 AI Concept Key & Explanation</span>
+                            <span className="text-[10px] uppercase font-bold tracking-wider bg-accent/20 text-accent px-2 py-0.5 rounded-full"><i className="fa-solid fa-lightbulb mr-1" />AI Concept Key & Explanation</span>
                             <p className="text-xs text-foreground font-medium leading-relaxed mt-1">
                               Explanation: This question tests key concepts in {selectedQuiz?.course || 'the course'}. {q.correct} is the accurate answer because it directly satisfies system requirements and core course topics.
                             </p>
@@ -811,7 +811,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
             </div>
           </div>
           <button onClick={() => setMobileNavOpen(false)} className="md:hidden text-sidebar-muted hover:text-sidebar-foreground p-1">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+            <i className="fa-solid fa-xmark text-lg" />
           </button>
         </div>
 
@@ -827,9 +827,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                 }}
                 className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${tab === item.key ? 'bg-primary text-white' : 'text-sidebar-foreground/65 hover:text-sidebar-foreground hover:bg-white/5'}`}
               >
-                <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
-                </svg>
+                <i className={`fa-solid ${item.iconClass} w-4`} />
                 {item.label}
                 {item.key === 'quizzes' && visibleQuizzes.filter(q => q.status === 'available').length > 0 && (
                   <span className="ml-auto bg-accent text-white text-xs rounded-full px-1.5 py-0.5 leading-none">
@@ -855,9 +853,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
               localStorage.removeItem('tmas-user')
               onNavigate('login')
             }} className="text-sidebar-muted hover:text-sidebar-foreground transition-colors" title="Logout">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-              </svg>
+              <i className="fa-solid fa-right-from-bracket" />
             </button>
           </div>
         </div>
@@ -868,7 +864,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
         <header className="h-14 bg-card border-b border-border flex items-center justify-between px-4 sm:px-6 shrink-0">
           <div className="flex items-center gap-3">
             <button onClick={() => setMobileNavOpen(true)} className="md:hidden text-muted-foreground hover:text-foreground p-1">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
+              <i className="fa-solid fa-bars text-lg" />
             </button>
             <h1 className="text-foreground font-semibold text-sm">
               {tab === 'overview' ? 'My Dashboard' : tab === 'courses' ? 'My Enrolled Courses' : tab === 'quizzes' ? 'Quizzes' : tab === 'grades' ? 'My Grades' : 'Learning Progress'}
@@ -879,16 +875,16 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
               onClick={async () => {
                 const { requestPushPermission, triggerWebPushNotification, playNotificationChime } = await import('../utils/notifications')
                 const granted = await requestPushPermission()
-                triggerWebPushNotification('🔔 TMAS Push Notification System Active!', {
+                triggerWebPushNotification('TMAS Push Notification System Active!', {
                   body: 'Web Push alerts and real-time notification engine are fully working on your device.',
                 })
                 playNotificationChime()
-                alert(granted ? '🔔 Browser Push Notification Dispatched! Check your desktop/mobile notifications.' : '🔔 Sound chime played! (Enable browser notification permissions to see desktop popups).')
+                alert(granted ? 'Browser Push Notification Dispatched! Check your desktop/mobile notifications.' : 'Sound chime played! (Enable browser notification permissions to see desktop popups).')
               }}
               className="flex items-center gap-1.5 text-xs font-semibold bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 px-2.5 py-1 rounded-full transition-colors"
               title="Test Instant Web Push Notification"
             >
-              <Icon name="bolt" size={12} />
+              <i className="fa-solid fa-bolt" />
               <span>Test Push</span>
             </button>
             <span className="text-xs bg-secondary text-secondary-foreground px-3 py-1 rounded-full font-semibold">{studentLevelLabel}</span>
@@ -939,14 +935,14 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {[
-                  { label: 'Enrolled Courses', val: String(visibleCourses.length), sub: studentProfile.level, color: 'text-blue-600', bg: 'bg-blue-50' },
-                  { label: 'Quizzes Available', val: String(visibleQuizzes.filter(q => q.status === 'available').length), sub: 'Ready to attempt', color: 'text-accent', bg: 'bg-amber-50' },
-                  { label: 'Avg Quiz Score', val: `${avgScore}%`, sub: `${visibleCompletedQuizzes.length} completed`, color: 'text-success', bg: 'bg-green-50' },
-                  { label: 'Overall Progress', val: `${overallProgress}%`, sub: 'This semester', color: 'text-purple-600', bg: 'bg-purple-50' },
+                  { label: 'Enrolled Courses', val: String(visibleCourses.length), sub: studentProfile.level, icon: 'book-open' },
+                  { label: 'Quizzes Available', val: String(visibleQuizzes.filter(q => q.status === 'available').length), sub: 'Ready to attempt', icon: 'clipboard-question' },
+                  { label: 'Avg Quiz Score', val: `${avgScore}%`, sub: `${visibleCompletedQuizzes.length} completed`, icon: 'chart-line' },
+                  { label: 'Overall Progress', val: `${overallProgress}%`, sub: 'This semester', icon: 'graduation-cap' },
                 ].map((s, i) => (
                   <div key={i} className="bg-card border border-border rounded-2xl p-5">
-                    <div className={`inline-flex p-2 rounded-xl ${s.bg} mb-3`}>
-                      <div className="w-4 h-4" />
+                    <div className="inline-flex p-2 rounded-xl bg-muted mb-3 text-muted-foreground">
+                      <i className={`fa-solid fa-${s.icon}`} />
                     </div>
                     <p className="text-2xl font-bold font-mono text-foreground">{s.val}</p>
                     <p className="text-sm font-medium text-foreground mt-0.5">{s.label}</p>
@@ -997,7 +993,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                           {q.tier && <span className="text-xs bg-secondary text-secondary-foreground px-2 py-0.5 rounded-full">{q.tier}</span>}
                         </div>
                         <p className="text-sm text-foreground font-medium truncate">{q.title}</p>
-                        <p className="text-xs text-muted-foreground">{q.questions} questions · {q.timeLimit} min · Due {q.dueDate}</p>
+                        <p className="text-xs text-muted-foreground">{q.questions} questions <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {q.timeLimit} min <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> Due {q.dueDate}</p>
                         {q.openDate && (
                           <p className="text-xs text-muted-foreground">Open from {q.openDate}</p>
                         )}
@@ -1009,7 +1005,8 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                           onClick={() => { setActiveQuiz(q.id); setCurrentQ(0); setQuizAnswers({}) }}
                           className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap ${q.status === 'overdue' ? 'bg-danger/10 text-danger hover:bg-danger/20' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
                         >
-                          {q.status === 'overdue' ? 'Late Submit' : 'Start →'}
+                          {q.status === 'overdue' ? 'Late Submit' : 'Start'}
+                          {q.status !== 'overdue' && <i className="fa-solid fa-arrow-right text-xs ml-1" />}
                         </button>
                       </div>
                     ))}
@@ -1041,7 +1038,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                     <div className="mb-4 rounded-xl border border-border bg-muted/30 p-3">
                       <p className="text-[11px] uppercase tracking-[0.25em] text-muted-foreground">Course details</p>
                       <p className="mt-1 text-sm font-semibold text-foreground">{c.title}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">Code: {c.code} • Level: {c.level}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">Code: {c.code} <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> Level: {c.level}</p>
                     </div>
                     <div className="grid grid-cols-3 gap-3 mb-4">
                       {[
@@ -1102,7 +1099,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                       }}
                       className="mt-4 w-full bg-muted hover:bg-secondary text-foreground hover:text-primary font-medium py-2.5 rounded-xl text-sm transition-colors"
                     >
-                      Open materials →
+                      Open materials <i className="fa-solid fa-arrow-right ml-1" />
                     </button>
                   </div>
                 </div>
@@ -1147,7 +1144,11 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                           <div key={tierName} className="space-y-3">
                             <div className="flex items-center gap-2 border-b border-border pb-2">
                               <span className="text-xs font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-md bg-primary/10 text-primary">
-                                {tierName === 'Foundational' ? '🌱 Foundational Tier' : tierName === 'Intermediate' ? '⚡ Intermediate Tier' : '🔥 Mastery Tier'}
+                                {tierName === 'Foundational'
+                                  ? <><i className="fa-solid fa-seedling text-emerald-500" /> Foundational Tier</>
+                                  : tierName === 'Intermediate'
+                                  ? <><i className="fa-solid fa-bolt text-amber-500" /> Intermediate Tier</>
+                                  : <><i className="fa-solid fa-fire text-purple-500" /> Mastery Tier</>}
                               </span>
                               <span className="text-xs text-muted-foreground">({tierQuizzes.length} quiz{tierQuizzes.length === 1 ? '' : 'zes'})</span>
                             </div>
@@ -1168,7 +1169,11 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                                           q.tier === 'Intermediate' ? 'bg-amber-500/10 text-amber-600 border border-amber-500/20' :
                                           'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
                                         }`}>
-                                          {q.tier === 'Mastery' ? '🔥 Mastery Tier' : q.tier === 'Intermediate' ? '⚡ Intermediate Tier' : '🌱 Foundational Tier'}
+                                          {q.tier === 'Mastery'
+                                            ? <><i className="fa-solid fa-fire" /> Mastery Tier</>
+                                            : q.tier === 'Intermediate'
+                                            ? <><i className="fa-solid fa-bolt" /> Intermediate Tier</>
+                                            : <><i className="fa-solid fa-seedling" /> Foundational Tier</>}
                                         </span>
 
                                         {q.isLocked ? (
@@ -1387,7 +1392,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
             <div className="flex items-start justify-between border-b border-border bg-card/70 px-6 py-5">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted-foreground">Course material reader</p>
-                <h3 className="mt-1 text-xl font-semibold text-foreground">{materialsReaderCourse.code} • {materialsReaderCourse.title}</h3>
+                <h3 className="mt-1 text-xl font-semibold text-foreground">{materialsReaderCourse.code} <i className="fa-solid fa-circle-dot text-[10px] mx-1 opacity-40" /> {materialsReaderCourse.title}</h3>
                 <p className="mt-1 text-sm text-muted-foreground">Read uploaded lecturer notes, slides, and reference files in one place.</p>
               </div>
               <button

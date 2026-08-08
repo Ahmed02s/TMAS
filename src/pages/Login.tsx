@@ -271,7 +271,7 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
                       onClick={() => setRole(r)}
                       className={`flex-1 py-2.5 text-sm font-medium rounded-lg transition-all capitalize ${role === r ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
                     >
-                      {r === 'student' ? '🎓 Student' : '👩‍🏫 Lecturer'}
+                      {r === 'student' ? <><i className="fa-solid fa-graduation-cap mr-1" />Student</> : <><i className="fa-solid fa-chalkboard-user mr-1" />Lecturer</>}
                     </button>
                   ))}
                 </div>
