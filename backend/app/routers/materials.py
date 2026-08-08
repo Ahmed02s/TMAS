@@ -49,6 +49,40 @@ def list_materials(course: str | None = None, lecturer: str | None = None) -> di
     return {'materials': response.data or []}
 
 
+# ─────────────────────────────────────────────
+# READING PROGRESS — Supabase-backed tracking
+# Must come BEFORE parameterized /{material_id} routes
+# ─────────────────────────────────────────────
+
+@router.get('/reading-progress')
+def get_reading_progress(student_id: str | None = None, course: str | None = None) -> dict[str, Any]:
+    """Return which material IDs a student has read, and per-course reading progress."""
+    if not student_id:
+        return {'read_ids': [], 'course_progress': {}}
+
+    ensure_supabase_enabled()
+    try:
+        query = supabase.table('material_reads').select('material_id,course,read_at').eq('student_id', student_id)
+        if course:
+            query = query.eq('course', course)
+        resp = query.execute()
+        if supabase_failed(resp):
+            return {'read_ids': [], 'course_progress': {}}
+
+        rows = resp.data or []
+        read_ids = [r['material_id'] for r in rows]
+
+        # Count reads grouped by course
+        course_read: dict[str, int] = {}
+        for r in rows:
+            c = r.get('course', '')
+            course_read[c] = course_read.get(c, 0) + 1
+
+        return {'read_ids': read_ids, 'course_progress': course_read}
+    except Exception:
+        return {'read_ids': [], 'course_progress': {}}
+
+
 @router.post('', status_code=201)
 async def upload_materials(
     course: str = Form(...),
@@ -243,3 +277,5 @@ def get_material_content(material_id: int):
         'name': material_name,
         'content': text_content,
     }
+
+

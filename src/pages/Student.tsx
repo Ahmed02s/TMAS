@@ -232,13 +232,48 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       return {}
     }
   })
+  // Per-course read counts from API: { 'COMP 401': 3, ... }
+  const [courseReadProgress, setCourseReadProgress] = useState<Record<string, number>>({})
 
-  const markMaterialRead = (materialId: number) => {
+  // Load reading progress from Supabase and merge with localStorage cache
+  const loadReadingProgress = async (studentId: string) => {
+    if (!studentId) return
+    try {
+      const res = await fetch(`${API_BASE}/api/materials/reading-progress?student_id=${encodeURIComponent(studentId)}`)
+      if (!res.ok) return
+      const data = await res.json()
+      const ids: number[] = data.read_ids || []
+      const cProgress: Record<string, number> = data.course_progress || {}
+      setCourseReadProgress(cProgress)
+      if (ids.length > 0) {
+        setReadMaterials(prev => {
+          const merged: Record<string, boolean> = { ...prev }
+          ids.forEach(id => { merged[String(id)] = true })
+          try { localStorage.setItem('tmas-read-materials', JSON.stringify(merged)) } catch {}
+          return merged
+        })
+      }
+    } catch { /* silent — localStorage copy remains */ }
+  }
+
+  const markMaterialRead = (materialId: number, studentId?: string) => {
+    // Optimistic local update first
     setReadMaterials(prev => {
       const next = { ...prev, [String(materialId)]: true }
       try { localStorage.setItem('tmas-read-materials', JSON.stringify(next)) } catch {}
       return next
     })
+    // Sync to Supabase in background
+    const sid = studentId || (typeof window !== 'undefined'
+      ? (JSON.parse(localStorage.getItem('tmas-user') || 'null') as { id?: string } | null)?.id
+      : undefined)
+    if (sid) {
+      fetch(`${API_BASE}/api/materials/${materialId}/mark-read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student_id: sid }),
+      }).catch(() => { /* silent — localStorage copy is source of truth */ })
+    }
   }
 
   useEffect(() => {
@@ -250,6 +285,8 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       level: storedUser?.level ?? '',
       program: storedUser?.program ?? '',
     })
+    // Load reading progress from Supabase, merged with localStorage cache
+    if (storedUser?.id) loadReadingProgress(storedUser.id)
     try {
       const storedTab = window.localStorage.getItem('tmas-student-tab') as Tab | null
       if (storedTab) setTab(storedTab as Tab)
@@ -1088,23 +1125,62 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                       <span className="font-mono font-bold text-foreground">{c.avgScore > 0 ? `${c.avgScore}%` : '—'}</span>
                     </div>
                     {(() => {
-                      let computedProgress = c.progress
-                      if (c.materials > 0) {
-                        const readCount = materials.length > 0 && materialsReaderCourse?.code === c.code
-                          ? materials.filter(m => readMaterials[String(m.id)]).length
-                          : 0
-                        const matProgress = c.materials > 0 ? Math.round((readCount / c.materials) * 50) : 0
-                        const quizProgress = c.quizzesTotal > 0 ? Math.round((c.quizzesDone / c.quizzesTotal) * 50) : 0
-                        computedProgress = matProgress + quizProgress
-                      }
+                      // Use API course_progress for accuracy; fall back to materials-list if reader is open
+                      const courseMatsRead = (() => {
+                        if (materialsReaderCourse?.code === c.code && materials.length > 0) {
+                          // Reader is open for this course — use live in-memory count
+                          return materials.filter(m => readMaterials[String(m.id)]).length
+                        }
+                        // Use server-provided per-course count (any matching key: 'COMP 401', 'COMP401', etc.)
+                        const apiCount = Object.entries(courseReadProgress).find(
+                          ([k]) => k.replace(/\s+/g, '').toLowerCase() === c.code.replace(/\s+/g, '').toLowerCase()
+                        )?.[1] ?? 0
+                        return Math.min(apiCount, c.materials)
+                      })()
+                      const matPct  = c.materials    > 0 ? Math.round((courseMatsRead  / c.materials)    * 100) : 0
+                      const quizPct = c.quizzesTotal > 0 ? Math.round((c.quizzesDone  / c.quizzesTotal) * 100) : 0
+                      const overall = c.materials > 0 && c.quizzesTotal > 0
+                        ? Math.round((matPct + quizPct) / 2)
+                        : c.materials > 0 ? matPct : quizPct
                       return (
-                        <div>
-                          <div className="flex items-center justify-between mb-1.5">
-                            <span className="text-xs text-muted-foreground font-medium">Completion</span>
-                            <span className="text-xs font-mono font-bold text-foreground">{computedProgress}%</span>
-                          </div>
-                          <div className="h-2 bg-muted rounded-full overflow-hidden">
-                            <div className={`h-full rounded-full bg-linear-to-r ${c.color} transition-all duration-500`} style={{ width: `${computedProgress}%` }} />
+                        <div className="space-y-3">
+                          {/* Material reading progress */}
+                          {c.materials > 0 && (
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs text-muted-foreground font-medium flex items-center gap-1">
+                                  <i className="fa-solid fa-book-open text-[10px] text-emerald-500" /> Materials Read
+                                </span>
+                                <span className="text-xs font-mono font-bold text-foreground">{courseMatsRead}/{c.materials}</span>
+                              </div>
+                              <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                                <div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${matPct}%` }} />
+                              </div>
+                            </div>
+                          )}
+                          {/* Quiz completion progress */}
+                          {c.quizzesTotal > 0 && (
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs text-muted-foreground font-medium flex items-center gap-1">
+                                  <i className="fa-solid fa-circle-check text-[10px] text-primary" /> Quizzes Done
+                                </span>
+                                <span className="text-xs font-mono font-bold text-foreground">{c.quizzesDone}/{c.quizzesTotal}</span>
+                              </div>
+                              <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                                <div className="h-full bg-primary rounded-full transition-all duration-500" style={{ width: `${quizPct}%` }} />
+                              </div>
+                            </div>
+                          )}
+                          {/* Overall completion */}
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs text-muted-foreground font-medium">Overall Progress</span>
+                              <span className="text-xs font-mono font-bold text-foreground">{overall}%</span>
+                            </div>
+                            <div className="h-2 bg-muted rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full bg-linear-to-r ${c.color} transition-all duration-700`} style={{ width: `${overall}%` }} />
+                            </div>
                           </div>
                         </div>
                       )
@@ -1124,10 +1200,16 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                           const data = await res.json()
                           const mats = (data.materials || []) as MaterialItem[]
                           setMaterials(mats)
+                          // Auto-open first material and mark as read
                           if (mats[0]) {
                             setActiveMaterialId(mats[0].id)
-                            markMaterialRead(mats[0].id)
+                            markMaterialRead(mats[0].id, savedUser?.id)
                           }
+                          // Update per-course read count from local readMaterials
+                          setCourseReadProgress(prev => ({
+                            ...prev,
+                            [c.code]: mats.filter(m => readMaterials[String(m.id)]).length,
+                          }))
                         } catch (err) {
                           setMaterialsError(err instanceof Error ? err.message : 'Unable to load course materials')
                         }
@@ -1528,7 +1610,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                         onClick={() => {
                           setActiveMaterialId(material.id)
                           setMaterialsError('')
-                          markMaterialRead(material.id)
+                          markMaterialRead(material.id, savedUser?.id)
                           setMaterialPreviewLoading(true)
                           fetch(`${API_BASE}/api/materials/${material.id}/content`)
                             .then(r => r.json())

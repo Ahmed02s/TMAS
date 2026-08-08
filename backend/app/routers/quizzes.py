@@ -1268,6 +1268,9 @@ def _quiz_is_locked(quiz: dict[str, Any], now: datetime) -> bool:
     open_dt = _parse_datetime(quiz.get('open_date'))
     if open_dt and now < open_dt:
         return True
+    # Also lock if quiz has no open_date AND was explicitly scheduled (status='scheduled' in DB)
+    if not open_dt and str(quiz.get('status') or '').lower() == 'scheduled':
+        return True
     return False
 
 
@@ -1293,9 +1296,12 @@ def list_available_quizzes(level: str | None = None, program: str | None = None,
             continue
 
         quiz_dict = dict(quiz)
-        if _quiz_is_locked(quiz_dict, now):
+        is_locked = _quiz_is_locked(quiz_dict, now)
+        if is_locked:
             quiz_dict['status'] = 'scheduled'
             quiz_dict['is_locked'] = True
+            # Preserve the configured open_date so students can see it (even if in past/null)
+            # open_date is already in quiz_dict from the DB
         else:
             quiz_dict['status'] = 'available'
             quiz_dict['is_locked'] = False
