@@ -17,6 +17,7 @@ type Course = {
   quizzesTotal: number
   quizzesDone: number
   avgScore: number
+  studentCount: number
   color: string
 }
 
@@ -74,11 +75,12 @@ function mapCourse(course: Record<string, any>): Course {
     level: course.level,
     program: course.program,
     lecturer: course.lecturer,
-    progress: course.progress,
-    materials: course.materials,
-    quizzesTotal: course.quizzes_total,
-    quizzesDone: course.quizzes_done,
-    avgScore: course.avg_score,
+    progress: course.progress ?? 0,
+    materials: course.materials ?? 0,
+    quizzesTotal: course.quizzes_total ?? 0,
+    quizzesDone: course.quizzes_done ?? 0,
+    avgScore: course.avg_score ?? 0,
+    studentCount: course.student_count ?? 0,
     color: course.color,
   }
 }
@@ -1053,17 +1055,29 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                       <p className="mt-1 text-sm font-semibold text-foreground">{c.title}</p>
                       <p className="mt-1 text-xs text-muted-foreground">Code: {c.code} <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> Level: {c.level}</p>
                     </div>
+                    {/* ── 3 stat boxes: Students / Materials / Quizzes ── */}
                     <div className="grid grid-cols-3 gap-3 mb-4">
-                      {[
-                        { val: c.materials, label: 'Materials' },
-                        { val: `${c.quizzesDone}/${c.quizzesTotal}`, label: 'Quizzes Done' },
-                        { val: `${c.avgScore}%`, label: 'Avg Score' },
-                      ].map((s, j) => (
-                        <div key={j} className="bg-muted/50 rounded-xl py-2.5 text-center">
-                          <p className="text-base font-bold font-mono text-foreground">{s.val}</p>
-                          <p className="text-xs text-muted-foreground">{s.label}</p>
-                        </div>
-                      ))}
+                      <div className="bg-muted/50 rounded-xl py-2.5 text-center">
+                        <p className="text-base font-bold font-mono text-foreground">
+                          {c.studentCount > 0 ? c.studentCount : <span className="text-muted-foreground text-xs">—</span>}
+                        </p>
+                        <p className="text-xs text-muted-foreground">Students</p>
+                      </div>
+                      <div className="bg-muted/50 rounded-xl py-2.5 text-center">
+                        <p className="text-base font-bold font-mono text-foreground">{c.materials}</p>
+                        <p className="text-xs text-muted-foreground">Materials</p>
+                      </div>
+                      <div className="bg-muted/50 rounded-xl py-2.5 text-center">
+                        <p className="text-base font-bold font-mono text-foreground">{c.quizzesTotal}</p>
+                        <p className="text-xs text-muted-foreground">Quizzes</p>
+                      </div>
+                    </div>
+                    {/* Avg score row */}
+                    <div className="flex items-center justify-between text-xs mb-3">
+                      <span className="text-muted-foreground font-medium">Quizzes done:</span>
+                      <span className="font-mono font-bold text-foreground">{c.quizzesDone}/{c.quizzesTotal}</span>
+                      <span className="text-muted-foreground font-medium ml-4">Avg Score:</span>
+                      <span className="font-mono font-bold text-foreground">{c.avgScore > 0 ? `${c.avgScore}%` : '—'}</span>
                     </div>
                     {(() => {
                       let computedProgress = c.progress

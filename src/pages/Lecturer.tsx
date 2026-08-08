@@ -91,6 +91,9 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   const [genCourse, setGenCourse] = useState('')
   const [genCount, setGenCount] = useState('10')
   const [genQuestionTypes, setGenQuestionTypes] = useState<string[]>(['MCQ', 'True/False', 'Fill in the Blank', 'Short Answer'])
+  const [genError, setGenError] = useState('')
+  const [publishError, setPublishError] = useState('')
+  const [scheduleErrors, setScheduleErrors] = useState<Record<string, string>>({})
   const [generatedQuestionsByTier, setGeneratedQuestionsByTier] = useState<Record<string, any[]>>({
     Foundational: [],
     Intermediate: [],
@@ -307,8 +310,19 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   }
 
   const handleGenerate3TierBank = async () => {
+    setGenError('')
+    // Validate
+    const count = Number(genCount)
     if (!genCourse) {
-      alert('Please select a course before generating quiz questions.')
+      setGenError('Please select a course before generating quiz questions.')
+      return
+    }
+    if (!genQuestionTypes.length) {
+      setGenError('Select at least one question type.')
+      return
+    }
+    if (isNaN(count) || count < 3 || count > 30) {
+      setGenError('Questions per tier must be between 3 and 30.')
       return
     }
     setGenerating(true)
@@ -316,7 +330,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     try {
       const payload = {
         course: genCourse,
-        question_count: Number(genCount) || 10,
+        question_count: count,
         generate_all_tiers: true,
         question_types: genQuestionTypes,
         material_ids: selectedMaterialId ? [Number(selectedMaterialId)] : [],
@@ -356,10 +370,9 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       setGeneratedQuestionsByTier(processedByTier)
       setApprovedByTier(autoApproved)
       setGenerated(true)
-      setWizardStep(2) // Advance automatically to Step 2 Review!
+      setWizardStep(2)
     } catch (err: any) {
-      console.error('Quiz bank generation failed', err)
-      alert(`Quiz generation failed: ${err.message || 'Unknown error'}`)
+      setGenError(`Quiz generation failed: ${err.message || 'Unknown error'}`)
     } finally {
       setGenerating(false)
     }
@@ -367,6 +380,28 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
 
   const handlePublish3TierSequence = async () => {
     if (!genCourse) return
+    setPublishError('')
+    // Validate each tier's schedule config
+    const errs: Record<string, string> = {}
+    for (const tier of ['Foundational', 'Intermediate', 'Mastery'] as const) {
+      const cfg = tierScheduleConfigs[tier]
+      const tl = Number(cfg.timeLimit)
+      const ps = Number(cfg.passingScore)
+      const qc = (generatedQuestionsByTier[tier] || []).length
+      if (!cfg.openDate) errs[`${tier}_openDate`] = 'Open date is required.'
+      if (!cfg.closeDate) errs[`${tier}_closeDate`] = 'Close date is required.'
+      if (cfg.openDate && cfg.closeDate && new Date(cfg.closeDate) <= new Date(cfg.openDate))
+        errs[`${tier}_closeDate`] = 'Close date must be after open date.'
+      if (isNaN(tl) || tl < 5 || tl > 180) errs[`${tier}_timeLimit`] = 'Duration must be 5–180 mins.'
+      if (isNaN(ps) || ps < 1 || ps > 100) errs[`${tier}_passingScore`] = 'Pass score must be 1–100%.'
+      if (qc === 0) errs[`${tier}_questions`] = 'No questions generated for this tier.'
+    }
+    if (Object.keys(errs).length) {
+      setScheduleErrors(errs)
+      setPublishError('Please fix the errors in the schedule configuration above.')
+      return
+    }
+    setScheduleErrors({})
     setPublishing(true)
 
     try {
@@ -412,11 +447,11 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
         })
       } catch {}
 
-      alert(`🎉 Success! All 3 Quiz Tiers (Foundational, Intermediate, Mastery) have been scheduled and published for ${genCourse}!`)
+      setPublishError('')
       setWizardStep(1)
       setGenerated(false)
     } catch (err: any) {
-      alert(`Publishing failed: ${err.message}`)
+      setPublishError(`Publishing failed: ${err.message}`)
     } finally {
       setPublishing(false)
     }
@@ -1134,7 +1169,11 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                         onChange={e => setGenCount(e.target.value)}
                         min={3}
                         max={30}
-                        className="w-32 px-4 py-3 bg-muted border border-border rounded-xl text-sm font-mono font-bold focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className={`w-32 px-4 py-3 bg-muted border rounded-xl text-sm font-mono font-bold focus:outline-none focus:ring-2 transition-colors ${
+                          (Number(genCount) < 3 || Number(genCount) > 30) && genCount !== ''
+                            ? 'border-danger focus:ring-danger/30 focus:border-danger'
+                            : 'border-border focus:ring-primary/30'
+                        }`}
                       />
                       <span className="text-xs text-muted-foreground">
                         Generates <strong className="text-foreground">{Number(genCount) * 3 || 30} total questions</strong> across 3 tiers (Foundational, Intermediate, Mastery).
@@ -1159,6 +1198,14 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                       </>
                     )}
                   </button>
+
+                  {/* Validation error for generate step */}
+                  {genError && (
+                    <div className="flex items-start gap-2 bg-danger/10 border border-danger/30 text-danger rounded-xl px-4 py-3 text-sm font-medium">
+                      <i className="fa-solid fa-triangle-exclamation mt-0.5 shrink-0" />
+                      <span>{genError}</span>
+                    </div>
+                  )}
 
                   <button
                     onClick={handleClearAllQuizzes}
@@ -1330,11 +1377,14 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                   ...prev,
                                   [tier]: { ...prev[tier], timeLimit: val },
                                 }))
+                                if (scheduleErrors[`${tier}_timeLimit`]) setScheduleErrors(p => ({ ...p, [`${tier}_timeLimit`]: '' }))
                               }}
                               min={5}
                               max={180}
-                              className="w-full px-3 py-2 bg-muted border border-border rounded-xl text-sm font-bold font-mono"
+                              className={`w-full px-3 py-2 bg-muted border rounded-xl text-sm font-bold font-mono ${scheduleErrors[`${tier}_timeLimit`] ? 'border-danger' : 'border-border'}`}
                             />
+                            {scheduleErrors[`${tier}_timeLimit`] && <p className="text-xs text-danger mt-1 flex items-center gap-1"><i className="fa-solid fa-triangle-exclamation text-[10px]" />{scheduleErrors[`${tier}_timeLimit`]}</p>}
+                            {scheduleErrors[`${tier}_questions`] && <p className="text-xs text-danger mt-1 flex items-center gap-1"><i className="fa-solid fa-triangle-exclamation text-[10px]" />{scheduleErrors[`${tier}_questions`]}</p>}
                           </div>
 
                           <div>
@@ -1348,9 +1398,11 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                   ...prev,
                                   [tier]: { ...prev[tier], openDate: val },
                                 }))
+                                if (scheduleErrors[`${tier}_openDate`]) setScheduleErrors(p => ({ ...p, [`${tier}_openDate`]: '' }))
                               }}
-                              className="w-full px-3 py-2 bg-muted border border-border rounded-xl text-xs font-medium"
+                              className={`w-full px-3 py-2 bg-muted border rounded-xl text-xs font-medium ${scheduleErrors[`${tier}_openDate`] ? 'border-danger' : 'border-border'}`}
                             />
+                            {scheduleErrors[`${tier}_openDate`] && <p className="text-xs text-danger mt-1 flex items-center gap-1"><i className="fa-solid fa-triangle-exclamation text-[10px]" />{scheduleErrors[`${tier}_openDate`]}</p>}
                           </div>
 
                           <div>
@@ -1364,9 +1416,11 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                   ...prev,
                                   [tier]: { ...prev[tier], closeDate: val },
                                 }))
+                                if (scheduleErrors[`${tier}_closeDate`]) setScheduleErrors(p => ({ ...p, [`${tier}_closeDate`]: '' }))
                               }}
-                              className="w-full px-3 py-2 bg-muted border border-border rounded-xl text-xs font-medium"
+                              className={`w-full px-3 py-2 bg-muted border rounded-xl text-xs font-medium ${scheduleErrors[`${tier}_closeDate`] ? 'border-danger' : 'border-border'}`}
                             />
+                            {scheduleErrors[`${tier}_closeDate`] && <p className="text-xs text-danger mt-1 flex items-center gap-1"><i className="fa-solid fa-triangle-exclamation text-[10px]" />{scheduleErrors[`${tier}_closeDate`]}</p>}
                           </div>
 
                           <div className="grid grid-cols-2 gap-3 pt-2">
@@ -1424,6 +1478,14 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                       </>
                     )}
                   </button>
+
+                  {/* Publish validation error */}
+                  {publishError && (
+                    <div className="flex items-start gap-2 bg-danger/10 border border-danger/30 text-danger rounded-xl px-4 py-3 text-sm font-medium">
+                      <i className="fa-solid fa-triangle-exclamation mt-0.5 shrink-0" />
+                      <span>{publishError}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
