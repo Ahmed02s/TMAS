@@ -29,6 +29,8 @@ export default function CourseModal({
   initialCourse,
   levels,
   lecturers,
+  courseCodes = [],
+  courseTitles = [],
   saving,
   errorMessage,
 }: CourseModalProps) {
