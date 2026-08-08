@@ -33,9 +33,15 @@ def _clean_material_title(title: str) -> str:
 router = APIRouter(prefix='/api/quizzes', tags=['quizzes'])
 
 
-def _parse_datetime(value: str | None) -> datetime | None:
+def _parse_datetime(value: str | datetime | None) -> datetime | None:
     if not value:
         return None
+    if isinstance(value, datetime):
+        dt = value
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
     cleaned = value.strip()
     if cleaned.endswith('Z'):
         cleaned = cleaned[:-1] + '+00:00'
@@ -46,7 +52,14 @@ def _parse_datetime(value: str | None) -> datetime | None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt
     except ValueError:
-        for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S%z', '%Y-%m-%dT%H:%M:%S%z'):
+        for fmt in (
+            '%Y-%m-%d %H:%M',
+            '%Y-%m-%dT%H:%M',
+            '%Y-%m-%d %H:%M:%S',
+            '%Y-%m-%dT%H:%M:%S',
+            '%Y-%m-%d %H:%M:%S%z',
+            '%Y-%m-%dT%H:%M:%S%z',
+        ):
             try:
                 dt = datetime.strptime(cleaned, fmt)
                 if dt.tzinfo is None:

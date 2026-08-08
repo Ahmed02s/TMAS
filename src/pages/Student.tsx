@@ -94,16 +94,27 @@ function inferTier(quiz: Record<string, any>): string {
   return 'Foundational'
 }
 
+function parseQuizDate(value: string | undefined | null): Date | null {
+  if (!value) return null
+  const utcLike = value.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(value)
+  const normalized = utcLike ? value : `${value}Z`
+  const parsed = new Date(normalized)
+  return Number.isNaN(parsed.valueOf()) ? null : parsed
+}
+
 function mapQuiz(quiz: Record<string, any>): Quiz {
   const now = new Date()
-  const openDt  = quiz.open_date  ? new Date(quiz.open_date)  : null
-  const closeDt = quiz.close_date ? new Date(quiz.close_date) : null
+  const openDt  = parseQuizDate(quiz.open_date)
+  const closeDt = parseQuizDate(quiz.close_date)
 
   // SECURITY: Backend is_locked is the primary authoritative signal.
-  // We also do a client-side date re-check as a secondary guard,
-  // but we do NOT lock quizzes solely because open_date is missing —
-  // that is already handled by the backend which returns is_locked=true.
-  const isLocked = !!(quiz.is_locked || (openDt && openDt > now))
+  // We also do a client-side date re-check as a secondary guard.
+  // A scheduled quiz with no open_date should remain locked until the lecturer sets one.
+  const isLocked = !!(
+    quiz.is_locked ||
+    (openDt ? openDt > now : false) ||
+    (String(quiz.status || '').toLowerCase() === 'scheduled' && !openDt)
+  )
   // Closed: availability window has ended
   const isClosed = !isLocked && !!(closeDt && closeDt < now)
 
