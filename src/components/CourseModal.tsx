@@ -80,7 +80,7 @@ export default function CourseModal({
               <span>Course code</span>
               <input
                 value={form.code}
-                onChange={e => setForm(prev => ({ ...prev, code: e.target.value.toUpperCase() }))}
+                onChange={e => setForm(prev => ({ ...prev, code: e.target.value }))}
                 placeholder="e.g. COMP 101"
                 list="course-code-suggestions"
                 className="w-full rounded-2xl border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary/70 focus:ring-2 focus:ring-primary/20"
@@ -178,7 +178,7 @@ export default function CourseModal({
             Cancel
           </button>
           <button
-            onClick={() => onSubmit(form)}
+            onClick={() => onSubmit({ ...form, code: (form.code || '').trim(), title: (form.title || '').trim() })}
             disabled={saving}
             className="rounded-2xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:bg-blue-950 disabled:opacity-60"
           >
