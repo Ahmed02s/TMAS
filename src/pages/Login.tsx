@@ -1,14 +1,56 @@
 import { useEffect, useState } from 'react'
 import type { AppView } from '../App'
 import { API_BASE } from '../config'
+
 const fallbackLevelOptions = ['Level 100', 'Level 200', 'Level 300', 'Level 400']
 const programOptions = ['Computer Science', 'Mathematics', 'Engineering', 'Business']
+
+// ── Validation helpers ─────────────────────────────────────────────────────
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
+const STUDENT_ID_RE = /^[A-Z]{3}\d{7}$/
+
+function validateEmail(val: string) {
+  if (!val.trim()) return 'Email address is required.'
+  if (!EMAIL_RE.test(val.trim())) return 'Enter a valid email address (e.g. you@gmail.com).'
+  return ''
+}
+
+function validateStudentId(val: string) {
+  if (!val.trim()) return 'Student Index Number is required.'
+  if (!STUDENT_ID_RE.test(val.trim().toUpperCase()))
+    return 'Index must be 3 uppercase letters followed by 7 digits (e.g. UEB3512822).'
+  return ''
+}
+
+function FieldError({ msg }: { msg: string }) {
+  if (!msg) return null
+  return (
+    <p className="flex items-center gap-1.5 text-xs text-danger mt-1.5 font-medium">
+      <i className="fa-solid fa-triangle-exclamation text-[10px]" />
+      {msg}
+    </p>
+  )
+}
+
+function inputCls(hasError: boolean) {
+  return `w-full px-4 py-3 bg-muted border rounded-xl text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 transition-colors ${
+    hasError
+      ? 'border-danger focus:ring-danger/30 focus:border-danger'
+      : 'border-border focus:ring-primary/30 focus:border-primary'
+  }`
+}
 
 export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate: (v: AppView) => void; initialTab?: 'login' | 'register' }) {
   const [tab, setTab] = useState<'login' | 'register'>(initialTab)
   const [role, setRole] = useState<'student' | 'lecturer'>('student')
+
+  // ── Login fields ──────────────────────────────────────────────────────────
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [emailErr, setEmailErr] = useState('')
+  const [passwordErr, setPasswordErr] = useState('')
+
+  // ── Register fields ───────────────────────────────────────────────────────
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [registerEmail, setRegisterEmail] = useState('')
@@ -17,28 +59,87 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
   const [studentLevel, setStudentLevel] = useState(fallbackLevelOptions[0])
   const [studentProgram, setStudentProgram] = useState('Computer Science')
   const [department, setDepartment] = useState('')
+
+  // ── Register inline errors ────────────────────────────────────────────────
+  const [firstNameErr, setFirstNameErr] = useState('')
+  const [lastNameErr, setLastNameErr] = useState('')
+  const [regEmailErr, setRegEmailErr] = useState('')
+  const [regPasswordErr, setRegPasswordErr] = useState('')
+  const [studentIdErr, setStudentIdErr] = useState('')
+
   const [availableLevels, setAvailableLevels] = useState<string[]>([])
   const [statusMessage, setStatusMessage] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [lecturerPendingModal, setLecturerPendingModal] = useState(false)
 
+  useEffect(() => {
+    async function loadLevels() {
+      try {
+        const response = await fetch(`${API_BASE}/api/levels`)
+        if (!response.ok) return
+        const data = await response.json()
+        const levels = Array.isArray(data.levels) ? data.levels.map((l: any) => l.name).filter(Boolean) : []
+        if (levels.length) {
+          setAvailableLevels(levels)
+          setStudentLevel(levels[0])
+        } else {
+          setStudentLevel(fallbackLevelOptions[0])
+        }
+      } catch {
+        setStudentLevel(fallbackLevelOptions[0])
+      }
+    }
+    loadLevels()
+  }, [])
+
+  // ── Clear helpers ─────────────────────────────────────────────────────────
+  function clearLoginFields() {
+    setEmail('')
+    setPassword('')
+    setEmailErr('')
+    setPasswordErr('')
+    setStatusMessage('')
+  }
+
+  function clearRegisterFields() {
+    setFirstName('')
+    setLastName('')
+    setRegisterEmail('')
+    setRegisterPassword('')
+    setStudentIndexNumber('')
+    setDepartment('')
+    setFirstNameErr('')
+    setLastNameErr('')
+    setRegEmailErr('')
+    setRegPasswordErr('')
+    setStudentIdErr('')
+    setStatusMessage('')
+  }
+
+  // ── Login ─────────────────────────────────────────────────────────────────
   async function handleLogin() {
+    // Validate
+    const eErr = validateEmail(email)
+    const pErr = !password ? 'Password is required.' : ''
+    setEmailErr(eErr)
+    setPasswordErr(pErr)
+    if (eErr || pErr) return
+
     setIsSubmitting(true)
     setStatusMessage('')
     try {
       const response = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: email.trim(), password }),
       })
       const data = await response.json()
-      if (!response.ok) {
-        throw new Error(data.detail || data.error || 'Login failed')
-      }
+      if (!response.ok) throw new Error(data.detail || data.error || 'Login failed')
 
       localStorage.setItem('tmas-token', data.token)
       localStorage.setItem('tmas-user', JSON.stringify(data.user))
-      setStatusMessage(`Signed in as ${data.user.role}`)
+      clearLoginFields()
+
       if (data.user.role === 'admin' || data.user.role === 'administrator') {
         onNavigate('admin')
       } else if (data.user.role === 'lecturer') {
@@ -55,61 +156,29 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
     }
   }
 
-  useEffect(() => {
-    async function loadLevels() {
-      try {
-        const response = await fetch(`${API_BASE}/api/levels`)
-        if (!response.ok) return
-        const data = await response.json()
-        const levels = Array.isArray(data.levels) ? data.levels.map((level: any) => level.name).filter(Boolean) : []
-        if (levels.length) {
-          setAvailableLevels(levels)
-          setStudentLevel(levels[0])
-        } else {
-          setStudentLevel(fallbackLevelOptions[0])
-        }
-      } catch (err) {
-        console.error('Failed to load available levels', err)
-        setStudentLevel(fallbackLevelOptions[0])
-      }
-    }
-    loadLevels()
-  }, [])
-
+  // ── Register ──────────────────────────────────────────────────────────────
   async function handleRegister() {
+    // Run all validations
+    const fnErr = !firstName.trim() ? 'First name is required.' : ''
+    const lnErr = !lastName.trim() ? 'Last name is required.' : ''
+    const reErr = validateEmail(registerEmail)
+    const rpErr = !registerPassword ? 'Password is required.' : registerPassword.length < 6 ? 'Password must be at least 6 characters.' : ''
+    const siErr = role === 'student' ? validateStudentId(studentIndexNumber) : ''
+
+    setFirstNameErr(fnErr)
+    setLastNameErr(lnErr)
+    setRegEmailErr(reErr)
+    setRegPasswordErr(rpErr)
+    setStudentIdErr(siErr)
+
+    if (fnErr || lnErr || reErr || rpErr || siErr) {
+      setStatusMessage('Please fix the errors above.')
+      return
+    }
+
     setIsSubmitting(true)
     setStatusMessage('')
-    const name = [firstName, lastName].filter(Boolean).join(' ').trim()
-
-    if (!name) {
-      setStatusMessage('Please enter your name.')
-      setIsSubmitting(false)
-      return
-    }
-
-    if (!registerEmail && !email) {
-      setStatusMessage('Please enter your email address.')
-      setIsSubmitting(false)
-      return
-    }
-
-    if (!registerPassword && !password) {
-      setStatusMessage('Please enter a password.')
-      setIsSubmitting(false)
-      return
-    }
-
-    if (role === 'student' && (!studentLevel || !studentProgram)) {
-      setStatusMessage('Please select your academic level and program.')
-      setIsSubmitting(false)
-      return
-    }
-
-    if (role === 'student' && !studentIndexNumber.trim()) {
-      setStatusMessage('Please enter your Student Index Number.')
-      setIsSubmitting(false)
-      return
-    }
+    const name = `${firstName.trim()} ${lastName.trim()}`
 
     try {
       const response = await fetch(`${API_BASE}/api/auth/register`, {
@@ -117,23 +186,25 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           name,
-          email: registerEmail || email,
-          password: registerPassword || password,
+          email: registerEmail.trim(),
+          password: registerPassword,
           role,
-          ...(role === 'student' ? { level: studentLevel, program: studentProgram, index_number: studentIndexNumber.trim() } : { department: department || 'Computer Science', program: department || 'Computer Science' }),
+          ...(role === 'student'
+            ? { level: studentLevel, program: studentProgram, index_number: studentIndexNumber.trim().toUpperCase() }
+            : { department: department || 'Computer Science', program: department || 'Computer Science' }),
         }),
       })
       const data = await response.json()
-      if (!response.ok) {
-        throw new Error(data.detail || data.error || 'Registration failed')
-      }
+      if (!response.ok) throw new Error(data.detail || data.error || 'Registration failed')
+
+      clearRegisterFields()
 
       if (role === 'lecturer') {
         try {
           const { dispatchPushNotification } = await import('../utils/notifications')
           await dispatchPushNotification({
             title: 'New Lecturer Registration Pending',
-            message: `${name} (${email}) has registered and is awaiting administrator approval.`,
+            message: `${name} (${registerEmail.trim()}) has registered and is awaiting administrator approval.`,
             target_role: 'admin',
             type: 'warning',
           })
@@ -208,7 +279,7 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
               {(['login', 'register'] as const).map(t => (
                 <button
                   key={t}
-                  onClick={() => setTab(t)}
+                  onClick={() => { setTab(t); setStatusMessage('') }}
                   className={`flex-1 py-2.5 text-sm font-medium rounded-lg transition-all capitalize ${tab === t ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
                 >
                   {t === 'login' ? 'Sign In' : 'Register'}
@@ -216,22 +287,30 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
               ))}
             </div>
 
+            {/* ── LOGIN FORM ── */}
             {tab === 'login' ? (
               <>
                 <h2 className="font-display text-3xl text-foreground mb-1.5">Welcome back</h2>
                 <p className="text-muted-foreground text-sm mb-8">Sign in to your TMAS account to continue.</p>
 
                 <div className="space-y-4">
+                  {/* Email */}
                   <div>
-                    <label className="block text-sm font-medium text-foreground mb-1.5">Email Address</label>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">
+                      Email Address
+                    </label>
                     <input
                       type="email"
                       value={email}
-                      onChange={e => setEmail(e.target.value)}
+                      onChange={e => { setEmail(e.target.value); setEmailErr('') }}
+                      onBlur={() => setEmailErr(validateEmail(email))}
                       placeholder="you@university.edu"
-                      className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
+                      className={inputCls(!!emailErr)}
                     />
+                    <FieldError msg={emailErr} />
                   </div>
+
+                  {/* Password */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="block text-sm font-medium text-foreground">Password</label>
@@ -240,30 +319,35 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
                     <input
                       type="password"
                       value={password}
-                      onChange={e => setPassword(e.target.value)}
+                      onChange={e => { setPassword(e.target.value); setPasswordErr('') }}
+                      onBlur={() => setPasswordErr(!password ? 'Password is required.' : '')}
                       placeholder="••••••••"
-                      className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
+                      className={inputCls(!!passwordErr)}
                     />
+                    <FieldError msg={passwordErr} />
                   </div>
+
                   <button
                     onClick={handleLogin}
                     disabled={isSubmitting}
                     className="w-full bg-primary hover:bg-blue-950 text-white font-semibold py-3.5 rounded-xl transition-colors disabled:opacity-60"
                   >
-                    {isSubmitting ? 'Signing in...' : 'Sign In'}
+                    {isSubmitting ? <><i className="fa-solid fa-spinner fa-spin mr-2" />Signing in...</> : 'Sign In'}
                   </button>
                   {statusMessage && (
-                    <p className={`text-sm text-center mt-2 ${statusMessage.toLowerCase().includes('success') || statusMessage.toLowerCase().includes('created') ? 'text-emerald-600 font-medium' : 'text-danger'}`}>{statusMessage}</p>
+                    <p className={`text-sm text-center mt-2 font-medium ${statusMessage.toLowerCase().includes('success') ? 'text-emerald-600' : 'text-danger'}`}>
+                      {statusMessage}
+                    </p>
                   )}
                 </div>
-
-
               </>
             ) : (
+              /* ── REGISTER FORM ── */
               <>
                 <h2 className="font-display text-3xl text-foreground mb-1.5">Create account</h2>
                 <p className="text-muted-foreground text-sm mb-6">Register to access the TMAS platform.</p>
 
+                {/* Role toggle */}
                 <div className="flex bg-muted rounded-xl p-1 mb-6">
                   {(['student', 'lecturer'] as const).map(r => (
                     <button
@@ -277,86 +361,119 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
                 </div>
 
                 <div className="space-y-4">
+                  {/* Name row */}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-sm font-medium text-foreground mb-1.5">First Name</label>
                       <input
                         type="text"
                         value={firstName}
-                        onChange={e => setFirstName(e.target.value)}
+                        onChange={e => { setFirstName(e.target.value); setFirstNameErr('') }}
+                        onBlur={() => setFirstNameErr(!firstName.trim() ? 'First name is required.' : '')}
                         placeholder="John"
-                        className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
+                        className={inputCls(!!firstNameErr)}
                       />
+                      <FieldError msg={firstNameErr} />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-foreground mb-1.5">Last Name</label>
                       <input
                         type="text"
                         value={lastName}
-                        onChange={e => setLastName(e.target.value)}
+                        onChange={e => { setLastName(e.target.value); setLastNameErr('') }}
+                        onBlur={() => setLastNameErr(!lastName.trim() ? 'Last name is required.' : '')}
                         placeholder="Doe"
-                        className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
+                        className={inputCls(!!lastNameErr)}
                       />
+                      <FieldError msg={lastNameErr} />
                     </div>
                   </div>
+
+                  {/* Email */}
                   <div>
                     <label className="block text-sm font-medium text-foreground mb-1.5">Email Address</label>
                     <input
                       type="email"
                       value={registerEmail}
-                      onChange={e => setRegisterEmail(e.target.value)}
+                      onChange={e => { setRegisterEmail(e.target.value); setRegEmailErr('') }}
+                      onBlur={() => setRegEmailErr(validateEmail(registerEmail))}
                       placeholder="you@university.edu"
-                      className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
+                      className={inputCls(!!regEmailErr)}
                     />
+                    <FieldError msg={regEmailErr} />
                   </div>
+
+                  {/* Password */}
                   <div>
                     <label className="block text-sm font-medium text-foreground mb-1.5">Password</label>
                     <input
                       type="password"
                       value={registerPassword}
-                      onChange={e => setRegisterPassword(e.target.value)}
+                      onChange={e => { setRegisterPassword(e.target.value); setRegPasswordErr('') }}
+                      onBlur={() => setRegPasswordErr(!registerPassword ? 'Password is required.' : registerPassword.length < 6 ? 'At least 6 characters.' : '')}
                       placeholder="••••••••"
-                      className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
+                      className={inputCls(!!regPasswordErr)}
                     />
+                    <FieldError msg={regPasswordErr} />
                   </div>
+
+                  {/* Student-only fields */}
                   {role === 'student' ? (
                     <>
+                      {/* Student Index Number */}
                       <div>
-                        <label className="block text-sm font-medium text-foreground mb-1.5">Student Index Number</label>
+                        <label className="block text-sm font-medium text-foreground mb-1.5">
+                          Student Index Number
+                          <span className="ml-2 text-xs text-muted-foreground font-normal">(e.g. UEB3512822)</span>
+                        </label>
                         <input
                           type="text"
                           value={studentIndexNumber}
-                          onChange={e => setStudentIndexNumber(e.target.value)}
-                          placeholder="e.g. 10203040"
-                          className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
+                          onChange={e => {
+                            setStudentIndexNumber(e.target.value.toUpperCase())
+                            setStudentIdErr('')
+                          }}
+                          onBlur={() => setStudentIdErr(validateStudentId(studentIndexNumber))}
+                          placeholder="UEB3512822"
+                          maxLength={10}
+                          className={inputCls(!!studentIdErr)}
                         />
+                        <FieldError msg={studentIdErr} />
+                        {!studentIdErr && studentIndexNumber && STUDENT_ID_RE.test(studentIndexNumber) && (
+                          <p className="flex items-center gap-1.5 text-xs text-emerald-600 mt-1.5 font-medium">
+                            <i className="fa-solid fa-circle-check text-[10px]" /> Valid index number format
+                          </p>
+                        )}
                       </div>
+
+                      {/* Level & Program */}
                       <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-sm font-medium text-foreground mb-1.5">Level</label>
-                        <select
-                          value={studentLevel}
-                          onChange={e => setStudentLevel(e.target.value)}
-                          className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
-                        >
-                          {(availableLevels.length ? availableLevels : fallbackLevelOptions).map(option => (
-                            <option key={option} value={option}>{option}</option>
-                          ))}
-                        </select>
+                        <div>
+                          <label className="block text-sm font-medium text-foreground mb-1.5">Level</label>
+                          <select
+                            value={studentLevel}
+                            onChange={e => setStudentLevel(e.target.value)}
+                            className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
+                          >
+                            {(availableLevels.length ? availableLevels : fallbackLevelOptions).map(opt => (
+                              <option key={opt} value={opt}>{opt}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-foreground mb-1.5">Program</label>
+                          <select
+                            value={studentProgram}
+                            onChange={e => setStudentProgram(e.target.value)}
+                            className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
+                          >
+                            {programOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                          </select>
+                        </div>
                       </div>
-                      <div>
-                        <label className="block text-sm font-medium text-foreground mb-1.5">Program</label>
-                        <select
-                          value={studentProgram}
-                          onChange={e => setStudentProgram(e.target.value)}
-                          className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
-                        >
-                          {programOptions.map(option => <option key={option} value={option}>{option}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                  </>
-                ) : (
+                    </>
+                  ) : (
+                    /* Lecturer-only field */
                     <div>
                       <label className="block text-sm font-medium text-foreground mb-1.5">Department / Faculty</label>
                       <input
@@ -364,22 +481,30 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
                         value={department}
                         onChange={e => setDepartment(e.target.value)}
                         placeholder="e.g. Computer Science"
-                        className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
+                        className={inputCls(false)}
                       />
                     </div>
                   )}
+
                   <button
                     onClick={handleRegister}
                     disabled={isSubmitting}
                     className="w-full bg-accent hover:bg-amber-600 text-white font-semibold py-3.5 rounded-xl transition-colors disabled:opacity-60"
                   >
-                    {isSubmitting ? 'Working...' : role === 'lecturer' ? 'Submit for Approval' : 'Create Account'}
+                    {isSubmitting
+                      ? <><i className="fa-solid fa-spinner fa-spin mr-2" />Working...</>
+                      : role === 'lecturer' ? 'Submit for Approval' : 'Create Account'}
                   </button>
+
                   {statusMessage && (
-                    <p className={`text-sm text-center ${statusMessage.toLowerCase().includes('success') || statusMessage.toLowerCase().includes('created') ? 'text-emerald-600 font-medium' : 'text-primary'}`}>{statusMessage}</p>
+                    <p className={`text-sm text-center font-medium ${statusMessage.toLowerCase().includes('success') || statusMessage.toLowerCase().includes('created') ? 'text-emerald-600' : 'text-danger'}`}>
+                      {statusMessage}
+                    </p>
                   )}
+
                   {role === 'lecturer' && (
                     <p className="text-xs text-muted-foreground text-center leading-relaxed">
+                      <i className="fa-solid fa-circle-info mr-1 text-primary" />
                       Lecturer accounts require administrator approval before platform access is granted.
                     </p>
                   )}
@@ -388,9 +513,9 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
             )}
 
             <p className="text-xs text-muted-foreground text-center mt-6">
-              By continuing you agree to the TMAS{" "}
-              <a href="#" className="text-primary hover:underline">Terms of Service</a>{" "}
-              and{" "}
+              By continuing you agree to the TMAS{' '}
+              <a href="#" className="text-primary hover:underline">Terms of Service</a>{' '}
+              and{' '}
               <a href="#" className="text-primary hover:underline">Privacy Policy</a>.
             </p>
           </div>
@@ -407,7 +532,7 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
             <div>
               <h3 className="font-display text-2xl font-bold text-foreground">Registration Submitted!</h3>
               <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
-                Your lecturer application for <span className="font-semibold text-foreground">{firstName} {lastName}</span> has been dispatched to the Administrator for approval.
+                Your lecturer application has been dispatched to the Administrator for approval.
               </p>
             </div>
             <div className="bg-primary/5 border border-primary/20 rounded-2xl p-4 text-xs text-primary text-left space-y-1">
