@@ -27,6 +27,23 @@ function ProgressBar({ value }: { value: number }) {
   )
 }
 
+// `<input type="datetime-local">` always reads/writes the browser's LOCAL wall-clock time
+// (no timezone info). `Date.toISOString()` formats in UTC. Using toISOString() to seed a
+// datetime-local default silently shifts the displayed time by the lecturer's UTC offset —
+// and since publishing re-parses that string as local time again, the error doubles when
+// it's converted back to UTC for the backend. This formatter uses local getters so the
+// value shown in the picker, and the instant actually sent to the server, both match what
+// the lecturer intended (e.g. "10 minutes from now" really means their local now + 10m).
+function toLocalDatetimeInputValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const year = date.getFullYear()
+  const month = pad(date.getMonth() + 1)
+  const day = pad(date.getDate())
+  const hours = pad(date.getHours())
+  const minutes = pad(date.getMinutes())
+  return `${year}-${month}-${day}T${hours}:${minutes}`
+}
+
 function getInitials(name?: string) {
   if (!name) return 'LE'
   const parts = name.trim().split(/\s+/)
@@ -62,24 +79,24 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     Foundational: {
       questionCount: 10,
       timeLimit: 20,
-      openDate: new Date(Date.now() + 10 * 60 * 1000).toISOString().slice(0, 16),
-      closeDate: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString().slice(0, 16),
+      openDate: toLocalDatetimeInputValue(new Date(Date.now() + 10 * 60 * 1000)),
+      closeDate: toLocalDatetimeInputValue(new Date(Date.now() + 7 * 24 * 3600 * 1000)),
       passingScore: 60,
       attempts: 1,
     },
     Intermediate: {
       questionCount: 10,
       timeLimit: 30,
-      openDate: new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString().slice(0, 16),
-      closeDate: new Date(Date.now() + 10 * 24 * 3600 * 1000).toISOString().slice(0, 16),
+      openDate: toLocalDatetimeInputValue(new Date(Date.now() + 3 * 24 * 3600 * 1000)),
+      closeDate: toLocalDatetimeInputValue(new Date(Date.now() + 10 * 24 * 3600 * 1000)),
       passingScore: 60,
       attempts: 1,
     },
     Mastery: {
       questionCount: 10,
       timeLimit: 45,
-      openDate: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString().slice(0, 16),
-      closeDate: new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 16),
+      openDate: toLocalDatetimeInputValue(new Date(Date.now() + 7 * 24 * 3600 * 1000)),
+      closeDate: toLocalDatetimeInputValue(new Date(Date.now() + 14 * 24 * 3600 * 1000)),
       passingScore: 70,
       attempts: 1,
     },
