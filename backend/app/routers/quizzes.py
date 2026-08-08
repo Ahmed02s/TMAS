@@ -1165,10 +1165,39 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest) -> dict[str, Any]:
 
     rng.shuffle(questions)
     correct = 0
+
+    def _answers_match(expected: str, given: str, q_type: str) -> bool:
+        """Return True if the student's answer is correct.
+        - Always case-insensitive.
+        - For MCQ / True-False: exact match only.
+        - For Fill in the Blank / Short Answer: also accept partial / contained matches
+          so 'Halt' matches 'halt' and semantically similar phrases pass.
+        """
+        exp = expected.strip().lower()
+        ans = given.strip().lower()
+        if not ans:
+            return False
+        if exp == ans:
+            return True
+        # For text-entry types allow partial match
+        text_types = {'fill in the blank', 'fill-in-the-blank', 'short answer', 'short_answer', 'fitb'}
+        if str(q_type).strip().lower() in text_types:
+            # Pass if one is a substring of the other
+            if exp in ans or ans in exp:
+                return True
+            # Pass if student answer contains every word of the expected answer
+            exp_words = set(exp.split())
+            ans_words = set(ans.split())
+            if exp_words and exp_words.issubset(ans_words):
+                return True
+        return False
+
     for idx, question in enumerate(questions):
-        answer = payload.answers.get(str(idx), '').strip().lower()
-        if answer and question.get('correct', '').strip().lower() == answer:
+        answer = payload.answers.get(str(idx), '')
+        q_type = question.get('type', 'MCQ')
+        if _answers_match(question.get('correct', ''), answer, q_type):
             correct += 1
+
 
     total_questions = len(questions)
     score = round((correct / total_questions) * 100) if total_questions else 0

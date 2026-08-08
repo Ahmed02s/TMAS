@@ -673,11 +673,31 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   }
 
   if (quizSubmitted) {
-    const correct = Object.values(quizAnswers).filter((ans, i) => ans === activeQuizQuestions[i]?.correct).length
+    // Normalize answers for comparison: lowercase + trim, so 'Halt' matches 'halt'
+    const normalizeAns = (s: string) => (s || '').toLowerCase().trim()
+    const correct = Object.values(quizAnswers).filter((ans, i) => {
+      const expected = normalizeAns(activeQuizQuestions[i]?.correct)
+      const given = normalizeAns(ans)
+      if (!given) return false
+      // Exact normalized match
+      if (expected === given) return true
+      // Partial / contains match for fill-in-blank and short-answer
+      if (expected.includes(given) || given.includes(expected)) return true
+      return false
+    }).length
     const score = lastAttempt?.score ?? Math.round((correct / activeQuizQuestions.length) * 100)
     const outOf = lastAttempt?.outOf ?? activeQuizQuestions.length
-    const passed = lastAttempt?.passed ?? score >= 60
-    const missedQuestions = activeQuizQuestions.map((q, idx) => ({ ...q, studentAns: quizAnswers[idx], idx })).filter(q => q.studentAns !== q.correct)
+    const passed = lastAttempt?.passed ?? score >= (selectedQuiz?.passingScore ?? 60)
+    const missedQuestions = activeQuizQuestions
+      .map((q, idx) => ({ ...q, studentAns: quizAnswers[idx], idx }))
+      .filter(q => {
+        const expected = normalizeAns(q.correct)
+        const given = normalizeAns(q.studentAns)
+        if (!given) return true
+        if (expected === given) return false
+        if (expected.includes(given) || given.includes(expected)) return false
+        return true
+      })
 
     return (
       <div className="min-h-screen bg-background font-sans flex items-center justify-center p-4 sm:p-8">
@@ -1198,10 +1218,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                           <td className="px-5 py-3.5 text-foreground font-medium text-sm">{q.title}</td>
                           <td className="px-5 py-3.5"><span className="font-mono text-xs font-bold text-primary">{q.course}</span></td>
                           <td className="px-5 py-3.5">
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono font-bold text-foreground">{q.score}</span>
-                              <span className="text-muted-foreground text-xs">/ {q.outOf}</span>
-                            </div>
+                            <span className="font-mono font-bold text-foreground">{q.score}%</span>
                           </td>
                           <td className="px-5 py-3.5">
                             <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${q.grade.startsWith('A') ? 'bg-green-100 text-green-700' : q.grade.startsWith('B') ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
