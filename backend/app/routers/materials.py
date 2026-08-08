@@ -185,6 +185,11 @@ def download_material(material_id: int):
                 break
 
     if not resolved_path:
+        # Fallback: redirect to Supabase Storage public URL if available
+        file_url = material.get('file_url')
+        if file_url:
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url=file_url, status_code=302)
         raise HTTPException(status_code=404, detail='Material file not found on disk')
 
     return FileResponse(resolved_path, filename=material.get('name') or resolved_path.name)

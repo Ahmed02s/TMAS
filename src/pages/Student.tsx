@@ -1523,12 +1523,31 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                               const ext = (activeMaterial.name.split('.').pop() || '').toLowerCase()
                               const isPdf = ext === 'pdf'
                               const isSlides = ['ppt', 'pptx'].includes(ext)
-                              const viewerUrl = activeMaterial.file_url || downloadUrl
+                              const isDoc = ['doc', 'docx'].includes(ext)
 
-                              if (isPdf || isSlides) {
+                              // Use Supabase public URL directly — avoids the "not on disk" error
+                              const directUrl = activeMaterial.file_url || downloadUrl
+
+                              if (isPdf) {
                                 return (
                                   <iframe
-                                    src={viewerUrl}
+                                    key={activeMaterial.id}
+                                    src={directUrl}
+                                    title={activeMaterial.name}
+                                    className="w-full h-full border-0"
+                                    style={{ minHeight: '70vh' }}
+                                    allowFullScreen
+                                  />
+                                )
+                              }
+
+                              if (isSlides || isDoc) {
+                                // Google Docs Viewer renders Office files in any browser
+                                const googleViewerUrl = `https://docs.google.com/gview?url=${encodeURIComponent(directUrl)}&embedded=true`
+                                return (
+                                  <iframe
+                                    key={activeMaterial.id}
+                                    src={googleViewerUrl}
                                     title={activeMaterial.name}
                                     className="w-full h-full border-0"
                                     style={{ minHeight: '70vh' }}
