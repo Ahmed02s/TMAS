@@ -373,7 +373,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     try {
       const quizzesToPublish = (['Foundational', 'Intermediate', 'Mastery'] as const).map(tier => {
         const config = tierScheduleConfigs[tier]
-        const questions = (generatedQuestionsByTier[tier] || []).slice(0, config.questionCount)
+        const questions = generatedQuestionsByTier[tier] || []
 
         return {
           title: `AI Generated ${tier} Quiz for ${genCourse}`,
@@ -1285,24 +1285,6 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                             <span className="text-xs font-mono font-bold bg-muted px-2.5 py-1 rounded-lg">
                               {(generatedQuestionsByTier[tier] || []).length} Items Available
                             </span>
-                          </div>
-
-                          <div>
-                            <label className="block text-xs font-semibold text-muted-foreground uppercase mb-1">Questions to Include</label>
-                            <input
-                              type="number"
-                              value={cfg.questionCount}
-                              onChange={e => {
-                                const val = Number(e.target.value)
-                                setTierScheduleConfigs(prev => ({
-                                  ...prev,
-                                  [tier]: { ...prev[tier], questionCount: val },
-                                }))
-                              }}
-                              min={1}
-                              max={30}
-                              className="w-full px-3 py-2 bg-muted border border-border rounded-xl text-sm font-bold font-mono"
-                            />
                           </div>
 
                           <div>

@@ -384,14 +384,26 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
 
       try {
         const studentId = savedUser?.id || ''
+
+        // Step 1: Register the attempt start (records score=0 immediately)
+        // This ensures a 0 is stored even if the student closes without submitting.
+        const startRes = await fetch(`${API_BASE}/api/quizzes/${activeQuiz}/start`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ student_id: studentId }),
+        })
+        if (!startRes.ok) {
+          const startErr = await startRes.json().catch(() => ({ detail: startRes.statusText }))
+          throw new Error(startErr.detail || 'You have already used your attempt for this quiz.')
+        }
+
+        // Step 2: Load the quiz questions
         const quizRes = await fetch(`${API_BASE}/api/quizzes/${activeQuiz}?level=${encodeURIComponent(studentProfile.level)}&program=${encodeURIComponent(studentProfile.program)}&student_id=${encodeURIComponent(studentId)}`)
         if (!quizRes.ok) {
           throw new Error('Failed to load quiz details')
         }
 
         const quizData = await quizRes.json()
-        // Log the loaded quiz payload to help diagnose malformed responses
-        // and normalize questions to a safe shape to prevent React render errors.
         try {
           console.debug('Loaded quizData:', quizData)
         } catch {}
