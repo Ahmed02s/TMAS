@@ -48,6 +48,17 @@ def _parse_datetime(value: str | datetime | None) -> datetime | None:
     cleaned = value.strip()
     if cleaned.endswith('Z'):
         cleaned = cleaned[:-1] + '+00:00'
+
+    # datetime.fromisoformat() is strict about fractional-second precision on Python < 3.11
+    # (it rejects anything other than exactly 6 digits). JS's Date.toISOString() always emits
+    # exactly 3 digits (milliseconds), so normalize any fractional-seconds component to 6
+    # digits here — otherwise a perfectly valid timestamp silently fails to parse and open/close
+    # dates end up as None (quiz stuck "scheduled"/locked forever), independent of Python version.
+    frac_match = re.match(r'^(.*T\d{2}:\d{2}:\d{2})\.(\d+)([+-]\d{2}:\d{2}|)$', cleaned)
+    if frac_match:
+        frac = frac_match.group(2)[:6].ljust(6, '0')
+        cleaned = f"{frac_match.group(1)}.{frac}{frac_match.group(3)}"
+
     try:
         dt = datetime.fromisoformat(cleaned)
         # Always ensure UTC-aware so comparisons with datetime.now(UTC) are safe
@@ -62,6 +73,8 @@ def _parse_datetime(value: str | datetime | None) -> datetime | None:
             '%Y-%m-%dT%H:%M:%S',
             '%Y-%m-%d %H:%M:%S%z',
             '%Y-%m-%dT%H:%M:%S%z',
+            '%Y-%m-%dT%H:%M:%S.%f%z',
+            '%Y-%m-%dT%H:%M:%S.%f',
         ):
             try:
                 dt = datetime.strptime(cleaned, fmt)
@@ -1392,6 +1405,97 @@ def _quiz_is_locked(quiz: dict[str, Any], now: datetime) -> bool:
     if not open_dt and str(quiz.get('status') or '').lower() == 'scheduled':
         return True
     return False
+
+
+@router.get('')
+def list_all_quizzes(course: str | None = None) -> dict[str, Any]:
+    """Lecturer-facing management listing: every quiz for a course (or all courses),
+    with a live-computed status so a stale DB 'status' column never misleads a lecturer
+    trying to figure out why a quiz is still locked/closed."""
+    ensure_supabase_enabled()
+    query = supabase.table('quizzes').select('*')
+    if course:
+        query = query.eq('course', course)
+    response = query.execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase list quizzes failed'))
+
+    now = datetime.now(timezone.utc)
+    quizzes = []
+    for quiz in response.data or []:
+        q = dict(quiz)
+        locked = _quiz_is_locked(q, now)
+        expired = _quiz_is_expired(q, now)
+        q['is_locked'] = locked
+        q['is_closed'] = expired and not locked
+        q['live_status'] = 'scheduled' if locked else ('closed' if expired else 'available')
+        quizzes.append(q)
+    quizzes.sort(key=lambda q: (q.get('course') or '', q.get('tier') or '', q.get('id') or 0))
+    return {'quizzes': quizzes}
+
+
+class UpdateQuizScheduleRequest(BaseModel):
+    open_date: str | None = None
+    close_date: str | None = None
+    time_limit: int | None = Field(default=None, ge=5, le=180)
+    passing_score: int | None = Field(default=None, ge=0, le=100)
+    attempts: int | None = Field(default=None, ge=1)
+
+
+@router.patch('/{quiz_id}/schedule')
+def update_quiz_schedule(quiz_id: int, payload: UpdateQuizScheduleRequest) -> dict[str, Any]:
+    """Lets a lecturer fix a quiz's open/close window (or duration/pass score/attempts)
+    after it has already been published — e.g. to recover a quiz that got stuck 'scheduled'
+    because of a bad date, without having to delete and regenerate the whole question bank."""
+    ensure_supabase_enabled()
+    response = supabase.table('quizzes').select('*').eq('id', quiz_id).limit(1).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase get quiz failed'))
+    if not response.data:
+        raise HTTPException(status_code=404, detail='Quiz not found')
+    quiz = response.data[0]
+
+    open_dt = _parse_datetime(payload.open_date) if payload.open_date is not None else _parse_datetime(quiz.get('open_date'))
+    if payload.open_date is not None and open_dt is None:
+        raise HTTPException(status_code=400, detail='Invalid open date')
+
+    close_dt = _parse_datetime(payload.close_date) if payload.close_date is not None else _parse_datetime(quiz.get('close_date'))
+    if payload.close_date is not None and close_dt is None:
+        raise HTTPException(status_code=400, detail='Invalid close date')
+
+    if open_dt and close_dt and close_dt <= open_dt:
+        raise HTTPException(status_code=400, detail='Close date must be after open date')
+
+    now = datetime.now(timezone.utc)
+    if open_dt is None:
+        status = 'scheduled'
+    elif now < open_dt:
+        status = 'scheduled'
+    elif close_dt and now > close_dt:
+        status = 'closed'
+    else:
+        status = 'available'
+
+    update_payload: dict[str, Any] = {'status': status}
+    if payload.open_date is not None:
+        update_payload['open_date'] = _format_datetime(open_dt) if open_dt else None
+    if payload.close_date is not None:
+        update_payload['close_date'] = _format_datetime(close_dt) if close_dt else None
+        if close_dt:
+            update_payload['due_date'] = _format_datetime(close_dt)
+    if payload.time_limit is not None:
+        update_payload['time_limit'] = payload.time_limit
+    if payload.passing_score is not None:
+        update_payload['passing_score'] = payload.passing_score
+    if payload.attempts is not None:
+        update_payload['attempts'] = payload.attempts
+
+    update_resp = _safe_update('quizzes', update_payload, 'id', [quiz_id])
+    if supabase_failed(update_resp):
+        raise HTTPException(status_code=502, detail=supabase_error_message(update_resp, 'Supabase update quiz schedule failed'))
+
+    updated_quiz = (update_resp.data or [None])[0] or {**quiz, **update_payload}
+    return {'quiz': updated_quiz}
 
 
 @router.get('/available')

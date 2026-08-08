@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 import postgrest
@@ -32,12 +33,14 @@ def _sanitize_filename(filename: str) -> str:
     return re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
 
 
+def _clean_course_code(value: str) -> str:
+    return re.sub(r'[^a-zA-Z0-9]', '', value or '').lower()
+
+
 @router.get('')
 def list_materials(course: str | None = None, lecturer: str | None = None) -> dict[str, Any]:
     ensure_supabase_enabled()
     query = supabase.table('materials').select('*')
-    if course:
-        query = query.eq('course', course)
     if lecturer:
         lecturer = lecturer.strip()
         if lecturer:
@@ -46,7 +49,24 @@ def list_materials(course: str | None = None, lecturer: str | None = None) -> di
     response = query.execute()
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase list materials failed'))
-    return {'materials': response.data or []}
+
+    materials = response.data or []
+    if course:
+        # Match tolerantly (case/format-insensitive) instead of an exact DB equality check —
+        # lecturers and the courses they upload against are often typed with slightly
+        # different casing/spacing (e.g. "COMP 401" vs "comp401"), which silently hid
+        # materials from students when matched with a strict equality filter.
+        target = _clean_course_code(course)
+        materials = [
+            m for m in materials
+            if target and (
+                _clean_course_code(str(m.get('course') or '')) == target
+                or target in _clean_course_code(str(m.get('course') or ''))
+                or _clean_course_code(str(m.get('course') or '')) in target
+            )
+        ]
+
+    return {'materials': materials}
 
 
 # ─────────────────────────────────────────────
@@ -81,6 +101,43 @@ def get_reading_progress(student_id: str | None = None, course: str | None = Non
         return {'read_ids': read_ids, 'course_progress': course_read}
     except Exception:
         return {'read_ids': [], 'course_progress': {}}
+
+
+class MarkReadRequest(BaseModel):
+    student_id: str
+
+
+@router.post('/{material_id}/mark-read')
+def mark_material_read(material_id: int, payload: MarkReadRequest) -> dict[str, Any]:
+    """Records that a student has opened/read a material, so reading-progress endpoints
+    (student-facing and the lecturer's per-student course monitor) have real data to show.
+    Idempotent: re-reading the same material doesn't create duplicate rows."""
+    ensure_supabase_enabled()
+    if not payload.student_id:
+        raise HTTPException(status_code=400, detail='student_id is required')
+
+    response = supabase.table('materials').select('id,course').eq('id', material_id).limit(1).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase get material failed'))
+    if not response.data:
+        raise HTTPException(status_code=404, detail='Material not found')
+    material = response.data[0]
+
+    record = {
+        'student_id': payload.student_id,
+        'material_id': material_id,
+        'course': material.get('course') or '',
+        'read_at': datetime.utcnow().isoformat(),
+    }
+
+    try:
+        upsert_resp = supabase.table('material_reads').upsert(record, on_conflict='student_id,material_id').execute()
+        if supabase_failed(upsert_resp):
+            raise HTTPException(status_code=502, detail=supabase_error_message(upsert_resp, 'Supabase record material read failed'))
+    except postgrest.exceptions.APIError as e:
+        raise HTTPException(status_code=502, detail=f'Could not record read status: {e}')
+
+    return {'status': 'recorded', 'material_id': material_id, 'student_id': payload.student_id}
 
 
 @router.post('', status_code=201)

@@ -91,9 +91,20 @@ CREATE TABLE IF NOT EXISTS quiz_attempts (
   attempted_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS material_reads (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  student_id TEXT NOT NULL,
+  material_id BIGINT NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+  course TEXT,
+  read_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (student_id, material_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_levels_order ON levels("order");
 CREATE INDEX IF NOT EXISTS idx_courses_level_program ON courses(level, program);
 CREATE INDEX IF NOT EXISTS idx_materials_course ON materials(course);
 CREATE INDEX IF NOT EXISTS idx_quizzes_status ON quizzes(status);
 CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz_id ON quiz_questions(quiz_id);
+CREATE INDEX IF NOT EXISTS idx_material_reads_student ON material_reads(student_id);
+CREATE INDEX IF NOT EXISTS idx_material_reads_material ON material_reads(material_id);

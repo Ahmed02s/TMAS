@@ -286,19 +286,41 @@ def get_course_student_progress(
         except Exception:
             pass
 
-    # 5. Fetch materials count for this course
-    total_materials = 0
+    # 5. Fetch materials for this course
+    material_ids: list[Any] = []
     for m_selector in [
         lambda: supabase.table('materials').select('id').eq('course', course_code).execute(),
         lambda: supabase.table('materials').select('id').ilike('course', course_code).execute(),
     ]:
         try:
             r = m_selector()
-            if not supabase_failed(r):
-                total_materials = len(r.data or [])
+            if not supabase_failed(r) and r.data:
+                material_ids = [m['id'] for m in r.data]
                 break
         except Exception:
             continue
+    total_materials = len(material_ids)
+
+    # 5b. Fetch per-student reading counts for this course's materials
+    reads_by_student: dict[str, int] = {str(sid): 0 for sid in student_ids}
+    if material_ids:
+        try:
+            reads_resp = supabase.table('material_reads') \
+                .select('student_id,material_id') \
+                .in_('student_id', student_ids) \
+                .in_('material_id', material_ids) \
+                .execute()
+            if not supabase_failed(reads_resp):
+                seen: set[tuple[str, Any]] = set()
+                for row in (reads_resp.data or []):
+                    sid = str(row.get('student_id', ''))
+                    mid = row.get('material_id')
+                    key = (sid, mid)
+                    if sid in reads_by_student and key not in seen:
+                        seen.add(key)
+                        reads_by_student[sid] += 1
+        except Exception:
+            pass
 
     # 6. Build per-student summary
     result = []
@@ -313,21 +335,25 @@ def get_course_student_progress(
         quizzes_done  = len(set(a.get('quiz_id') for a in completed))
         passed_count  = sum(1 for a in completed if a.get('passed'))
         quiz_progress = round((quizzes_done / len(quizzes)) * 100) if quizzes else 0
+        materials_read = min(reads_by_student.get(sid, 0), total_materials) if total_materials else reads_by_student.get(sid, 0)
+        reading_progress = round((materials_read / total_materials) * 100) if total_materials else 0
 
         result.append({
-            'id':             sid,
-            'name':           s.get('name', '—'),
-            'email':          s.get('email', '—'),
-            'level':          s.get('level', '—'),
-            'program':        s.get('program', '—'),
-            'status':         s.get('status', 'active'),
-            'quiz_progress':  quiz_progress,
-            'quizzes_done':   quizzes_done,
-            'quizzes_total':  len(quizzes),
-            'quizzes_passed': passed_count,
-            'avg_score':      avg_score,
-            'total_materials':total_materials,
-            'attempts':       all_attempts,
+            'id':               sid,
+            'name':             s.get('name', '—'),
+            'email':            s.get('email', '—'),
+            'level':            s.get('level', '—'),
+            'program':          s.get('program', '—'),
+            'status':           s.get('status', 'active'),
+            'quiz_progress':    quiz_progress,
+            'quizzes_done':     quizzes_done,
+            'quizzes_total':    len(quizzes),
+            'quizzes_passed':   passed_count,
+            'avg_score':        avg_score,
+            'total_materials':  total_materials,
+            'materials_read':   materials_read,
+            'reading_progress': reading_progress,
+            'attempts':         all_attempts,
         })
 
     return {'students': result, 'course': course_code, 'total_materials': total_materials}

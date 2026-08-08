@@ -205,6 +205,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   const [materialsReaderCourse, setMaterialsReaderCourse] = useState<Course | null>(null)
   const [materialsReaderOpen, setMaterialsReaderOpen] = useState(false)
   const [materials, setMaterials] = useState<MaterialItem[]>([])
+  const [materialsListLoading, setMaterialsListLoading] = useState(false)
   const [activeMaterialId, setActiveMaterialId] = useState<number | null>(null)
   const [materialPreviewText, setMaterialPreviewText] = useState('')
   const [materialPreviewLoading, setMaterialPreviewLoading] = useState(false)
@@ -442,49 +443,40 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     }
   }, [studentProfile.level, studentProfile.program, savedUser])
 
+  // Single source of truth for the reader's preview pane. Every material type (pdf,
+  // ppt/pptx, doc/docx, txt/md) is served through the same server-side text-extraction
+  // endpoint, so the preview works reliably for all of them without depending on an
+  // external viewer service.
   useEffect(() => {
-    if (!materialsReaderOpen || !activeMaterialId) {
+    if (!materialsReaderOpen || activeMaterialId === null) {
       setMaterialPreviewText('')
       return
     }
 
-    const activeMaterial = materials.find(item => item.id === activeMaterialId)
-    if (!activeMaterial) return
-
-    if (activeMaterial) {
-      const activeMaterialIdLocal = activeMaterial.id
-      const activeMaterialName = activeMaterial.name
-      const extension = (activeMaterialName.split('.').pop() || '').toLowerCase()
-      if (!['txt', 'md'].includes(extension)) {
-        setMaterialPreviewText('')
-        return
-      }
-
-      let cancelled = false
-      async function loadTextPreview() {
-        setMaterialPreviewLoading(true)
-        setMaterialsError('')
-        try {
-          const res = await fetch(`${API_BASE}/api/materials/${activeMaterialIdLocal}/download`)
-          if (!res.ok) throw new Error('Unable to preview this file')
-          const text = await res.text()
-          if (!cancelled) setMaterialPreviewText(text)
-        } catch (error) {
-          if (!cancelled) {
-            setMaterialPreviewText('')
-            setMaterialsError(error instanceof Error ? error.message : 'Unable to load preview')
-          }
-        } finally {
-          if (!cancelled) setMaterialPreviewLoading(false)
+    let cancelled = false
+    async function loadPreview() {
+      setMaterialPreviewLoading(true)
+      setMaterialsError('')
+      try {
+        const res = await fetch(`${API_BASE}/api/materials/${activeMaterialId}/content`)
+        if (!res.ok) throw new Error('Unable to load this material\'s content')
+        const data = await res.json()
+        if (!cancelled) setMaterialPreviewText(data.content || data.text || '')
+      } catch (error) {
+        if (!cancelled) {
+          setMaterialPreviewText('')
+          setMaterialsError(error instanceof Error ? error.message : 'Unable to load preview')
         }
-      }
-
-      loadTextPreview()
-      return () => {
-        cancelled = true
+      } finally {
+        if (!cancelled) setMaterialPreviewLoading(false)
       }
     }
-  }, [activeMaterialId, materials, materialsReaderOpen])
+
+    loadPreview()
+    return () => {
+      cancelled = true
+    }
+  }, [activeMaterialId, materialsReaderOpen])
 
   useEffect(() => {
     async function loadQuizQuestions() {
@@ -1301,6 +1293,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                         setActiveMaterialId(null)
                         setMaterialPreviewText('')
                         setMaterialsError('')
+                        setMaterialsListLoading(true)
 
                         try {
                           const res = await fetch(`${API_BASE}/api/materials?course=${encodeURIComponent(c.code)}`)
@@ -1320,6 +1313,8 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                           }))
                         } catch (err) {
                           setMaterialsError(err instanceof Error ? err.message : 'Unable to load course materials')
+                        } finally {
+                          setMaterialsListLoading(false)
                         }
                       }}
                       className="mt-4 w-full bg-muted hover:bg-secondary text-foreground hover:text-primary font-medium py-2.5 rounded-xl text-sm transition-colors"
@@ -1736,9 +1731,15 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                 </div>
 
                 <div className="space-y-2">
-                  {materials.length === 0 && !materialsError && (
+                  {materials.length === 0 && !materialsError && materialsListLoading && (
                     <div className="rounded-2xl border border-dashed border-border bg-background/70 p-4 text-sm text-muted-foreground">
                       Loading materials...
+                    </div>
+                  )}
+
+                  {materials.length === 0 && !materialsError && !materialsListLoading && (
+                    <div className="rounded-2xl border border-dashed border-border bg-background/70 p-4 text-sm text-muted-foreground">
+                      No materials have been uploaded for this course yet.
                     </div>
                   )}
 
@@ -1760,14 +1761,6 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                           setActiveMaterialId(material.id)
                           setMaterialsError('')
                           markMaterialRead(material.id, savedUser?.id)
-                          setMaterialPreviewLoading(true)
-                          fetch(`${API_BASE}/api/materials/${material.id}/content`)
-                            .then(r => r.json())
-                            .then(d => {
-                              setMaterialPreviewText(d.content || d.text || '')
-                            })
-                            .catch(() => setMaterialPreviewText('Unable to extract preview text.'))
-                            .finally(() => setMaterialPreviewLoading(false))
                         }}
                         className={`w-full rounded-2xl border p-3 text-left transition-all ${isActive ? 'border-primary bg-primary/10 shadow-sm' : 'border-border bg-background hover:border-primary/40 hover:bg-muted/50'}`}
                       >
@@ -1859,24 +1852,19 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                                 )
                               }
 
-                              if (isSlides || isDoc) {
-                                // Google Docs Viewer renders Office files in any browser
-                                const googleViewerUrl = `https://docs.google.com/gview?url=${encodeURIComponent(directUrl)}&embedded=true`
-                                return (
-                                  <iframe
-                                    key={activeMaterial.id}
-                                    src={googleViewerUrl}
-                                    title={activeMaterial.name}
-                                    className="w-full h-full border-0"
-                                    style={{ minHeight: '70vh' }}
-                                    allowFullScreen
-                                  />
-                                )
-                              }
-
-                              // Text / fallback content viewer
+                              // PPT/PPTX/DOC/DOCX/TXT/MD (and anything else): render the
+                              // server-extracted text rather than embedding a third-party
+                              // viewer (e.g. Google Docs Viewer), which frequently fails to
+                              // render self-hosted files and left these materials effectively
+                              // unreadable in the app.
                               return (
                                 <div className="h-full flex flex-col">
+                                  {(isSlides || isDoc) && (
+                                    <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-primary/5 text-xs text-muted-foreground shrink-0">
+                                      <i className="fa-solid fa-circle-info text-primary/70" />
+                                      Showing extracted text from this {isSlides ? 'slide deck' : 'document'}. Formatting, images, and layout aren't preserved — use Download Original for the full file.
+                                    </div>
+                                  )}
                                   {/* Font size toolbar */}
                                   <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-muted/30 shrink-0">
                                     <span className="text-xs text-muted-foreground font-medium">Font size:</span>

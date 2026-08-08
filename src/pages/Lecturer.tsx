@@ -125,6 +125,14 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('tmas-user') || 'null') : null,
   )
 
+  // Management view for already-published quizzes, so a lecturer can see (and fix) a
+  // quiz that got stuck locked/scheduled instead of having to delete and regenerate it.
+  const [publishedQuizzes, setPublishedQuizzes] = useState<any[]>([])
+  const [loadingPublishedQuizzes, setLoadingPublishedQuizzes] = useState(false)
+  const [scheduleDrafts, setScheduleDrafts] = useState<Record<number, { openDate: string; closeDate: string }>>({})
+  const [savingScheduleId, setSavingScheduleId] = useState<number | null>(null)
+  const [scheduleSaveError, setScheduleSaveError] = useState<Record<number, string>>({})
+
   const getActiveTier = () => activeReviewTier
 
   const [myCoursesState, setMyCoursesState] = useState<any[]>([])
@@ -269,6 +277,90 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       setLoadingProgress(p => ({ ...p, [courseCode]: false }))
     }
   }, [])
+
+  const loadPublishedQuizzes = useCallback(async (course: string) => {
+    if (!course) {
+      setPublishedQuizzes([])
+      return
+    }
+    setLoadingPublishedQuizzes(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/quizzes?course=${encodeURIComponent(course)}`)
+      if (!res.ok) throw new Error('Failed to load published quizzes')
+      const data = await res.json()
+      const list = data.quizzes || []
+      setPublishedQuizzes(list)
+      setScheduleDrafts(prev => {
+        const next = { ...prev }
+        for (const q of list) {
+          next[q.id] = {
+            openDate: q.open_date ? toLocalDatetimeInputValue(new Date(q.open_date)) : '',
+            closeDate: q.close_date ? toLocalDatetimeInputValue(new Date(q.close_date)) : '',
+          }
+        }
+        return next
+      })
+    } catch {
+      setPublishedQuizzes([])
+    } finally {
+      setLoadingPublishedQuizzes(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if ((tab === 'quizgen' || tab === 'quizreview') && genCourse) {
+      loadPublishedQuizzes(genCourse)
+    }
+  }, [tab, genCourse, loadPublishedQuizzes])
+
+  const handleSaveQuizSchedule = async (quizId: number) => {
+    const draft = scheduleDrafts[quizId]
+    if (!draft) return
+    setSavingScheduleId(quizId)
+    setScheduleSaveError(prev => ({ ...prev, [quizId]: '' }))
+    try {
+      const body: Record<string, string> = {}
+      if (draft.openDate) body.open_date = new Date(draft.openDate).toISOString()
+      if (draft.closeDate) body.close_date = new Date(draft.closeDate).toISOString()
+      const res = await fetch(`${API_BASE}/api/quizzes/${quizId}/schedule`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || 'Failed to update schedule')
+      }
+      await loadPublishedQuizzes(genCourse)
+    } catch (err: any) {
+      setScheduleSaveError(prev => ({ ...prev, [quizId]: err.message || 'Failed to update schedule' }))
+    } finally {
+      setSavingScheduleId(null)
+    }
+  }
+
+  const handleOpenQuizNow = async (quizId: number) => {
+    const nowStr = toLocalDatetimeInputValue(new Date())
+    setScheduleDrafts(prev => ({ ...prev, [quizId]: { ...(prev[quizId] || { closeDate: '' }), openDate: nowStr } }))
+    setSavingScheduleId(quizId)
+    setScheduleSaveError(prev => ({ ...prev, [quizId]: '' }))
+    try {
+      const res = await fetch(`${API_BASE}/api/quizzes/${quizId}/schedule`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ open_date: new Date(nowStr).toISOString() }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || 'Failed to open quiz now')
+      }
+      await loadPublishedQuizzes(genCourse)
+    } catch (err: any) {
+      setScheduleSaveError(prev => ({ ...prev, [quizId]: err.message || 'Failed to open quiz now' }))
+    } finally {
+      setSavingScheduleId(null)
+    }
+  }
 
   const handleSelectedFiles = (event: ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files ? Array.from(event.target.files) : []
@@ -504,6 +596,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       setPublishError('')
       setWizardStep(1)
       setGenerated(false)
+      await loadPublishedQuizzes(genCourse)
     } catch (err: any) {
       setPublishError(`Publishing failed: ${err.message}`)
     } finally {
@@ -529,6 +622,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       setWizardStep(1)
       setGeneratedQuestionsByTier({ Foundational: [], Intermediate: [], Mastery: [] })
       setApprovedByTier({ Foundational: [], Intermediate: [], Mastery: [] })
+      setPublishedQuizzes([])
       await loadLecturerData()
     } catch (err: any) {
       alert(`Error clearing quizzes: ${err.message}`)
@@ -955,9 +1049,10 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                 <div className="hidden sm:grid grid-cols-12 gap-2 px-5 py-3 bg-muted/40">
                                   <span className="col-span-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Student</span>
                                   <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Quiz Progress</span>
+                                  <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Reading Progress</span>
                                   <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Avg Score</span>
-                                  <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Passed</span>
-                                  <span className="col-span-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Status</span>
+                                  <span className="col-span-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Passed</span>
+                                  <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Status</span>
                                 </div>
 
                                 {progressStudents.map(stu => {
@@ -965,6 +1060,8 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                   const qTotal = stu.quizzes_total ?? 0
                                   const qPct   = qTotal > 0 ? Math.round((qDone / qTotal) * 100) : 0
                                   const matTotal = stu.total_materials ?? 0
+                                  const matRead  = stu.materials_read ?? 0
+                                  const rPct     = stu.reading_progress ?? (matTotal > 0 ? Math.round((matRead / matTotal) * 100) : 0)
                                   const scoreColor = (stu.avg_score ?? 0) >= 70 ? 'text-success' : (stu.avg_score ?? 0) >= 50 ? 'text-warning' : 'text-danger'
 
                                   return (
@@ -980,7 +1077,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                             stu.status === 'active' ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'
                                           }`}>{stu.status || 'active'}</span>
                                         </div>
-                                        <div className="grid grid-cols-2 gap-3 text-xs">
+                                        <div className="grid grid-cols-3 gap-3 text-xs">
                                           <div className="bg-card rounded-lg p-2.5 border border-border">
                                             <p className="text-muted-foreground mb-1">Quiz Progress</p>
                                             <div className="flex items-center gap-2">
@@ -988,6 +1085,15 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                                 <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${qPct}%` }} />
                                               </div>
                                               <span className="font-mono font-bold text-foreground">{qDone}/{qTotal}</span>
+                                            </div>
+                                          </div>
+                                          <div className="bg-card rounded-lg p-2.5 border border-border">
+                                            <p className="text-muted-foreground mb-1">Reading</p>
+                                            <div className="flex items-center gap-2">
+                                              <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                                                <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${rPct}%` }} />
+                                              </div>
+                                              <span className="font-mono font-bold text-foreground">{matRead}/{matTotal}</span>
                                             </div>
                                           </div>
                                           <div className="bg-card rounded-lg p-2.5 border border-border">
@@ -1055,13 +1161,23 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                           )}
                                         </div>
                                         <div className="col-span-2">
-                                          <p className={`text-base font-mono font-bold ${scoreColor}`}>{stu.avg_score > 0 ? `${stu.avg_score}%` : '—'}</p>
+                                          <div className="flex items-center gap-2">
+                                            <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                                              <div className={`h-full rounded-full transition-all ${
+                                                rPct >= 80 ? 'bg-success' : rPct >= 50 ? 'bg-warning' : 'bg-emerald-500'
+                                              }`} style={{ width: `${rPct}%` }} />
+                                            </div>
+                                            <span className="text-xs font-mono font-bold text-foreground shrink-0">{matRead}/{matTotal}</span>
+                                          </div>
                                         </div>
                                         <div className="col-span-2">
-                                          <span className="text-sm font-semibold text-foreground">{stu.quizzes_passed ?? 0}</span>
-                                          <span className="text-xs text-muted-foreground"> / {qTotal} passed</span>
+                                          <p className={`text-base font-mono font-bold ${scoreColor}`}>{stu.avg_score > 0 ? `${stu.avg_score}%` : '—'}</p>
                                         </div>
-                                        <div className="col-span-3">
+                                        <div className="col-span-1">
+                                          <span className="text-sm font-semibold text-foreground">{stu.quizzes_passed ?? 0}</span>
+                                          <span className="text-xs text-muted-foreground"> /{qTotal}</span>
+                                        </div>
+                                        <div className="col-span-2">
                                           <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
                                             stu.status === 'active' ? 'bg-success/10 text-success' :
                                             stu.status === 'suspended' ? 'bg-warning/10 text-warning' :
@@ -1500,6 +1616,106 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                       </>
                     )}
                   </button>
+                </div>
+              )}
+
+              {/* ── PUBLISHED QUIZZES MANAGEMENT — fix a stuck/locked schedule without regenerating ── */}
+              {genCourse && (
+                <div className="bg-card border border-border rounded-2xl p-5 sm:p-6 max-w-3xl mx-auto space-y-4 shadow-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="font-display text-base font-bold text-foreground">Published Quizzes — {genCourse}</h3>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Still locked past its opening time? Fix the open/close date here — no need to regenerate.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => loadPublishedQuizzes(genCourse)}
+                      disabled={loadingPublishedQuizzes}
+                      className="text-xs text-primary font-medium hover:underline flex items-center gap-1 disabled:opacity-50 shrink-0"
+                    >
+                      <i className={`fa-solid fa-rotate-right text-[10px] ${loadingPublishedQuizzes ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </button>
+                  </div>
+
+                  {loadingPublishedQuizzes ? (
+                    <div className="flex items-center justify-center gap-3 py-8 text-muted-foreground text-sm">
+                      <span className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                      Loading published quizzes...
+                    </div>
+                  ) : publishedQuizzes.length === 0 ? (
+                    <div className="text-xs text-muted-foreground italic px-4 py-3 bg-muted/20 rounded-xl border border-dashed border-border">
+                      No quizzes published yet for {genCourse}.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {publishedQuizzes.map(q => {
+                        const draft = scheduleDrafts[q.id] || { openDate: '', closeDate: '' }
+                        const liveStatus = q.live_status || (q.is_locked ? 'scheduled' : q.is_closed ? 'closed' : 'available')
+                        const badgeClass =
+                          liveStatus === 'available' ? 'bg-success/10 text-success' :
+                          liveStatus === 'closed'    ? 'bg-danger/10 text-danger' :
+                          'bg-amber-500/10 text-amber-700'
+                        return (
+                          <div key={q.id} className="border border-border rounded-xl p-4 space-y-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-muted text-foreground">{q.tier || 'Foundational'}</span>
+                                <span className="text-sm font-semibold text-foreground">{q.title}</span>
+                              </div>
+                              <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full capitalize ${badgeClass}`}>{liveStatus}</span>
+                            </div>
+
+                            <div className="grid sm:grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-[10px] font-semibold text-muted-foreground uppercase mb-1">Open Date</label>
+                                <input
+                                  type="datetime-local"
+                                  value={draft.openDate}
+                                  onChange={e => setScheduleDrafts(prev => ({ ...prev, [q.id]: { ...draft, openDate: e.target.value } }))}
+                                  className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-xs font-medium"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[10px] font-semibold text-muted-foreground uppercase mb-1">Close Date</label>
+                                <input
+                                  type="datetime-local"
+                                  value={draft.closeDate}
+                                  onChange={e => setScheduleDrafts(prev => ({ ...prev, [q.id]: { ...draft, closeDate: e.target.value } }))}
+                                  className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-xs font-medium"
+                                />
+                              </div>
+                            </div>
+
+                            {scheduleSaveError[q.id] && (
+                              <p className="text-xs text-danger flex items-center gap-1"><i className="fa-solid fa-triangle-exclamation text-[10px]" />{scheduleSaveError[q.id]}</p>
+                            )}
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                onClick={() => handleSaveQuizSchedule(q.id)}
+                                disabled={savingScheduleId === q.id}
+                                className="bg-primary text-white text-xs font-semibold px-4 py-2 rounded-lg hover:bg-blue-950 transition-colors disabled:opacity-60"
+                              >
+                                {savingScheduleId === q.id ? 'Saving...' : 'Save Schedule'}
+                              </button>
+                              {liveStatus === 'scheduled' && (
+                                <button
+                                  onClick={() => handleOpenQuizNow(q.id)}
+                                  disabled={savingScheduleId === q.id}
+                                  className="bg-emerald-600/10 hover:bg-emerald-600/20 border border-emerald-500/30 text-emerald-700 text-xs font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-60"
+                                >
+                                  <i className="fa-solid fa-lock-open mr-1.5" />
+                                  Open Now
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
