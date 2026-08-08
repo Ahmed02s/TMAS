@@ -35,6 +35,7 @@ type Quiz = {
   difficulty: string
   tier?: string
   isLocked?: boolean
+  isClosed?: boolean
 }
 
 type CompletedQuiz = {
@@ -92,9 +93,20 @@ function inferTier(quiz: Record<string, any>): string {
 }
 
 function mapQuiz(quiz: Record<string, any>): Quiz {
-  const openDt = quiz.open_date ? new Date(quiz.open_date) : null
   const now = new Date()
-  const isLocked = quiz.is_locked || quiz.status === 'scheduled' || (openDt ? openDt > now : false)
+  const openDt  = quiz.open_date  ? new Date(quiz.open_date)  : null
+  const closeDt = quiz.close_date ? new Date(quiz.close_date) : null
+
+  // Locked: opening time hasn't arrived yet
+  const isLocked = !!(quiz.is_locked || quiz.status === 'scheduled' || (openDt && openDt > now))
+  // Closed: availability window has ended (close_date in the past)
+  const isClosed = !!(closeDt && closeDt < now)
+
+  let status: string
+  if (isLocked)        status = 'locked'
+  else if (isClosed)   status = 'closed'
+  else                 status = quiz.status || 'available'
+
   const tier = inferTier(quiz)
   return {
     id: quiz.id,
@@ -107,10 +119,11 @@ function mapQuiz(quiz: Record<string, any>): Quiz {
     dueDate: quiz.due_date,
     openDate: quiz.open_date,
     closeDate: quiz.close_date,
-    status: isLocked ? 'locked' : (quiz.status || 'available'),
+    status,
     difficulty: quiz.difficulty,
-    tier: tier,
-    isLocked: !!isLocked,
+    tier,
+    isLocked,
+    isClosed,
   }
 }
 
@@ -1159,7 +1172,11 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                               </div>
                             ) : (
                               tierQuizzes.map(q => (
-                                <div key={q.id} className={`bg-card border rounded-2xl p-6 transition-all shadow-xs ${q.isLocked ? 'border-amber-500/30 bg-amber-500/5' : 'border-border hover:border-primary/30'}`}>
+                                <div key={q.id} className={`bg-card border rounded-2xl p-6 transition-all shadow-xs ${
+                                  q.isLocked ? 'border-amber-500/30 bg-amber-500/5' :
+                                  q.isClosed ? 'border-danger/30 bg-danger/5' :
+                                  'border-border hover:border-primary/30'
+                                }`}>
                                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                                     <div className="flex-1 space-y-2">
                                       <div className="flex flex-wrap items-center gap-2">
@@ -1181,10 +1198,15 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                                             <i className="fa-solid fa-lock" />
                                             <span>Opens {q.openDate ? new Date(q.openDate).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'at scheduled time'}</span>
                                           </span>
+                                        ) : q.isClosed ? (
+                                          <span className="text-xs font-bold text-danger bg-danger/10 border border-danger/20 px-3 py-1 rounded-full inline-flex items-center gap-1.5">
+                                            <i className="fa-solid fa-circle-xmark" />
+                                            <span>Closed {q.closeDate ? new Date(q.closeDate).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                                          </span>
                                         ) : (
                                           <span className="text-xs font-bold text-emerald-600 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-full inline-flex items-center gap-1.5">
-                                            <i className="fa-solid fa-circle-check text-emerald-500" />
-                                            <span>Open & Ready</span>
+                                            <i className="fa-solid fa-lock-open" />
+                                            <span>Open &amp; Ready</span>
                                           </span>
                                         )}
                                       </div>
@@ -1207,13 +1229,20 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
 
                                     <div className="shrink-0">
                                       {q.isLocked ? (
-                                        <button
-                                          disabled
-                                          className="w-full sm:w-auto font-bold px-6 py-3.5 rounded-xl text-xs bg-amber-500/10 text-amber-700 border-2 border-amber-500/30 cursor-not-allowed flex items-center justify-center gap-2 shadow-xs opacity-90"
-                                          title={`This quiz is locked until ${q.openDate ? new Date(q.openDate).toLocaleString() : 'its scheduled opening time'}`}
+                                        <button disabled
+                                          className="w-full sm:w-auto font-bold px-6 py-3.5 rounded-xl text-xs bg-amber-500/10 text-amber-700 border-2 border-amber-500/30 cursor-not-allowed flex items-center justify-center gap-2 opacity-90"
+                                          title={`Locked until ${q.openDate ? new Date(q.openDate).toLocaleString() : 'scheduled opening time'}`}
                                         >
                                           <i className="fa-solid fa-lock text-amber-600 text-sm" />
                                           <span>Quiz Locked</span>
+                                        </button>
+                                      ) : q.isClosed ? (
+                                        <button disabled
+                                          className="w-full sm:w-auto font-bold px-6 py-3.5 rounded-xl text-xs bg-danger/10 text-danger border-2 border-danger/30 cursor-not-allowed flex items-center justify-center gap-2 opacity-90"
+                                          title={`Closed since ${q.closeDate ? new Date(q.closeDate).toLocaleString() : 'the availability window'}`}
+                                        >
+                                          <i className="fa-solid fa-ban text-danger text-sm" />
+                                          <span>Quiz Closed</span>
                                         </button>
                                       ) : (
                                         <button
@@ -1224,6 +1253,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                                           <i className="fa-solid fa-arrow-right" />
                                         </button>
                                       )}
+                                    </div>
                                     </div>
                                   </div>
                                 </div>
