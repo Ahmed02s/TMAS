@@ -1022,8 +1022,24 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest) -> dict[str, Any]:
     questions_response = supabase.table('quiz_questions').select('*').eq('quiz_id', quiz_id).execute()
     if supabase_failed(questions_response):
         raise HTTPException(status_code=502, detail=supabase_error_message(questions_response, 'Supabase get quiz questions failed'))
-    questions = questions_response.data or []
+    raw_questions = questions_response.data or []
 
+    import hashlib
+    seed_key = f"{quiz_id}_{payload.student_id or 'random'}"
+    stable_seed = int(hashlib.md5(seed_key.encode()).hexdigest(), 16)
+    rng = random.Random(stable_seed)
+
+    questions = []
+    for q in raw_questions:
+        q_copy = dict(q)
+        opts = q_copy.get('options')
+        if isinstance(opts, list) and len(opts) > 1:
+            opts_copy = list(opts)
+            rng.shuffle(opts_copy)
+            q_copy['options'] = opts_copy
+        questions.append(q_copy)
+
+    rng.shuffle(questions)
     correct = 0
     for idx, question in enumerate(questions):
         answer = payload.answers.get(str(idx), '').strip().lower()
@@ -1213,8 +1229,10 @@ def get_quiz_details(quiz_id: int, level: str | None = None, program: str | None
         raise HTTPException(status_code=502, detail=supabase_error_message(questions_response, 'Supabase get quiz questions failed'))
 
     raw_questions = questions_response.data or []
+    import hashlib
     seed_key = f"{quiz_id}_{student_id or 'random'}"
-    rng = random.Random(abs(hash(seed_key)))
+    stable_seed = int(hashlib.md5(seed_key.encode()).hexdigest(), 16)
+    rng = random.Random(stable_seed)
 
     questions = []
     for q in raw_questions:
