@@ -1030,12 +1030,6 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                 <p className="text-primary-foreground/70 text-sm">
                   You have <span className="text-accent font-semibold">{publishedQuizzesCount} quizzes</span> published and your overall progress is <span className="text-white font-semibold">{overallProgress}%</span>.
                 </p>
-                <p className="text-primary-foreground/75 text-xs mt-3">
-                  <span className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-2 text-sm font-semibold text-white/90">
-                    <i className="fa-solid fa-clipboard-question text-accent text-[10px]" />
-                    {availableQuizzesCount} quiz{availableQuizzesCount === 1 ? '' : 'zes'} ready to attempt
-                  </span>
-                </p>
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
