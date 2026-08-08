@@ -20,7 +20,13 @@ def _course_matches_level_program(course: dict[str, Any], level: str | None, pro
 
 
 @router.get('')
-def list_courses(level: str | None = None, program: str | None = None, lecturer: str | None = None, status: str | None = None) -> dict[str, Any]:
+def list_courses(
+    level: str | None = None,
+    program: str | None = None,
+    lecturer: str | None = None,
+    status: str | None = None,
+    student_id: str | None = None,
+) -> dict[str, Any]:
     ensure_supabase_enabled()
     query = supabase.table('courses').select('*')
     if level:
@@ -39,6 +45,81 @@ def list_courses(level: str | None = None, program: str | None = None, lecturer:
     courses = response.data or []
     if level or program:
         courses = [course for course in courses if _course_matches_level_program(course, level, program)]
+
+    if not courses:
+        return {'courses': courses}
+
+    # ── Enrich each course with live stats ──────────────────────────────
+    course_codes = [c.get('code') for c in courses if c.get('code')]
+
+    # 1. Materials count per course code
+    materials_by_course: dict[str, int] = {}
+    try:
+        mat_resp = supabase.table('materials').select('course').in_('course', course_codes).execute()
+        if not supabase_failed(mat_resp):
+            for m in mat_resp.data or []:
+                code = m.get('course', '')
+                materials_by_course[code] = materials_by_course.get(code, 0) + 1
+    except Exception:
+        pass
+
+    # 2. Quiz stats per course (total quizzes published)
+    quizzes_total_by_course: dict[str, int] = {}
+    quiz_ids_by_course: dict[str, list[int]] = {}
+    try:
+        q_resp = supabase.table('quizzes').select('id,course').in_('course', course_codes).execute()
+        if not supabase_failed(q_resp):
+            for q in q_resp.data or []:
+                code = q.get('course', '')
+                qid = q.get('id')
+                quizzes_total_by_course[code] = quizzes_total_by_course.get(code, 0) + 1
+                if qid is not None:
+                    quiz_ids_by_course.setdefault(code, []).append(qid)
+    except Exception:
+        pass
+
+    # 3. Student-specific quiz attempt stats
+    quizzes_done_by_course: dict[str, int] = {}
+    avg_score_by_course: dict[str, float] = {}
+    if student_id:
+        all_quiz_ids = [qid for ids in quiz_ids_by_course.values() for qid in ids]
+        if all_quiz_ids:
+            try:
+                att_resp = supabase.table('quiz_attempts').select('quiz_id,score,status') \
+                    .eq('student_id', student_id) \
+                    .in_('quiz_id', all_quiz_ids) \
+                    .execute()
+                if not supabase_failed(att_resp):
+                    # Build reverse lookup: quiz_id → course_code
+                    qid_to_course = {qid: code for code, ids in quiz_ids_by_course.items() for qid in ids}
+                    scores_by_course: dict[str, list[float]] = {}
+                    done_quiz_ids: set[int] = set()
+                    for att in att_resp.data or []:
+                        if att.get('status') not in ('completed', 'missed'):
+                            continue
+                        qid = att.get('quiz_id')
+                        code = qid_to_course.get(qid, '')
+                        if not code:
+                            continue
+                        if qid not in done_quiz_ids:
+                            done_quiz_ids.add(qid)
+                            quizzes_done_by_course[code] = quizzes_done_by_course.get(code, 0) + 1
+                        scores_by_course.setdefault(code, []).append(float(att.get('score', 0)))
+                    for code, scores in scores_by_course.items():
+                        avg_score_by_course[code] = round(sum(scores) / len(scores)) if scores else 0
+            except Exception:
+                pass
+
+    # Apply enriched stats to each course
+    for course in courses:
+        code = course.get('code', '')
+        mat_count = materials_by_course.get(code, course.get('materials', 0))
+        course['materials'] = mat_count
+        course['quizzes_total'] = quizzes_total_by_course.get(code, course.get('quizzes_total', 0))
+        if student_id:
+            course['quizzes_done'] = quizzes_done_by_course.get(code, 0)
+            course['avg_score'] = avg_score_by_course.get(code, 0)
+
     return {'courses': courses}
 
 

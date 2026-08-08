@@ -3,8 +3,6 @@ import type { AppView } from '../App'
 import { API_BASE } from '../config'
 import Icon from '../components/Icon'
 import ProfileModal from '../components/ProfileModal'
-import DocViewer, { DocViewerRenderers } from '@cyntler/react-doc-viewer'
-import '@cyntler/react-doc-viewer/dist/index.css'
 
 type Tab = 'overview' | 'courses' | 'quizzes' | 'grades' | 'progress'
 
@@ -65,6 +63,7 @@ type MaterialItem = {
   uploaded: string
   status: string
   path?: string
+  file_url?: string
 }
 
 function mapCourse(course: Record<string, any>): Course {
@@ -203,6 +202,21 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   const [readerFontSize, setReaderFontSize] = useState<'text-xs' | 'text-sm' | 'text-base' | 'text-lg'>('text-sm')
   const [readerTheme, setReaderTheme] = useState<'default' | 'sepia' | 'dark'>('default')
   const [flippedFlashcards, setFlippedFlashcards] = useState<Record<number, boolean>>({})
+  const [readMaterials, setReadMaterials] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('tmas-read-materials') || '{}')
+    } catch {
+      return {}
+    }
+  })
+
+  const markMaterialRead = (materialId: number) => {
+    setReadMaterials(prev => {
+      const next = { ...prev, [String(materialId)]: true }
+      try { localStorage.setItem('tmas-read-materials', JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1041,15 +1055,28 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                         </div>
                       ))}
                     </div>
-                    <div>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-xs text-muted-foreground font-medium">Completion</span>
-                        <span className="text-xs font-mono font-bold text-foreground">{c.progress}%</span>
-                      </div>
-                      <div className="h-2 bg-muted rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full bg-linear-to-r ${c.color}`} style={{ width: `${c.progress}%` }} />
-                      </div>
-                    </div>
+                    {(() => {
+                      let computedProgress = c.progress
+                      if (c.materials > 0) {
+                        const readCount = materials.length > 0 && materialsReaderCourse?.code === c.code
+                          ? materials.filter(m => readMaterials[String(m.id)]).length
+                          : 0
+                        const matProgress = c.materials > 0 ? Math.round((readCount / c.materials) * 50) : 0
+                        const quizProgress = c.quizzesTotal > 0 ? Math.round((c.quizzesDone / c.quizzesTotal) * 50) : 0
+                        computedProgress = matProgress + quizProgress
+                      }
+                      return (
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-xs text-muted-foreground font-medium">Completion</span>
+                            <span className="text-xs font-mono font-bold text-foreground">{computedProgress}%</span>
+                          </div>
+                          <div className="h-2 bg-muted rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full bg-linear-to-r ${c.color} transition-all duration-500`} style={{ width: `${computedProgress}%` }} />
+                          </div>
+                        </div>
+                      )
+                    })()}
                     <button
                       onClick={async () => {
                         setMaterialsReaderCourse(c)
@@ -1065,7 +1092,10 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                           const data = await res.json()
                           const mats = (data.materials || []) as MaterialItem[]
                           setMaterials(mats)
-                          if (mats[0]) setActiveMaterialId(mats[0].id)
+                          if (mats[0]) {
+                            setActiveMaterialId(mats[0].id)
+                            markMaterialRead(mats[0].id)
+                          }
                         } catch (err) {
                           setMaterialsError(err instanceof Error ? err.message : 'Unable to load course materials')
                         }
@@ -1399,12 +1429,14 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                     const isActive = activeMaterialId === material.id
                     const extension = (material.name.split('.').pop() || '').toLowerCase()
                     const iconName = extension === 'pdf' ? 'document' : ['doc', 'docx'].includes(extension) ? 'document' : ['ppt', 'pptx'].includes(extension) ? 'analytics' : 'document'
+                    const isRead = !!readMaterials[String(material.id)]
                     return (
                       <button
                         key={material.id}
                         onClick={() => {
                           setActiveMaterialId(material.id)
                           setMaterialsError('')
+                          markMaterialRead(material.id)
                           setMaterialPreviewLoading(true)
                           fetch(`${API_BASE}/api/materials/${material.id}/content`)
                             .then(r => r.json())
@@ -1419,13 +1451,34 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                         <div className="flex items-start gap-2">
                           <span className="mt-0.5 text-lg"><Icon name={iconName} /></span>
                           <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-semibold text-foreground">{material.name}</p>
+                            <div className="flex items-center gap-1.5">
+                              <p className="truncate text-sm font-semibold text-foreground">{material.name}</p>
+                              {isRead && <span className="shrink-0 text-[10px] font-bold text-emerald-600 bg-emerald-500/10 px-1.5 py-0.5 rounded-full">Read</span>}
+                            </div>
                             <p className="mt-1 text-xs text-muted-foreground">{material.size} • {material.uploaded}</p>
                           </div>
                         </div>
                       </button>
                     )
                   })}
+
+                  {/* Reading progress summary */}
+                  {materials.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-border">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-xs font-semibold text-muted-foreground">Reading Progress</span>
+                        <span className="text-xs font-mono font-bold text-foreground">
+                          {materials.filter(m => readMaterials[String(m.id)]).length}/{materials.length}
+                        </span>
+                      </div>
+                      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                          style={{ width: `${Math.round((materials.filter(m => readMaterials[String(m.id)]).length / materials.length) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </aside>
 
@@ -1460,21 +1513,57 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                             </div>
                           </div>
 
-                          <div className="flex-1 min-h-0 overflow-y-auto p-0 md:p-4">
-                            <div className="h-full min-h-[500px] overflow-hidden rounded-none md:rounded-[20px] border-0 md:border md:border-border bg-white">
-                              <DocViewer
-                                documents={[{ uri: activeMaterial.file_url || downloadUrl, fileName: activeMaterial.name }]}
-                                pluginRenderers={DocViewerRenderers}
-                                style={{ height: '100%', width: '100%' }}
-                                config={{
-                                  header: {
-                                    disableHeader: true,
-                                    disableFileName: true,
-                                    retainURLParams: false
-                                  }
-                                }}
-                              />
-                            </div>
+                          <div className="flex-1 min-h-0 overflow-hidden p-0">
+                            {(() => {
+                              const ext = (activeMaterial.name.split('.').pop() || '').toLowerCase()
+                              const isPdf = ext === 'pdf'
+                              const isSlides = ['ppt', 'pptx'].includes(ext)
+                              const viewerUrl = activeMaterial.file_url || downloadUrl
+
+                              if (isPdf || isSlides) {
+                                return (
+                                  <iframe
+                                    src={viewerUrl}
+                                    title={activeMaterial.name}
+                                    className="w-full h-full border-0"
+                                    style={{ minHeight: '70vh' }}
+                                    allowFullScreen
+                                  />
+                                )
+                              }
+
+                              // Text / fallback content viewer
+                              return (
+                                <div className="h-full flex flex-col">
+                                  {/* Font size toolbar */}
+                                  <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-muted/30 shrink-0">
+                                    <span className="text-xs text-muted-foreground font-medium">Font size:</span>
+                                    {(['text-sm', 'text-base', 'text-lg', 'text-xl'] as const).map(size => (
+                                      <button
+                                        key={size}
+                                        onClick={() => setReaderFontSize(size as any)}
+                                        className={`px-2 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                                          readerFontSize === size ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                                        }`}
+                                      >
+                                        {size === 'text-sm' ? 'S' : size === 'text-base' ? 'M' : size === 'text-lg' ? 'L' : 'XL'}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
+                                    {materialPreviewLoading ? (
+                                      <div className="flex items-center justify-center py-20">
+                                        <span className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                                      </div>
+                                    ) : (
+                                      <div className={`${readerFontSize} leading-relaxed text-foreground whitespace-pre-wrap max-w-none`}>
+                                        {materialPreviewText || 'No text content available. Try downloading the original file.'}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              )
+                            })()}
                           </div>
                         </>
                       )
