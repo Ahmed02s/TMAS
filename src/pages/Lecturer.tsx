@@ -946,13 +946,13 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
 
           {/* ── 3-FOLD AI QUIZ STEPPER WIZARD ── */}
           {(tab === 'quizgen' || tab === 'quizreview') && (
-            <div className="space-y-6">
+            <div className="space-y-4 sm:space-y-6">
               {/* Stepper Navigation Header */}
-              <div className="bg-card border border-border rounded-2xl p-6 shadow-sm">
+              <div className="bg-card border border-border rounded-2xl p-4 sm:p-6 shadow-sm">
                 <div className="flex items-center justify-between max-w-3xl mx-auto relative">
-                  <div className="absolute top-1/2 left-0 right-0 h-1 bg-muted -translate-y-1/2 z-0" />
+                  <div className="absolute top-5 sm:top-1/2 left-0 right-0 h-1 bg-muted -translate-y-1/2 z-0" />
                   <div
-                    className={`absolute top-1/2 left-0 h-1 bg-primary -translate-y-1/2 z-0 transition-all duration-300 ${
+                    className={`absolute top-5 sm:top-1/2 left-0 h-1 bg-primary -translate-y-1/2 z-0 transition-all duration-300 ${
                       wizardStep === 1 ? 'w-0' : wizardStep === 2 ? 'w-1/2' : 'w-full'
                     }`}
                   />
@@ -960,10 +960,10 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                   {/* Step 1 Button */}
                   <button
                     onClick={() => setWizardStep(1)}
-                    className="flex flex-col items-center gap-2 relative z-10 group"
+                    className="flex flex-col items-center gap-1.5 relative z-10 group"
                   >
                     <div
-                      className={`w-12 h-12 rounded-2xl font-bold flex items-center justify-center text-sm transition-all ${
+                      className={`w-10 h-10 sm:w-12 sm:h-12 rounded-2xl font-bold flex items-center justify-center text-sm transition-all ${
                         wizardStep === 1
                           ? 'bg-primary text-white ring-4 ring-primary/20 scale-105 shadow-md'
                           : wizardStep > 1
@@ -971,10 +971,11 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                           : 'bg-muted text-muted-foreground'
                       }`}
                     >
-                      {wizardStep > 1 ? <i className="fa-solid fa-check text-base" /> : '1'}
+                      {wizardStep > 1 ? <i className="fa-solid fa-check text-sm" /> : '1'}
                     </div>
-                    <span className={`text-xs font-semibold ${wizardStep === 1 ? 'text-primary' : 'text-muted-foreground'}`}>
-                      1. Question Bank
+                    <span className={`text-[10px] sm:text-xs font-semibold text-center leading-tight ${wizardStep === 1 ? 'text-primary' : 'text-muted-foreground'}`}>
+                      <span className="hidden sm:inline">1. Question Bank</span>
+                      <span className="sm:hidden">Bank</span>
                     </span>
                   </button>
 
@@ -982,10 +983,10 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                   <button
                     onClick={() => generated && setWizardStep(2)}
                     disabled={!generated}
-                    className="flex flex-col items-center gap-2 relative z-10 group disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex flex-col items-center gap-1.5 relative z-10 group disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <div
-                      className={`w-12 h-12 rounded-2xl font-bold flex items-center justify-center text-sm transition-all ${
+                      className={`w-10 h-10 sm:w-12 sm:h-12 rounded-2xl font-bold flex items-center justify-center text-sm transition-all ${
                         wizardStep === 2
                           ? 'bg-primary text-white ring-4 ring-primary/20 scale-105 shadow-md'
                           : wizardStep > 2
@@ -993,10 +994,11 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                           : 'bg-muted text-muted-foreground'
                       }`}
                     >
-                      {wizardStep > 2 ? <i className="fa-solid fa-check text-base" /> : '2'}
+                      {wizardStep > 2 ? <i className="fa-solid fa-check text-sm" /> : '2'}
                     </div>
-                    <span className={`text-xs font-semibold ${wizardStep === 2 ? 'text-primary' : 'text-muted-foreground'}`}>
-                      2. Tier Question Review
+                    <span className={`text-[10px] sm:text-xs font-semibold text-center leading-tight ${wizardStep === 2 ? 'text-primary' : 'text-muted-foreground'}`}>
+                      <span className="hidden sm:inline">2. Tier Review</span>
+                      <span className="sm:hidden">Review</span>
                     </span>
                   </button>
 
@@ -1004,10 +1006,10 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                   <button
                     onClick={() => generated && setWizardStep(3)}
                     disabled={!generated}
-                    className="flex flex-col items-center gap-2 relative z-10 group disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex flex-col items-center gap-1.5 relative z-10 group disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <div
-                      className={`w-12 h-12 rounded-2xl font-bold flex items-center justify-center text-sm transition-all ${
+                      className={`w-10 h-10 sm:w-12 sm:h-12 rounded-2xl font-bold flex items-center justify-center text-sm transition-all ${
                         wizardStep === 3
                           ? 'bg-primary text-white ring-4 ring-primary/20 scale-105 shadow-md'
                           : 'bg-muted text-muted-foreground'
@@ -1015,8 +1017,9 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                     >
                       3
                     </div>
-                    <span className={`text-xs font-semibold ${wizardStep === 3 ? 'text-primary' : 'text-muted-foreground'}`}>
-                      3. 3-Tier Release Schedule
+                    <span className={`text-[10px] sm:text-xs font-semibold text-center leading-tight ${wizardStep === 3 ? 'text-primary' : 'text-muted-foreground'}`}>
+                      <span className="hidden sm:inline">3. Schedule</span>
+                      <span className="sm:hidden">Schedule</span>
                     </span>
                   </button>
                 </div>
@@ -1024,20 +1027,20 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
 
               {/* ── FOLD 1: QUESTION BANK GENERATION ── */}
               {wizardStep === 1 && (
-                <div className="bg-card border border-border rounded-2xl p-8 max-w-3xl mx-auto space-y-6 shadow-sm">
-                  <div className="flex items-center gap-3 pb-4 border-b border-border">
-                    <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-500 border border-amber-500/20 flex items-center justify-center text-2xl">
+                <div className="bg-card border border-border rounded-2xl p-5 sm:p-8 max-w-3xl mx-auto space-y-5 sm:space-y-6 shadow-sm">
+                  <div className="flex items-start sm:items-center gap-3 pb-4 border-b border-border">
+                    <div className="w-10 h-10 sm:w-12 sm:h-12 shrink-0 rounded-2xl bg-amber-500/10 text-amber-500 border border-amber-500/20 flex items-center justify-center text-xl sm:text-2xl">
                       <i className="fa-solid fa-wand-magic-sparkles" />
                     </div>
                     <div>
-                      <h3 className="font-display text-xl font-bold text-foreground">Fold 1: Institutional Question Bank Generator</h3>
+                      <h3 className="font-display text-base sm:text-xl font-bold text-foreground">AI Question Bank Generator</h3>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Select a course and source materials. AI will generate a complete 3-tier question bank (**Foundational**, **Intermediate**, **Mastery**).
+                        Select a course and materials. AI generates a full 3-tier bank (Foundational, Intermediate, Mastery).
                       </p>
                     </div>
                   </div>
 
-                  <div className="grid md:grid-cols-2 gap-6">
+                  <div className="grid sm:grid-cols-2 gap-4 sm:gap-6">
                     <div>
                       <label className="block text-sm font-semibold text-foreground mb-2">Target Course</label>
                       <select
@@ -1157,25 +1160,25 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
 
               {/* ── FOLD 2: TIER QUESTION REVIEW ── */}
               {wizardStep === 2 && (
-                <div className="space-y-6">
-                  <div className="bg-card border border-border rounded-2xl p-6 flex flex-wrap items-center justify-between gap-4 shadow-sm">
+                <div className="space-y-4 sm:space-y-6">
+                  <div className="bg-card border border-border rounded-2xl p-4 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
                     <div>
-                      <h3 className="font-display text-xl font-bold text-foreground">Fold 2: Review & Edit Tier Question Banks</h3>
+                      <h3 className="font-display text-lg sm:text-xl font-bold text-foreground">Review & Edit Tier Question Banks</h3>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Select a tier tab below to inspect questions, edit prompts or choices, and approve items for assessment.
+                        Inspect, edit, and approve questions before publishing.
                       </p>
                     </div>
                     <button
                       onClick={() => setWizardStep(3)}
-                      className="bg-primary hover:bg-blue-950 text-white font-semibold text-sm px-6 py-3 rounded-xl transition-all flex items-center gap-2 shadow-sm"
+                      className="bg-primary hover:bg-blue-950 text-white font-semibold text-sm px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm w-full sm:w-auto"
                     >
-                      <span>Proceed to Step 3: Schedule Configuration</span>
+                      <span>Proceed to Schedule</span>
                       <i className="fa-solid fa-arrow-right text-xs" />
                     </button>
                   </div>
 
-                  {/* Tier Tabs */}
-                  <div className="flex border-b border-border gap-2">
+                  {/* Tier Tabs — scrollable on mobile */}
+                  <div className="flex border-b border-border gap-1 overflow-x-auto scrollbar-none -mx-1 px-1">
                     {(['Foundational', 'Intermediate', 'Mastery'] as const).map(t => {
                       const count = (generatedQuestionsByTier[t] || []).length
                       const approvedCount = (approvedByTier[t] || []).length
@@ -1186,12 +1189,13 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                         <button
                           key={t}
                           onClick={() => setActiveReviewTier(t)}
-                          className={`px-6 py-3.5 font-bold text-sm border-b-2 transition-all flex items-center gap-2 ${
+                          className={`shrink-0 px-3 sm:px-6 py-3 sm:py-3.5 font-bold text-xs sm:text-sm border-b-2 transition-all flex items-center gap-1.5 sm:gap-2 whitespace-nowrap ${
                             isActive ? 'border-primary text-primary bg-primary/5 rounded-t-xl' : 'border-transparent text-muted-foreground hover:text-foreground'
                           }`}
                         >
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${badgeColor}`}>{t}</span>
-                          <span>({approvedCount}/{count} Approved)</span>
+                          <span className={`px-1.5 sm:px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-semibold ${badgeColor}`}>{t}</span>
+                          <span className="hidden xs:inline">({approvedCount}/{count})</span>
+                          <span className="xs:hidden">{approvedCount}/{count}</span>
                         </button>
                       )
                     })}
@@ -1204,10 +1208,10 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                       const isApproved = approvedList.includes(q.id)
 
                       return (
-                        <div key={q.id || idx} className={`bg-card border rounded-2xl p-6 transition-all shadow-xs ${isApproved ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-border'}`}>
-                          <div className="flex items-start justify-between gap-4 mb-3">
-                            <div className="flex items-center gap-2">
-                              <span className="w-7 h-7 rounded-lg bg-muted text-foreground font-mono font-bold text-xs flex items-center justify-center">
+                        <div key={q.id || idx} className={`bg-card border rounded-2xl p-4 sm:p-6 transition-all shadow-xs ${isApproved ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-border'}`}>
+                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-3">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="w-7 h-7 rounded-lg bg-muted text-foreground font-mono font-bold text-xs flex items-center justify-center shrink-0">
                                 Q{idx + 1}
                               </span>
                               <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-100 text-blue-700">{q.type || 'MCQ'}</span>
@@ -1220,16 +1224,16 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                 const updated = isApproved ? currentApproved.filter(id => id !== q.id) : [...currentApproved, q.id]
                                 setApprovedByTier(prev => ({ ...prev, [activeReviewTier]: updated }))
                               }}
-                              className={`px-4 py-1.5 text-xs font-bold rounded-xl border transition-all flex items-center gap-1.5 ${
+                              className={`self-start sm:self-auto px-3 sm:px-4 py-1.5 text-xs font-bold rounded-xl border transition-all flex items-center gap-1.5 ${
                                 isApproved ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-muted hover:bg-emerald-50 text-muted-foreground hover:text-emerald-600 border-border'
                               }`}
                             >
                               <i className={`fa-solid ${isApproved ? 'fa-check' : 'fa-plus'}`} />
-                              <span>{isApproved ? 'Approved' : 'Approve Item'}</span>
+                              <span>{isApproved ? 'Approved' : 'Approve'}</span>
                             </button>
                           </div>
 
-                          <p className="text-base font-medium text-foreground mb-4">{q.question}</p>
+                          <p className="text-sm sm:text-base font-medium text-foreground mb-3 sm:mb-4">{q.question}</p>
 
                           {q.options && q.options.length > 0 && (
                             <div className="grid sm:grid-cols-2 gap-2 mb-3">
@@ -1262,21 +1266,21 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
 
               {/* ── FOLD 3: 3-TIER SCHEDULE CONFIGURATION ── */}
               {wizardStep === 3 && (
-                <div className="space-y-6">
-                  <div className="bg-card border border-border rounded-2xl p-6 shadow-sm">
-                    <h3 className="font-display text-xl font-bold text-foreground">Fold 3: Configure 3-Tier Release Schedule</h3>
+                <div className="space-y-4 sm:space-y-6">
+                  <div className="bg-card border border-border rounded-2xl p-4 sm:p-6 shadow-sm">
+                    <h3 className="font-display text-lg sm:text-xl font-bold text-foreground">Configure 3-Tier Release Schedule</h3>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Set independent open dates, close dates, question counts, and time limits for each of the 3 assessment tiers.
+                      Set open dates, close dates, duration, pass score, and max attempts for each tier.
                     </p>
                   </div>
 
-                  <div className="grid lg:grid-cols-3 gap-6">
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                     {(['Foundational', 'Intermediate', 'Mastery'] as const).map(tier => {
                       const cfg = tierScheduleConfigs[tier]
                       const themeColor = tier === 'Foundational' ? 'border-emerald-500/30' : tier === 'Intermediate' ? 'border-amber-500/30' : 'border-purple-500/30'
 
                       return (
-                        <div key={tier} className={`bg-card border-2 ${themeColor} rounded-2xl p-6 space-y-4 shadow-sm`}>
+                        <div key={tier} className={`bg-card border-2 ${themeColor} rounded-2xl p-4 sm:p-6 space-y-4 shadow-sm`}>
                           <div className="flex items-center justify-between pb-3 border-b border-border">
                             <h4 className="font-display text-lg font-bold text-foreground flex items-center gap-2">
                               <span>{tier === 'Foundational' ? '🟢' : tier === 'Intermediate' ? '🟡' : '🟣'}</span>
