@@ -423,6 +423,32 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     }
   }
 
+
+  const [clearingQuizzes, setClearingQuizzes] = useState(false)
+
+  async function handleClearAllQuizzes() {
+    if (!window.confirm('⚠️ This will permanently delete ALL quizzes, questions, and student attempt records. This cannot be undone. Proceed?')) return
+    setClearingQuizzes(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/quizzes/all`, { method: 'DELETE' })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }))
+        alert(`Failed to clear quizzes: ${err.detail || res.statusText}`)
+        return
+      }
+      alert('✅ All quizzes, questions, and attempts have been cleared successfully.')
+      setGenerated(false)
+      setWizardStep(1)
+      setGeneratedQuestionsByTier({ Foundational: [], Intermediate: [], Mastery: [] })
+      setApprovedByTier({ Foundational: [], Intermediate: [], Mastery: [] })
+      await loadLecturerData()
+    } catch (err: any) {
+      alert(`Error clearing quizzes: ${err.message}`)
+    } finally {
+      setClearingQuizzes(false)
+    }
+  }
+
   function handleExportGradebook() {
     const headers = ['Course Code', 'Course Title', 'Enrolled Students', 'Completion Rate (%)', 'Average Score (%)', 'Status']
     const rows = myCoursesState.map(c => [
@@ -1105,6 +1131,24 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                       <>
                         <i className="fa-solid fa-wand-magic-sparkles text-amber-300" />
                         <span>Generate 3-Tier Question Bank with AI</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={handleClearAllQuizzes}
+                    disabled={clearingQuizzes}
+                    className="w-full bg-red-600/10 hover:bg-red-600/20 border border-red-500/30 text-red-600 font-semibold py-3 rounded-2xl transition-all flex items-center justify-center gap-2 text-sm disabled:opacity-60"
+                  >
+                    {clearingQuizzes ? (
+                      <>
+                        <span className="w-4 h-4 border-2 border-red-400/40 border-t-red-500 rounded-full animate-spin" />
+                        <span>Clearing All Quizzes...</span>
+                      </>
+                    ) : (
+                      <>
+                        <i className="fa-solid fa-trash-can" />
+                        <span>Clear All Quizzes & Attempts</span>
                       </>
                     )}
                   </button>
