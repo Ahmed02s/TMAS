@@ -1254,7 +1254,6 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                                         </button>
                                       )}
                                     </div>
-                                    </div>
                                   </div>
                                 </div>
                               ))
