@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useRef } from 'react'
 import type { AppView } from '../App'
 import { API_BASE } from '../config'
 import Icon from '../components/Icon'
+import ProfileModal from '../components/ProfileModal'
 import DocViewer, { DocViewerRenderers } from '@cyntler/react-doc-viewer'
 import '@cyntler/react-doc-viewer/dist/index.css'
 
@@ -271,6 +272,9 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   }
 
   const [notifications, setNotifications] = useState<Array<{ id: string; title: string; message: string; type?: string; read?: boolean }>>([])
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [profileModalOpen, setProfileModalOpen] = useState(false)
+  const [mobileReaderTab, setMobileReaderTab] = useState<'list' | 'doc'>('list')
   const seenNotifIdsRef = useRef<Set<string>>(new Set())
   const isInitialNotifLoadRef = useRef(true)
 
@@ -829,11 +833,26 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
               <span>Test Push</span>
             </button>
             <span className="text-xs bg-secondary text-secondary-foreground px-3 py-1 rounded-full font-semibold">{studentLevelLabel}</span>
-            <div className="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center">
+            <button
+              onClick={() => setProfileModalOpen(true)}
+              className="w-8 h-8 rounded-full bg-emerald-600 hover:bg-emerald-700 flex items-center justify-center transition-transform hover:scale-105 shadow-sm cursor-pointer"
+              title="View Student Profile"
+            >
               <span className="text-white text-xs font-bold">{studentName.slice(0, 2).toUpperCase()}</span>
-            </div>
+            </button>
           </div>
         </header>
+
+        <ProfileModal
+          open={profileModalOpen}
+          onClose={() => setProfileModalOpen(false)}
+          user={typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('tmas-user') || 'null') || { name: studentName, email: '', role: 'student' } : null}
+          onLogout={() => {
+            localStorage.removeItem('tmas-token')
+            localStorage.removeItem('tmas-user')
+            onNavigate('login')
+          }}
+        />
 
         <div className="flex-1 overflow-y-auto p-6">
           {loading && (
@@ -1291,8 +1310,8 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       </main>
 
       {materialsReaderOpen && materialsReaderCourse && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-sm">
-          <div className="flex h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-[28px] border border-border bg-background shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-0 md:px-4 md:py-6 backdrop-blur-sm">
+          <div className="flex h-full md:h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-none md:rounded-[28px] border-0 md:border md:border-border bg-background shadow-2xl">
             <div className="flex items-start justify-between border-b border-border bg-card/70 px-6 py-5">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted-foreground">Course material reader</p>
@@ -1399,8 +1418,8 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                             </div>
                           </div>
 
-                          <div className="flex-1 min-h-0 overflow-y-auto p-4">
-                            <div className="h-full min-h-[500px] overflow-hidden rounded-[20px] border border-border bg-white">
+                          <div className="flex-1 min-h-0 overflow-y-auto p-0 md:p-4">
+                            <div className="h-full min-h-[500px] overflow-hidden rounded-none md:rounded-[20px] border-0 md:border md:border-border bg-white">
                               <DocViewer
                                 documents={[{ uri: activeMaterial.file_url || downloadUrl, fileName: activeMaterial.name }]}
                                 pluginRenderers={DocViewerRenderers}

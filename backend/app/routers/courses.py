@@ -28,7 +28,7 @@ def list_courses(level: str | None = None, program: str | None = None, lecturer:
     if lecturer:
         lecturer = lecturer.strip()
         if lecturer:
-            query = query.ilike('lecturer', lecturer)
+            query = query.ilike('lecturer', f"%{lecturer}%")
     if status:
         query = query.eq('status', status)
 
@@ -69,7 +69,7 @@ def create_course(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.patch('/{course_id}')
-def update_course(course_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+def update_course(course_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     ensure_supabase_enabled()
     # filter allowed update fields
     allowed = {'code','title','level','program','lecturer','progress','materials','quizzes_total','quizzes_done','avg_score','color','status'}
@@ -93,7 +93,7 @@ def update_course(course_id: int, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.delete('/{course_id}', status_code=204)
-def delete_course(course_id: int):
+def delete_course(course_id: str):
     ensure_supabase_enabled()
     response = supabase.table('courses').delete().eq('id', course_id).execute()
     if supabase_failed(response):

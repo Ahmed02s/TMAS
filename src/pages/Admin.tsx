@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import Icon from '../components/Icon'
 import type { AppView } from '../App'
 import CourseModal, { type CourseFormValues } from '../components/CourseModal'
+import ProfileModal from '../components/ProfileModal'
 import { API_BASE } from '../config'
 const savedUser = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('tmas-user') || 'null') : null
 
@@ -43,6 +44,7 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
   const [lecturerSubTab, setLecturerSubTab] = useState<'pending' | 'approved'>('pending')
   const [levelFilter, setLevelFilter] = useState('All Levels')
   const [notifOpen, setNotifOpen] = useState(false)
+  const [profileModalOpen, setProfileModalOpen] = useState(false)
   const [levels, setLevels] = useState<Array<{ id: string; name: string; order: number; status: string; created_at?: string }>>([])
   const [newLevelName, setNewLevelName] = useState('')
   const [newLevelOrder, setNewLevelOrder] = useState('')
@@ -621,24 +623,48 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
                     <span className="text-xs text-muted-foreground">{notifications.length} new</span>
                   </div>
                   <div className="max-h-72 overflow-y-auto">
-                    {notifications.map((a, i) => (
-                      <div key={i} className="flex items-start gap-3 px-4 py-3 hover:bg-muted/50 border-b border-border/50 last:border-0 transition-colors">
-                        <span className={`text-sm rounded-full px-2 py-0.5 ${a.color}`}><Icon name={a.icon} size={16} /></span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-foreground text-xs leading-snug">{a.text}</p>
-                          <p className="text-muted-foreground text-xs mt-0.5">{a.time}</p>
+                    {notifications.length === 0 ? (
+                      <div className="p-6 text-center text-xs text-muted-foreground">No new notifications</div>
+                    ) : (
+                      notifications.map((a: any, i) => (
+                        <div key={i} className="flex items-start gap-3 px-4 py-3 hover:bg-muted/50 border-b border-border/50 last:border-0 transition-colors">
+                          <span className={`text-xs font-bold rounded-full px-2 py-1 ${a.color || 'bg-primary/10 text-primary'}`}>
+                            <Icon name={a.icon || 'bell'} size={14} />
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-foreground text-xs font-semibold leading-snug">{a.title || a.text || 'Notification'}</p>
+                            {a.message && <p className="text-muted-foreground text-xs mt-0.5 line-clamp-2">{a.message}</p>}
+                            <p className="text-[10px] text-muted-foreground/70 mt-1">{a.created_at ? new Date(a.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (a.time || 'Recently')}</p>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))
+                    )}
                   </div>
                 </div>
               )}
             </div>
-            <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center">
-              <span className="text-white text-xs font-bold">SA</span>
-            </div>
+            <button
+              onClick={() => setProfileModalOpen(true)}
+              className="w-8 h-8 rounded-full bg-primary hover:bg-blue-950 flex items-center justify-center transition-transform hover:scale-105 shadow-sm cursor-pointer"
+              title="View Admin Profile"
+            >
+              <span className="text-white text-xs font-bold font-mono">
+                {savedUser?.name ? savedUser.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() : 'AD'}
+              </span>
+            </button>
           </div>
         </header>
+
+        <ProfileModal
+          open={profileModalOpen}
+          onClose={() => setProfileModalOpen(false)}
+          user={savedUser || { name: 'System Administrator', email: 'admin@tmas.com', role: 'administrator' }}
+          onLogout={() => {
+            localStorage.removeItem('tmas-token')
+            localStorage.removeItem('tmas-user')
+            onNavigate('login')
+          }}
+        />
 
         <div className="flex-1 overflow-y-auto p-3 sm:p-6">
 
@@ -784,8 +810,8 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
                 </div>
                 {statusMessage && <p className="text-sm text-primary">{statusMessage}</p>}
               </div>
-              <div className="bg-card border border-border rounded-2xl overflow-hidden">
-                <table className="w-full text-sm">
+              <div className="bg-card border border-border rounded-2xl overflow-x-auto">
+                <table className="w-full text-sm whitespace-nowrap min-w-[600px]">
                   <thead>
                     <tr className="border-b border-border bg-muted/40">
                       {['Level Name', 'Courses', 'Students', 'Status', 'Created', 'Actions'].map(h => (

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, type ChangeEvent } from 'react'
 import Icon from '../components/Icon'
 import type { AppView } from '../App'
 import { API_BASE } from '../config'
+import ProfileModal from '../components/ProfileModal'
 
 type Tab = 'overview' | 'courses' | 'materials' | 'students' | 'quizgen' | 'quizreview' | 'analytics'
 
@@ -44,6 +45,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       return 'overview'
     }
   })
+  const [profileModalOpen, setProfileModalOpen] = useState(false)
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1)
   const [activeReviewTier, setActiveReviewTier] = useState<'Foundational' | 'Intermediate' | 'Mastery'>('Foundational')
   const [publishing, setPublishing] = useState(false)
@@ -578,11 +580,26 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
               <span>Test Push</span>
             </button>
             <span className="text-xs bg-success/10 text-success px-3 py-1 rounded-full font-semibold">Account Active</span>
-            <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center">
+            <button
+              onClick={() => setProfileModalOpen(true)}
+              className="w-8 h-8 rounded-full bg-blue-600 hover:bg-blue-700 flex items-center justify-center transition-transform hover:scale-105 shadow-sm cursor-pointer"
+              title="View Lecturer Profile"
+            >
               <span className="text-white text-xs font-bold">{getInitials(savedUser?.name)}</span>
-            </div>
+            </button>
           </div>
         </header>
+
+        <ProfileModal
+          open={profileModalOpen}
+          onClose={() => setProfileModalOpen(false)}
+          user={savedUser || { name: 'Lecturer', email: '', role: 'lecturer' }}
+          onLogout={() => {
+            localStorage.removeItem('tmas-token')
+            localStorage.removeItem('tmas-user')
+            onNavigate('login')
+          }}
+        />
 
         <div className="flex-1 overflow-y-auto p-6">
 

@@ -89,6 +89,13 @@ export default function Icon({ name, size = 20, className = '' }: { name: string
           <path d="M12 2v4M4.9 4.9l2.8 2.8M2 12h4M4.9 19.1l2.8-2.8M12 20v2M19.1 19.1l-2.8-2.8M20 12h-4M19.1 4.9l-2.8 2.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )
+    case 'bell':
+      return (
+        <svg {...common} className={className}>
+          <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M13.73 21a2 2 0 01-3.46 0" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
     default:
       return (
         <svg {...common} className={className}>
