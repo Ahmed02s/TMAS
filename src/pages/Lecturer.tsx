@@ -46,6 +46,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     }
   })
   const [profileModalOpen, setProfileModalOpen] = useState(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1)
   const [activeReviewTier, setActiveReviewTier] = useState<'Foundational' | 'Intermediate' | 'Mastery'>('Foundational')
   const [publishing, setPublishing] = useState(false)
@@ -475,8 +476,6 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       const color = level === 'Easy' ? 'bg-success' : level === 'Medium' ? 'bg-warning' : 'bg-danger'
       return { level, count, correct, color }
     })
-
-  const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   return (
     <div className="flex h-screen bg-background overflow-hidden font-sans relative">

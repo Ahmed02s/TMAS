@@ -275,6 +275,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   const [notifOpen, setNotifOpen] = useState(false)
   const [profileModalOpen, setProfileModalOpen] = useState(false)
   const [mobileReaderTab, setMobileReaderTab] = useState<'list' | 'doc'>('list')
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const seenNotifIdsRef = useRef<Set<string>>(new Set())
   const isInitialNotifLoadRef = useRef(true)
 
@@ -742,8 +743,6 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       </div>
     )
   }
-
-  const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   return (
     <div className="flex h-screen bg-background overflow-hidden font-sans relative">

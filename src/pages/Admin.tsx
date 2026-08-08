@@ -45,6 +45,7 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
   const [levelFilter, setLevelFilter] = useState('All Levels')
   const [notifOpen, setNotifOpen] = useState(false)
   const [profileModalOpen, setProfileModalOpen] = useState(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [levels, setLevels] = useState<Array<{ id: string; name: string; order: number; status: string; created_at?: string }>>([])
   const [newLevelName, setNewLevelName] = useState('')
   const [newLevelOrder, setNewLevelOrder] = useState('')
@@ -481,8 +482,6 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
       setIsSavingCourse(false)
     }
   }
-
-  const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   return (
     <div className="flex h-screen bg-background overflow-hidden font-sans relative">
