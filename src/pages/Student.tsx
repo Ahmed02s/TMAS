@@ -99,14 +99,11 @@ function mapQuiz(quiz: Record<string, any>): Quiz {
   const openDt  = quiz.open_date  ? new Date(quiz.open_date)  : null
   const closeDt = quiz.close_date ? new Date(quiz.close_date) : null
 
-  // SECURITY: Trust backend is_locked flag as authoritative source of truth.
-  // Also lock if: no open_date at all (backend now sets status='scheduled' for these),
-  // or open_date is in the future, or status is 'scheduled'.
-  const isLocked = !!(quiz.is_locked
-    || quiz.status === 'scheduled'
-    || !quiz.open_date              // no open_date = not yet scheduled = locked
-    || (openDt && openDt > now)
-  )
+  // SECURITY: Backend is_locked is the primary authoritative signal.
+  // We also do a client-side date re-check as a secondary guard,
+  // but we do NOT lock quizzes solely because open_date is missing —
+  // that is already handled by the backend which returns is_locked=true.
+  const isLocked = !!(quiz.is_locked || (openDt && openDt > now))
   // Closed: availability window has ended
   const isClosed = !isLocked && !!(closeDt && closeDt < now)
 
@@ -120,8 +117,7 @@ function mapQuiz(quiz: Record<string, any>): Quiz {
     id: quiz.id,
     title: quiz.title,
     course: quiz.course,
-    // SECURITY: these fields are stripped by backend for locked quizzes;
-    // fallback to 0/undefined so nothing leaks in the UI
+    // SECURITY: these fields are stripped by backend for locked quizzes
     questions: isLocked ? 0 : (quiz.questions ?? 0),
     timeLimit: isLocked ? undefined : quiz.time_limit,
     passingScore: isLocked ? undefined : quiz.passing_score,
@@ -398,8 +394,36 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     }
 
     pollNotificationsOnly()
-    const interval = setInterval(pollNotificationsOnly, 12000)
-    return () => clearInterval(interval)
+    const notifInterval = setInterval(pollNotificationsOnly, 12000)
+
+    // ── Quiz availability auto-refresh ──────────────────────────────────────
+    // Re-fetch quiz data every 60 seconds so quizzes auto-unlock when their
+    // open_date arrives without requiring the student to manually reload.
+    async function refreshQuizAvailability() {
+      try {
+        const sid = savedUser?.id || ''
+        const p = new URLSearchParams()
+        p.set('level', studentProfile.level)
+        if (studentProfile.program) p.set('program', studentProfile.program)
+        if (sid) p.set('student_id', sid)
+        const [availableRes, completedRes] = await Promise.all([
+          fetch(`${API_BASE}/api/quizzes/available?${p.toString()}`),
+          fetch(`${API_BASE}/api/quizzes/completed?${p.toString()}`),
+        ])
+        if (availableRes.ok && completedRes.ok) {
+          const availableData = await availableRes.json()
+          const completedData = await completedRes.json()
+          setAvailableQuizzes((availableData.quizzes ?? []).map(mapQuiz))
+          setCompletedQuizzes((completedData.quizzes ?? []).map(mapCompletedQuiz))
+        }
+      } catch { /* silent — don't interrupt the student */ }
+    }
+    const quizInterval = setInterval(refreshQuizAvailability, 60_000)
+
+    return () => {
+      clearInterval(notifInterval)
+      clearInterval(quizInterval)
+    }
   }, [studentProfile.level, studentProfile.program, savedUser])
 
   useEffect(() => {
@@ -1233,24 +1257,64 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                     <h3 className="font-semibold text-foreground text-lg">3-Tier Assessment Quizzes</h3>
                     <p className="text-xs text-muted-foreground">Quizzes are categorized into Foundational, Intermediate, and Mastery tiers. Scheduled quizzes remain locked until open date.</p>
                   </div>
-                  <div className="flex items-center gap-1 bg-muted p-1 rounded-xl text-xs font-semibold">
-                    {['All Tiers', 'Foundational', 'Intermediate', 'Mastery'].map(tier => (
-                      <button
-                        key={tier}
-                        onClick={() => setSelectedTierFilter(tier)}
-                        className={`px-3 py-1.5 rounded-lg transition-colors ${selectedTierFilter === tier ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-                      >
-                        {tier}
-                      </button>
-                    ))}
+                  <div className="flex items-center gap-2">
+                    {/* Manual refresh — updates lock/unlock status without full page reload */}
+                    <button
+                      id="quiz-refresh-btn"
+                      onClick={async () => {
+                        const btn = document.getElementById('quiz-refresh-btn')
+                        if (btn) btn.classList.add('animate-spin')
+                        try {
+                          const sid = savedUser?.id || ''
+                          const p = new URLSearchParams()
+                          p.set('level', studentProfile.level)
+                          if (studentProfile.program) p.set('program', studentProfile.program)
+                          if (sid) p.set('student_id', sid)
+                          const [availableRes, completedRes] = await Promise.all([
+                            fetch(`${API_BASE}/api/quizzes/available?${p.toString()}`),
+                            fetch(`${API_BASE}/api/quizzes/completed?${p.toString()}`),
+                          ])
+                          if (availableRes.ok && completedRes.ok) {
+                            const ad = await availableRes.json()
+                            const cd = await completedRes.json()
+                            setAvailableQuizzes((ad.quizzes ?? []).map(mapQuiz))
+                            setCompletedQuizzes((cd.quizzes ?? []).map(mapCompletedQuiz))
+                          }
+                        } catch {}
+                        if (btn) btn.classList.remove('animate-spin')
+                      }}
+                      className="w-8 h-8 flex items-center justify-center rounded-xl border border-border bg-muted hover:bg-card text-muted-foreground hover:text-primary transition-colors"
+                      title="Refresh quiz availability"
+                    >
+                      <i className="fa-solid fa-rotate-right text-xs" />
+                    </button>
+                    <div className="flex items-center gap-1 bg-muted p-1 rounded-xl text-xs font-semibold">
+                      {['All Tiers', 'Foundational', 'Intermediate', 'Mastery'].map(tier => (
+                        <button
+                          key={tier}
+                          onClick={() => setSelectedTierFilter(tier)}
+                          className={`px-3 py-1.5 rounded-lg transition-colors ${selectedTierFilter === tier ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                        >
+                          {tier}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
                 {visibleQuizzes.length === 0 ? (
                   <div className="rounded-2xl border border-border bg-muted/30 p-10 text-center">
+                    <i className="fa-solid fa-clipboard-question text-3xl text-muted-foreground/40 mb-3 block" />
                     <p className="text-sm font-medium text-foreground">No quizzes found for your current level and program.</p>
                     <p className="text-xs text-muted-foreground mt-2">Ask your lecturer to publish a quiz or check back later.</p>
+                    <button
+                      onClick={() => loadStudentData(false)}
+                      className="mt-4 text-xs text-primary hover:underline"
+                    >
+                      <i className="fa-solid fa-rotate-right mr-1" /> Refresh now
+                    </button>
                   </div>
+
                 ) : (
                   <div className="space-y-6">
                     {['Foundational', 'Intermediate', 'Mastery']
@@ -1278,8 +1342,9 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                               tierQuizzes.map(q => {
                                 const now = new Date()
                                 const openDt = q.openDate ? new Date(q.openDate) : null
-                                // Re-evaluate lock in render (handles minute-level auto-unlock)
-                                const renderLocked = q.isLocked || !q.openDate || (openDt ? openDt > now : true)
+                                // Trust q.isLocked (from backend). Client-side date re-check handles
+                                // the edge case where a quiz unlocks mid-session (open_date just passed).
+                                const renderLocked = q.isLocked || (openDt ? openDt > now : false)
 
                                 return (
                                 <div key={q.id} className={`bg-card border rounded-2xl transition-all shadow-xs ${
