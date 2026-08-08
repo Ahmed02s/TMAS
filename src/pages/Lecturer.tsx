@@ -596,7 +596,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
               className="flex items-center gap-1.5 text-xs font-semibold bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 px-2.5 py-1 rounded-full transition-colors"
               title="Test Instant Web Push Notification"
             >
-              <Icon name="bolt" size={12} />
+              <i className="fa-solid fa-bolt" />
               <span>Test Push</span>
             </button>
             <span className="text-xs bg-success/10 text-success px-3 py-1 rounded-full font-semibold">Account Active</span>
@@ -767,7 +767,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
           {tab === 'materials' && (
             <div className="space-y-6">
               <div className="bg-card border-2 border-dashed border-border rounded-2xl p-10 text-center hover:border-primary/40 transition-colors group">
-                <div className="text-4xl mb-3"><Icon name="upload" size={40} /></div>
+                <div className="text-4xl mb-3"><i className="fa-solid fa-cloud-arrow-up text-4xl text-muted-foreground" /></div>
                 <h3 className="font-semibold text-foreground mb-1 group-hover:text-primary transition-colors">Upload Learning Materials</h3>
                   <p className="text-muted-foreground text-sm mb-4">Select PDF, DOC/DOCX, PPT/PPTX, TXT or Markdown files, then upload them to a course assignment.</p>
 
@@ -862,7 +862,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                       <tr key={m.id} className="hover:bg-muted/30 transition-colors">
                         <td className="px-5 py-3.5">
                           <div className="flex items-center gap-2.5">
-                            <span className="text-base">{m.name.endsWith('.pdf') ? <Icon name="document" /> : m.name.endsWith('.pptx') ? <Icon name="analytics" /> : <Icon name="document" />}</span>
+                            <span className="text-base">{m.name.endsWith('.pdf') ? <i className="fa-solid fa-file-pdf text-red-500" /> : m.name.endsWith('.pptx') || m.name.endsWith('.ppt') ? <i className="fa-solid fa-file-powerpoint text-orange-500" /> : m.name.endsWith('.doc') || m.name.endsWith('.docx') ? <i className="fa-solid fa-file-word text-blue-500" /> : <i className="fa-solid fa-file text-muted-foreground" />}</span>
                             <span className="text-foreground font-medium text-sm max-w-56 truncate">{m.name}</span>
                           </div>
                         </td>
@@ -1422,7 +1422,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                   onClick={handleExportGradebook}
                   className="flex items-center gap-2 bg-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl hover:bg-blue-950 transition-colors shadow-sm"
                 >
-                  <Icon name="download" size={14} />
+                  <i className="fa-solid fa-download" />
                   <span>Export Gradebook (CSV)</span>
                 </button>
               </div>
