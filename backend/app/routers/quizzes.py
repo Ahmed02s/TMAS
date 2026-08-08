@@ -40,11 +40,18 @@ def _parse_datetime(value: str | None) -> datetime | None:
     if cleaned.endswith('Z'):
         cleaned = cleaned[:-1] + '+00:00'
     try:
-        return datetime.fromisoformat(cleaned)
+        dt = datetime.fromisoformat(cleaned)
+        # Always ensure UTC-aware so comparisons with datetime.now(UTC) are safe
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except ValueError:
         for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S%z', '%Y-%m-%dT%H:%M:%S%z'):
             try:
-                return datetime.strptime(cleaned, fmt)
+                dt = datetime.strptime(cleaned, fmt)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
             except ValueError:
                 continue
         return None
@@ -885,19 +892,26 @@ def publish_quiz(payload: PublishQuizRequest) -> dict[str, Any]:
             due_dt = _parse_datetime(q.get('due_date'))
             if due_dt is None:
                 raise HTTPException(status_code=400, detail='Quiz due date must be a valid ISO datetime string')
-            open_dt = _parse_datetime(q.get('open_date')) if q.get('open_date') else datetime.now(timezone.utc)
+
+            # SECURITY FIX: if no open_date provided, quiz stays locked ('scheduled')
+            open_dt = _parse_datetime(q.get('open_date')) if q.get('open_date') else None
             close_dt = _parse_datetime(q.get('close_date')) if q.get('close_date') else due_dt
             if close_dt is None:
                 raise HTTPException(status_code=400, detail='Quiz close date must be a valid ISO datetime string')
-            if open_dt is None:
-                open_dt = datetime.now(timezone.utc)
-            if close_dt < open_dt:
+            if open_dt and close_dt < open_dt:
                 raise HTTPException(status_code=400, detail='Quiz close date must be after open date')
 
             now = datetime.now(timezone.utc)
-            status = 'available' if open_dt <= now <= close_dt else 'scheduled' if open_dt > now else 'closed'
+            if open_dt is None:
+                status = 'scheduled'  # No open_date means locked until lecturer sets one
+            elif open_dt <= now <= close_dt:
+                status = 'available'
+            elif open_dt > now:
+                status = 'scheduled'
+            else:
+                status = 'closed'
+
             normalized_tier = _normalize_tier(q.get('tier') or payload.tier)
-            # Derive a sensible title: prefer provided title, otherwise build one from tier+course
             derived_course = q.get('course') or payload.course
             derived_title = q.get('title') or payload.title or f"AI Generated {normalized_tier} Quiz for {derived_course}"
 
@@ -909,7 +923,7 @@ def publish_quiz(payload: PublishQuizRequest) -> dict[str, Any]:
                 'passing_score': q.get('passing_score', payload.passing_score),
                 'attempts': q.get('attempts', payload.attempts),
                 'due_date': q.get('due_date'),
-                'open_date': _format_datetime(open_dt),
+                'open_date': _format_datetime(open_dt) if open_dt else None,
                 'close_date': _format_datetime(close_dt),
                 'status': status,
                 'difficulty': q.get('difficulty', payload.difficulty),
@@ -951,7 +965,9 @@ def publish_quiz(payload: PublishQuizRequest) -> dict[str, Any]:
     raw_due = payload.due_date or payload.close_date or (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
     due_dt = _parse_datetime(raw_due) or (datetime.now(timezone.utc) + timedelta(days=7))
 
-    open_dt = _parse_datetime(payload.open_date) if payload.open_date else datetime.now(timezone.utc)
+    # SECURITY FIX: if no open_date is provided, keep quiz as 'scheduled' (locked)
+    # Never default open_date to now() — lecturers must explicitly set an opening time
+    open_dt = _parse_datetime(payload.open_date) if payload.open_date else None
     close_dt = _parse_datetime(payload.close_date) if payload.close_date else due_dt
     if close_dt is None:
         raise HTTPException(status_code=400, detail='Quiz close date must be a valid ISO datetime string')
@@ -961,7 +977,12 @@ def publish_quiz(payload: PublishQuizRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail='Quiz close date must be after open date')
 
     now = datetime.now(timezone.utc)
-    status = 'available' if open_dt <= now <= close_dt else 'scheduled' if open_dt > now else 'closed'
+    if open_dt <= now <= close_dt:
+        status = 'available'
+    elif open_dt > now:
+        status = 'scheduled'
+    else:
+        status = 'closed'
     normalized_tier = _normalize_tier(payload.tier)
 
     # Derive title when not provided to reflect the publishing course
@@ -976,7 +997,7 @@ def publish_quiz(payload: PublishQuizRequest) -> dict[str, Any]:
         'passing_score': payload.passing_score,
         'attempts': payload.attempts,
         'due_date': payload.due_date,
-        'open_date': _format_datetime(open_dt),
+        'open_date': _format_datetime(open_dt) if open_dt else None,
         'close_date': _format_datetime(close_dt),
         'status': status,
         'difficulty': payload.difficulty,
@@ -1299,7 +1320,28 @@ def list_available_quizzes(level: str | None = None, program: str | None = None,
                 continue
 
         quizzes.append(quiz_dict)
-    return {'quizzes': quizzes}
+
+    # Security: strip question details from locked entries so students cannot
+    # retrieve questions/answers for quizzes that haven't opened yet
+    safe_quizzes = []
+    for q in quizzes:
+        if q.get('is_locked'):
+            safe_q = {
+                'id':           q.get('id'),
+                'title':        q.get('title'),
+                'course':       q.get('course'),
+                'tier':         q.get('tier'),
+                'status':       q.get('status'),
+                'is_locked':    True,
+                'open_date':    q.get('open_date'),
+                'close_date':   q.get('close_date'),
+                # Intentionally omitted: questions, options, answers, passing_score, time_limit
+            }
+            safe_quizzes.append(safe_q)
+        else:
+            safe_quizzes.append(q)
+
+    return {'quizzes': safe_quizzes}
 
 
 @router.get('/completed')

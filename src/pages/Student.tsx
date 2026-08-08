@@ -99,30 +99,38 @@ function mapQuiz(quiz: Record<string, any>): Quiz {
   const openDt  = quiz.open_date  ? new Date(quiz.open_date)  : null
   const closeDt = quiz.close_date ? new Date(quiz.close_date) : null
 
-  // Locked: opening time hasn't arrived yet
-  const isLocked = !!(quiz.is_locked || quiz.status === 'scheduled' || (openDt && openDt > now))
-  // Closed: availability window has ended (close_date in the past)
-  const isClosed = !!(closeDt && closeDt < now)
+  // SECURITY: Trust backend is_locked flag as authoritative source of truth.
+  // Also lock if: no open_date at all (backend now sets status='scheduled' for these),
+  // or open_date is in the future, or status is 'scheduled'.
+  const isLocked = !!(quiz.is_locked
+    || quiz.status === 'scheduled'
+    || !quiz.open_date              // no open_date = not yet scheduled = locked
+    || (openDt && openDt > now)
+  )
+  // Closed: availability window has ended
+  const isClosed = !isLocked && !!(closeDt && closeDt < now)
 
   let status: string
   if (isLocked)        status = 'locked'
   else if (isClosed)   status = 'closed'
-  else                 status = quiz.status || 'available'
+  else                 status = 'available'
 
   const tier = inferTier(quiz)
   return {
     id: quiz.id,
     title: quiz.title,
     course: quiz.course,
-    questions: quiz.questions,
-    timeLimit: quiz.time_limit,
-    passingScore: quiz.passing_score,
-    attempts: quiz.attempts,
+    // SECURITY: these fields are stripped by backend for locked quizzes;
+    // fallback to 0/undefined so nothing leaks in the UI
+    questions: isLocked ? 0 : (quiz.questions ?? 0),
+    timeLimit: isLocked ? undefined : quiz.time_limit,
+    passingScore: isLocked ? undefined : quiz.passing_score,
+    attempts: isLocked ? undefined : quiz.attempts,
     dueDate: quiz.due_date,
     openDate: quiz.open_date,
     closeDate: quiz.close_date,
     status,
-    difficulty: quiz.difficulty,
+    difficulty: isLocked ? undefined : quiz.difficulty,
     tier,
     isLocked,
     isClosed,
@@ -1185,92 +1193,128 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                                 No {tierName.toLowerCase()} tier quizzes published yet.
                               </div>
                             ) : (
-                              tierQuizzes.map(q => (
-                                <div key={q.id} className={`bg-card border rounded-2xl p-6 transition-all shadow-xs ${
-                                  q.isLocked ? 'border-amber-500/30 bg-amber-500/5' :
-                                  q.isClosed ? 'border-danger/30 bg-danger/5' :
-                                  'border-border hover:border-primary/30'
+                              tierQuizzes.map(q => {
+                                const now = new Date()
+                                const openDt = q.openDate ? new Date(q.openDate) : null
+                                // Re-evaluate lock in render (handles minute-level auto-unlock)
+                                const renderLocked = q.isLocked || !q.openDate || (openDt ? openDt > now : true)
+
+                                return (
+                                <div key={q.id} className={`bg-card border rounded-2xl transition-all shadow-xs ${
+                                  renderLocked ? 'border-amber-500/40 bg-gradient-to-br from-amber-500/5 to-orange-500/5' :
+                                  q.isClosed   ? 'border-danger/30 bg-danger/5' :
+                                  'border-border hover:border-primary/30 hover:shadow-md'
                                 }`}>
-                                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                                    <div className="flex-1 space-y-2">
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <span className="font-mono text-xs font-bold text-primary">{q.course}</span>
-                                        <span className={`text-xs font-bold px-3 py-1 rounded-full ${
-                                          q.tier === 'Mastery' ? 'bg-purple-500/10 text-purple-600 border border-purple-500/20' :
-                                          q.tier === 'Intermediate' ? 'bg-amber-500/10 text-amber-600 border border-amber-500/20' :
-                                          'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
-                                        }`}>
-                                          {q.tier === 'Mastery'
-                                            ? <><i className="fa-solid fa-fire" /> Mastery Tier</>
-                                            : q.tier === 'Intermediate'
-                                            ? <><i className="fa-solid fa-bolt" /> Intermediate Tier</>
-                                            : <><i className="fa-solid fa-seedling" /> Foundational Tier</>}
-                                        </span>
 
-                                        {q.isLocked ? (
-                                          <span className="text-xs font-bold text-amber-600 bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-full inline-flex items-center gap-1.5">
-                                            <i className="fa-solid fa-lock" />
-                                            <span>Opens {q.openDate ? new Date(q.openDate).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'at scheduled time'}</span>
-                                          </span>
-                                        ) : q.isClosed ? (
-                                          <span className="text-xs font-bold text-danger bg-danger/10 border border-danger/20 px-3 py-1 rounded-full inline-flex items-center gap-1.5">
-                                            <i className="fa-solid fa-circle-xmark" />
-                                            <span>Closed {q.closeDate ? new Date(q.closeDate).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</span>
-                                          </span>
-                                        ) : (
-                                          <span className="text-xs font-bold text-emerald-600 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-full inline-flex items-center gap-1.5">
-                                            <i className="fa-solid fa-lock-open" />
-                                            <span>Open &amp; Ready</span>
-                                          </span>
-                                        )}
-                                      </div>
-
-                                      <h4 className="font-display font-bold text-foreground text-lg">{q.title}</h4>
-
-                                      <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground pt-1">
-                                        <span className="inline-flex items-center gap-1.5 font-medium"><i className="fa-solid fa-file-lines text-primary" /> {q.questions} Questions</span>
-                                        <span className="inline-flex items-center gap-1.5 font-medium"><i className="fa-solid fa-clock text-amber-500" /> {q.timeLimit || 20} Mins</span>
-                                        <span className="inline-flex items-center gap-1.5 font-medium"><i className="fa-solid fa-trophy text-emerald-500" /> Pass: {q.passingScore}%</span>
-                                        <span className="inline-flex items-center gap-1.5 font-medium"><i className="fa-solid fa-user-check text-blue-500" /> {q.attempts} Attempt</span>
-                                        {q.openDate && (
-                                          <span className="inline-flex items-center gap-1.5 font-medium"><i className="fa-solid fa-calendar-check text-muted-foreground" /> Opens: {new Date(q.openDate).toLocaleString()}</span>
-                                        )}
-                                        {q.closeDate && (
-                                          <span className="inline-flex items-center gap-1.5 font-medium"><i className="fa-solid fa-calendar-xmark text-danger" /> Closes: {new Date(q.closeDate).toLocaleString()}</span>
-                                        )}
+                                  {/* ── LOCKED: Show ONLY course/tier/opening time — hide ALL quiz details ── */}
+                                  {renderLocked ? (
+                                    <div className="p-6">
+                                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                        <div className="flex-1 space-y-3">
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <span className="font-mono text-xs font-bold text-primary">{q.course}</span>
+                                            <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                                              q.tier === 'Mastery'      ? 'bg-purple-500/10 text-purple-600 border border-purple-500/20' :
+                                              q.tier === 'Intermediate' ? 'bg-amber-500/10  text-amber-600  border border-amber-500/20'  :
+                                              'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                                            }`}>
+                                              {q.tier === 'Mastery'      ? <><i className="fa-solid fa-fire" /> Mastery</>      :
+                                               q.tier === 'Intermediate' ? <><i className="fa-solid fa-bolt" /> Intermediate</> :
+                                               <><i className="fa-solid fa-seedling" /> Foundational</>}
+                                            </span>
+                                            <span className="text-xs font-bold text-amber-700 bg-amber-500/10 border border-amber-500/30 px-3 py-0.5 rounded-full inline-flex items-center gap-1.5">
+                                              <i className="fa-solid fa-lock text-amber-600 text-[10px]" />
+                                              Upcoming
+                                            </span>
+                                          </div>
+                                          {/* Title blurred — prevent content sniffing */}
+                                          <h4 className="font-display font-bold text-foreground/50 text-base select-none" style={{ filter: 'blur(3px)' }}>
+                                            {q.title || 'Scheduled Quiz'}
+                                          </h4>
+                                          <p className="text-xs text-muted-foreground">
+                                            <i className="fa-solid fa-shield-halved mr-1 text-amber-600/70" />
+                                            Quiz content is hidden until the opening time to protect assessment integrity.
+                                          </p>
+                                          {q.openDate ? (
+                                            <div className="flex items-center gap-2 text-amber-700 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2 text-xs font-semibold w-fit">
+                                              <i className="fa-solid fa-calendar-check text-amber-600" />
+                                              Opens: {new Date(q.openDate).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                            </div>
+                                          ) : (
+                                            <div className="flex items-center gap-2 text-muted-foreground bg-muted/60 rounded-xl px-4 py-2 text-xs font-medium w-fit">
+                                              <i className="fa-solid fa-hourglass-half" />
+                                              Opening time to be announced by lecturer
+                                            </div>
+                                          )}
+                                        </div>
+                                        <div className="shrink-0">
+                                          <div className="flex flex-col items-center justify-center w-24 h-20 rounded-2xl bg-amber-500/10 border-2 border-amber-500/20 gap-1">
+                                            <i className="fa-solid fa-lock text-amber-500 text-xl" />
+                                            <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Locked</span>
+                                          </div>
+                                        </div>
                                       </div>
                                     </div>
-
-                                    <div className="shrink-0">
-                                      {q.isLocked ? (
-                                        <button disabled
-                                          className="w-full sm:w-auto font-bold px-6 py-3.5 rounded-xl text-xs bg-amber-500/10 text-amber-700 border-2 border-amber-500/30 cursor-not-allowed flex items-center justify-center gap-2 opacity-90"
-                                          title={`Locked until ${q.openDate ? new Date(q.openDate).toLocaleString() : 'scheduled opening time'}`}
-                                        >
-                                          <i className="fa-solid fa-lock text-amber-600 text-sm" />
-                                          <span>Quiz Locked</span>
-                                        </button>
-                                      ) : q.isClosed ? (
-                                        <button disabled
-                                          className="w-full sm:w-auto font-bold px-6 py-3.5 rounded-xl text-xs bg-danger/10 text-danger border-2 border-danger/30 cursor-not-allowed flex items-center justify-center gap-2 opacity-90"
-                                          title={`Closed since ${q.closeDate ? new Date(q.closeDate).toLocaleString() : 'the availability window'}`}
-                                        >
-                                          <i className="fa-solid fa-ban text-danger text-sm" />
-                                          <span>Quiz Closed</span>
-                                        </button>
-                                      ) : (
-                                        <button
-                                          onClick={() => { setActiveQuiz(q.id); setCurrentQ(0); setQuizAnswers({}) }}
-                                          className="w-full sm:w-auto font-bold px-6 py-3 rounded-xl text-xs bg-primary hover:bg-blue-950 text-white transition-all flex items-center justify-center gap-2 shadow-md"
-                                        >
-                                          <span>Start Assessment</span>
-                                          <i className="fa-solid fa-arrow-right" />
-                                        </button>
-                                      )}
+                                  ) : (
+                                  /* ── OPEN: Show full quiz details ── */
+                                    <div className="p-6">
+                                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                        <div className="flex-1 space-y-2">
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <span className="font-mono text-xs font-bold text-primary">{q.course}</span>
+                                            <span className={`text-xs font-bold px-3 py-1 rounded-full ${
+                                              q.tier === 'Mastery'      ? 'bg-purple-500/10 text-purple-600 border border-purple-500/20' :
+                                              q.tier === 'Intermediate' ? 'bg-amber-500/10  text-amber-600  border border-amber-500/20'  :
+                                              'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                                            }`}>
+                                              {q.tier === 'Mastery'      ? <><i className="fa-solid fa-fire" /> Mastery Tier</>      :
+                                               q.tier === 'Intermediate' ? <><i className="fa-solid fa-bolt" /> Intermediate Tier</> :
+                                               <><i className="fa-solid fa-seedling" /> Foundational Tier</>}
+                                            </span>
+                                            {q.isClosed ? (
+                                              <span className="text-xs font-bold text-danger bg-danger/10 border border-danger/20 px-3 py-1 rounded-full inline-flex items-center gap-1.5">
+                                                <i className="fa-solid fa-ban" />
+                                                <span>Closed</span>
+                                              </span>
+                                            ) : (
+                                              <span className="text-xs font-bold text-emerald-600 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-full inline-flex items-center gap-1.5">
+                                                <i className="fa-solid fa-lock-open" />
+                                                <span>Open &amp; Ready</span>
+                                              </span>
+                                            )}
+                                          </div>
+                                          <h4 className="font-display font-bold text-foreground text-lg">{q.title}</h4>
+                                          <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground pt-1">
+                                            {q.questions > 0  && <span className="inline-flex items-center gap-1.5 font-medium"><i className="fa-solid fa-file-lines text-primary" /> {q.questions} Questions</span>}
+                                            {q.timeLimit      && <span className="inline-flex items-center gap-1.5 font-medium"><i className="fa-solid fa-clock text-amber-500" /> {q.timeLimit} Mins</span>}
+                                            {q.passingScore !== undefined && <span className="inline-flex items-center gap-1.5 font-medium"><i className="fa-solid fa-trophy text-emerald-500" /> Pass: {q.passingScore}%</span>}
+                                            {q.attempts     !== undefined && <span className="inline-flex items-center gap-1.5 font-medium"><i className="fa-solid fa-user-check text-blue-500" /> {q.attempts} Attempt</span>}
+                                            {q.closeDate && <span className="inline-flex items-center gap-1.5 font-medium"><i className="fa-solid fa-calendar-xmark text-danger" /> Closes: {new Date(q.closeDate).toLocaleString()}</span>}
+                                          </div>
+                                        </div>
+                                        <div className="shrink-0">
+                                          {q.isClosed ? (
+                                            <button disabled className="w-full sm:w-auto font-bold px-6 py-3.5 rounded-xl text-xs bg-danger/10 text-danger border-2 border-danger/30 cursor-not-allowed flex items-center justify-center gap-2 opacity-90">
+                                              <i className="fa-solid fa-ban text-danger text-sm" />
+                                              <span>Quiz Closed</span>
+                                            </button>
+                                          ) : (
+                                            <button
+                                              onClick={() => { setActiveQuiz(q.id); setCurrentQ(0); setQuizAnswers({}) }}
+                                              className="w-full sm:w-auto font-bold px-6 py-3 rounded-xl text-xs bg-primary hover:bg-blue-950 text-white transition-all flex items-center justify-center gap-2 shadow-md"
+                                            >
+                                              <span>Start Assessment</span>
+                                              <i className="fa-solid fa-arrow-right" />
+                                            </button>
+                                          )}
+                                        </div>
+                                      </div>
                                     </div>
-                                  </div>
+                                  )}
                                 </div>
-                              ))
+                                )
+                              })
+
                             )}
                           </div>
                         )
