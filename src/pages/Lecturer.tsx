@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, type ChangeEvent } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback, type ChangeEvent } from 'react'
 import type { AppView } from '../App'
 import { API_BASE } from '../config'
 import ProfileModal from '../components/ProfileModal'
@@ -116,6 +116,10 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   const [generatedState, setGeneratedState] = useState<any[]>([])
   const [selectedCourse, setSelectedCourse] = useState<string>('')
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  // Course monitoring drill-down state
+  const [expandedCourse, setExpandedCourse] = useState<string | null>(null)
+  const [courseStudentProgress, setCourseStudentProgress] = useState<Record<string, any[]>>({})
+  const [loadingProgress, setLoadingProgress] = useState<Record<string, boolean>>({})
   const [selectedMaterialId, setSelectedMaterialId] = useState<string>('')
   const [uploading, setUploading] = useState(false)
   const [uploadMessage, setUploadMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -221,6 +225,24 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       setGenCourse(myCoursesState[0].code)
     }
   }, [myCoursesState, selectedCourse, genCourse])
+
+  const loadCourseStudentProgress = useCallback(async (courseCode: string) => {
+    setCourseStudentProgress(prev => {
+      if (prev[courseCode]) return prev  // already loaded
+      return prev
+    })
+    setLoadingProgress(p => ({ ...p, [courseCode]: true }))
+    try {
+      const res = await fetch(`${API_BASE}/api/courses/${encodeURIComponent(courseCode)}/student-progress`)
+      if (res.ok) {
+        const data = await res.json()
+        setCourseStudentProgress(p => ({ ...p, [courseCode]: data.students || [] }))
+      }
+    } catch { /* silently ignore */ }
+    finally {
+      setLoadingProgress(p => ({ ...p, [courseCode]: false }))
+    }
+  }, [])
 
   const handleSelectedFiles = (event: ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files ? Array.from(event.target.files) : []
@@ -706,7 +728,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                       </div>
                       <div className="grid grid-cols-3 gap-4 mb-3">
                         {[
-                          { label: 'Students', val: c.students },
+                          { label: 'Students', val: (c as any).student_count ?? 0 },
                           { label: 'Materials', val: c.materials },
                           { label: 'Quizzes', val: c.quizzes },
                         ].map((stat, j) => (
@@ -773,36 +795,224 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                   No courses are assigned to your account yet. Ask an administrator to assign courses to your profile.
                 </div>
               ) : (
-                <div className="bg-card border border-border rounded-2xl overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-border bg-muted/40">
-                        {['Code', 'Title', 'Level', 'Program', 'Students', 'Progress', 'Avg Score', 'Status'].map(h => (
-                          <th key={h} className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {myCoursesState.map(course => {
-                        const courseStudents = studentsByCourse.find(entry => entry.course.code === course.code)?.students ?? []
-                        return (
-                          <tr key={course.code} className="hover:bg-muted/30 transition-colors">
-                            <td className="px-5 py-4 text-foreground font-mono font-semibold text-sm">{course.code}</td>
-                            <td className="px-5 py-4 text-foreground text-sm">{course.title}</td>
-                            <td className="px-5 py-4 text-muted-foreground text-xs">{course.level || '—'}</td>
-                            <td className="px-5 py-4 text-muted-foreground text-xs">{course.program || '—'}</td>
-                            <td className="px-5 py-4 text-foreground font-semibold text-sm">
-                              {(course as any).student_count ?? courseStudents.length}
-                              <span className="ml-1 text-muted-foreground font-normal"> enrolled</span>
-                            </td>
-                            <td className="px-5 py-4 text-muted-foreground text-xs">{course.progress ?? 0}%</td>
-                            <td className="px-5 py-4 text-muted-foreground text-xs">{course.avg_score ?? course.avgScore ?? 0}%</td>
-                            <td className="px-5 py-4 text-sm"><span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${course.status === 'active' ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'}`}>{course.status || 'active'}</span></td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+                <div className="space-y-4">
+                  {myCoursesState.map(course => {
+                    const sc = (course as any).student_count ?? 0
+                    const isExpanded = expandedCourse === course.code
+                    const progressStudents = courseStudentProgress[course.code] || []
+                    const isLoading = loadingProgress[course.code]
+                    const avgScore = course.avg_score ?? course.avgScore ?? 0
+                    const tierColor = {
+                      border: 'border-border',
+                    }
+
+                    return (
+                      <div key={course.code} className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm transition-all">
+                        {/* ── Course Header Card ── */}
+                        <div className="p-5">
+                          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-4">
+                            <div className="flex-1">
+                              <div className="flex flex-wrap items-center gap-2 mb-1">
+                                <span className="font-mono text-xs font-bold text-primary">{course.code}</span>
+                                <span className="text-xs bg-secondary text-secondary-foreground px-2 py-0.5 rounded-full">{course.level || '—'}</span>
+                                <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-full">{course.program || '—'}</span>
+                                <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                                  course.status === 'active' ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'
+                                }`}>{course.status || 'active'}</span>
+                              </div>
+                              <h4 className="font-display font-bold text-foreground text-lg leading-tight">{course.title}</h4>
+                            </div>
+                          </div>
+
+                          {/* 3 Stat Boxes */}
+                          <div className="grid grid-cols-3 gap-3 mb-4">
+                            <div className="bg-primary/5 border border-primary/10 rounded-xl py-3 text-center">
+                              <p className="text-xl font-bold font-mono text-primary">{sc}</p>
+                              <p className="text-xs text-muted-foreground mt-0.5">Students</p>
+                            </div>
+                            <div className="bg-muted/50 rounded-xl py-3 text-center">
+                              <p className="text-xl font-bold font-mono text-foreground">{course.materials ?? 0}</p>
+                              <p className="text-xs text-muted-foreground mt-0.5">Materials</p>
+                            </div>
+                            <div className="bg-muted/50 rounded-xl py-3 text-center">
+                              <p className="text-xl font-bold font-mono text-foreground">{course.quizzes_total ?? 0}</p>
+                              <p className="text-xs text-muted-foreground mt-0.5">Quizzes</p>
+                            </div>
+                          </div>
+
+                          {/* Avg Score + Completion */}
+                          <div className="space-y-2 mb-4">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground font-medium">Student Completion</span>
+                              <span className="text-muted-foreground">Avg Score: <span className="font-mono font-bold text-foreground">{avgScore > 0 ? `${avgScore}%` : '—'}</span></span>
+                            </div>
+                            <ProgressBar value={course.progress ?? 0} />
+                          </div>
+
+                          {/* Monitor Students toggle */}
+                          <button
+                            onClick={() => {
+                              if (isExpanded) {
+                                setExpandedCourse(null)
+                              } else {
+                                setExpandedCourse(course.code)
+                                loadCourseStudentProgress(course.code)
+                              }
+                            }}
+                            className="w-full flex items-center justify-between gap-2 bg-primary/5 hover:bg-primary/10 border border-primary/15 text-primary font-semibold text-sm px-4 py-2.5 rounded-xl transition-all"
+                          >
+                            <span className="flex items-center gap-2">
+                              <i className="fa-solid fa-users-viewfinder" />
+                              Monitor Enrolled Students
+                              {sc > 0 && <span className="bg-primary text-white text-xs font-bold px-2 py-0.5 rounded-full">{sc}</span>}
+                            </span>
+                            <i className={`fa-solid fa-chevron-${isExpanded ? 'up' : 'down'} text-xs`} />
+                          </button>
+                        </div>
+
+                        {/* ── Student Progress Drill-Down ── */}
+                        {isExpanded && (
+                          <div className="border-t border-border bg-muted/20">
+                            {isLoading ? (
+                              <div className="flex items-center justify-center gap-3 py-10 text-muted-foreground text-sm">
+                                <span className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                                Loading student progress...
+                              </div>
+                            ) : progressStudents.length === 0 ? (
+                              <div className="px-6 py-8 text-center text-sm text-muted-foreground">
+                                <i className="fa-solid fa-user-slash text-2xl mb-2 opacity-30 block" />
+                                No students are currently enrolled in this course.
+                              </div>
+                            ) : (
+                              <div className="divide-y divide-border">
+                                {/* Table Header */}
+                                <div className="hidden sm:grid grid-cols-12 gap-2 px-5 py-3 bg-muted/40">
+                                  <span className="col-span-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Student</span>
+                                  <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Quiz Progress</span>
+                                  <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Avg Score</span>
+                                  <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Passed</span>
+                                  <span className="col-span-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Status</span>
+                                </div>
+
+                                {progressStudents.map(stu => {
+                                  const qDone  = stu.quizzes_done  ?? 0
+                                  const qTotal = stu.quizzes_total ?? 0
+                                  const qPct   = qTotal > 0 ? Math.round((qDone / qTotal) * 100) : 0
+                                  const matTotal = stu.total_materials ?? 0
+                                  const scoreColor = (stu.avg_score ?? 0) >= 70 ? 'text-success' : (stu.avg_score ?? 0) >= 50 ? 'text-warning' : 'text-danger'
+
+                                  return (
+                                    <div key={stu.id} className="px-5 py-4 hover:bg-muted/30 transition-colors">
+                                      {/* Mobile layout */}
+                                      <div className="sm:hidden space-y-3">
+                                        <div className="flex items-center justify-between">
+                                          <div>
+                                            <p className="font-semibold text-foreground text-sm">{stu.name}</p>
+                                            <p className="text-xs text-muted-foreground">{stu.email}</p>
+                                          </div>
+                                          <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${
+                                            stu.status === 'active' ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'
+                                          }`}>{stu.status || 'active'}</span>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3 text-xs">
+                                          <div className="bg-card rounded-lg p-2.5 border border-border">
+                                            <p className="text-muted-foreground mb-1">Quiz Progress</p>
+                                            <div className="flex items-center gap-2">
+                                              <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                                                <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${qPct}%` }} />
+                                              </div>
+                                              <span className="font-mono font-bold text-foreground">{qDone}/{qTotal}</span>
+                                            </div>
+                                          </div>
+                                          <div className="bg-card rounded-lg p-2.5 border border-border">
+                                            <p className="text-muted-foreground mb-1">Avg Score</p>
+                                            <p className={`font-mono font-bold text-lg ${scoreColor}`}>{stu.avg_score > 0 ? `${stu.avg_score}%` : '—'}</p>
+                                          </div>
+                                        </div>
+                                        {/* Individual quiz attempts */}
+                                        {(stu.attempts || []).length > 0 && (
+                                          <div className="space-y-1.5">
+                                            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Quiz Attempts</p>
+                                            {(stu.attempts || []).map((att: any, ai: number) => (
+                                              <div key={ai} className="flex items-center justify-between bg-card border border-border rounded-lg px-3 py-2 text-xs">
+                                                <div>
+                                                  <span className={`font-bold mr-1.5 ${
+                                                    att.quiz_tier === 'Mastery' ? 'text-purple-600' :
+                                                    att.quiz_tier === 'Intermediate' ? 'text-amber-600' : 'text-emerald-600'
+                                                  }`}>[{att.quiz_tier}]</span>
+                                                  <span className="text-muted-foreground">{att.quiz_title}</span>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                  <span className="font-mono font-bold text-foreground">{att.score}/{att.out_of}</span>
+                                                  <span className={`font-bold ${att.passed ? 'text-success' : 'text-danger'}`}>{att.grade}</span>
+                                                  {att.passed
+                                                    ? <i className="fa-solid fa-circle-check text-success" />
+                                                    : <i className="fa-solid fa-circle-xmark text-danger" />}
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+
+                                      {/* Desktop layout */}
+                                      <div className="hidden sm:grid grid-cols-12 gap-2 items-center">
+                                        <div className="col-span-3">
+                                          <p className="font-semibold text-foreground text-sm">{stu.name}</p>
+                                          <p className="text-xs text-muted-foreground">{stu.email}</p>
+                                        </div>
+                                        <div className="col-span-2">
+                                          <div className="flex items-center gap-2">
+                                            <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                                              <div className={`h-full rounded-full transition-all ${
+                                                qPct >= 80 ? 'bg-success' : qPct >= 50 ? 'bg-warning' : 'bg-primary'
+                                              }`} style={{ width: `${qPct}%` }} />
+                                            </div>
+                                            <span className="text-xs font-mono font-bold text-foreground shrink-0">{qDone}/{qTotal}</span>
+                                          </div>
+                                          {(stu.attempts || []).length > 0 && (
+                                            <div className="mt-1.5 space-y-1">
+                                              {(stu.attempts || []).map((att: any, ai: number) => (
+                                                <div key={ai} className="flex items-center gap-1.5 text-[10px]">
+                                                  <span className={`font-bold ${
+                                                    att.quiz_tier === 'Mastery' ? 'text-purple-600' :
+                                                    att.quiz_tier === 'Intermediate' ? 'text-amber-600' : 'text-emerald-600'
+                                                  }`}>{att.quiz_tier?.slice(0,1) ?? '?'}</span>
+                                                  <span className="text-muted-foreground truncate max-w-[80px]">{att.quiz_title}</span>
+                                                  <span className="font-mono font-bold text-foreground ml-auto">{att.score}/{att.out_of}</span>
+                                                  {att.passed
+                                                    ? <i className="fa-solid fa-circle-check text-success shrink-0" />
+                                                    : <i className="fa-solid fa-circle-xmark text-danger shrink-0" />}
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                        <div className="col-span-2">
+                                          <p className={`text-base font-mono font-bold ${scoreColor}`}>{stu.avg_score > 0 ? `${stu.avg_score}%` : '—'}</p>
+                                        </div>
+                                        <div className="col-span-2">
+                                          <span className="text-sm font-semibold text-foreground">{stu.quizzes_passed ?? 0}</span>
+                                          <span className="text-xs text-muted-foreground"> / {qTotal} passed</span>
+                                        </div>
+                                        <div className="col-span-3">
+                                          <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                            stu.status === 'active' ? 'bg-success/10 text-success' :
+                                            stu.status === 'suspended' ? 'bg-warning/10 text-warning' :
+                                            'bg-danger/10 text-danger'
+                                          }`}>{stu.status || 'active'}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>

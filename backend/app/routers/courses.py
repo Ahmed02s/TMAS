@@ -198,3 +198,89 @@ def delete_course(course_id: str):
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase delete course failed'))
     return {}
+
+
+@router.get('/{course_code}/student-progress')
+def get_course_student_progress(course_code: str) -> dict[str, Any]:
+    """Return each enrolled student with their quiz attempts and material count for this course."""
+    ensure_supabase_enabled()
+
+    # 1. Fetch course to get level + program
+    course_resp = supabase.table('courses').select('level,program,title').ilike('code', course_code).limit(1).execute()
+    if supabase_failed(course_resp) or not course_resp.data:
+        raise HTTPException(status_code=404, detail='Course not found')
+    course = course_resp.data[0]
+    c_level   = str(course.get('level')   or '').strip().lower()
+    c_program = str(course.get('program') or '').strip().lower()
+
+    # 2. Fetch enrolled students (match by level + program, case-insensitive)
+    stu_resp = supabase.table('users').select('id,name,email,level,program,status').eq('role', 'student').execute()
+    if supabase_failed(stu_resp):
+        raise HTTPException(status_code=502, detail=supabase_error_message(stu_resp, 'Supabase fetch students failed'))
+
+    students = [
+        s for s in (stu_resp.data or [])
+        if str(s.get('level') or '').strip().lower() == c_level
+        and (not c_program or str(s.get('program') or '').strip().lower() == c_program)
+    ]
+
+    if not students:
+        return {'students': [], 'course': course_code}
+
+    student_ids = [s['id'] for s in students]
+
+    # 3. Fetch all quizzes for this course
+    quiz_resp = supabase.table('quizzes').select('id,title,tier,passing_score').ilike('course', course_code).execute()
+    quizzes = quiz_resp.data or [] if not supabase_failed(quiz_resp) else []
+    quiz_ids = [q['id'] for q in quizzes]
+    quiz_map = {q['id']: q for q in quizzes}
+
+    # 4. Fetch all quiz attempts for enrolled students on this course's quizzes
+    attempts_by_student: dict[str, list[dict]] = {sid: [] for sid in student_ids}
+    if quiz_ids:
+        att_resp = supabase.table('quiz_attempts') \
+            .select('student_id,quiz_id,score,out_of,grade,passed,status,attempted_at') \
+            .in_('student_id', student_ids) \
+            .in_('quiz_id', quiz_ids) \
+            .execute()
+        for att in (att_resp.data or [] if not supabase_failed(att_resp) else []):
+            sid = att.get('student_id')
+            if sid in attempts_by_student:
+                q = quiz_map.get(att.get('quiz_id'), {})
+                att['quiz_title'] = q.get('title', 'Quiz')
+                att['quiz_tier']  = q.get('tier', '—')
+                attempts_by_student[sid].append(att)
+
+    # 5. Fetch materials count for this course
+    mat_resp = supabase.table('materials').select('id').ilike('course', course_code).execute()
+    total_materials = len(mat_resp.data or []) if not supabase_failed(mat_resp) else 0
+
+    # 6. Build per-student summary
+    result = []
+    for s in students:
+        sid = s['id']
+        attempts = attempts_by_student.get(sid, [])
+        completed = [a for a in attempts if a.get('status') == 'completed']
+        scores    = [a.get('score', 0) for a in completed]
+        avg_score = round(sum(scores) / len(scores)) if scores else 0
+        quizzes_done = len(set(a.get('quiz_id') for a in completed))
+        passed_count = sum(1 for a in completed if a.get('passed'))
+        quiz_progress = round((quizzes_done / len(quizzes)) * 100) if quizzes else 0
+
+        result.append({
+            'id':             sid,
+            'name':           s.get('name', '—'),
+            'email':          s.get('email', '—'),
+            'level':          s.get('level', '—'),
+            'program':        s.get('program', '—'),
+            'status':         s.get('status', 'active'),
+            'quiz_progress':  quiz_progress,
+            'quizzes_done':   quizzes_done,
+            'quizzes_total':  len(quizzes),
+            'quizzes_passed': passed_count,
+            'avg_score':      avg_score,
+            'total_materials':total_materials,
+            'attempts':       attempts,
+        })
+
+    return {'students': result, 'course': course_code, 'total_materials': total_materials}
