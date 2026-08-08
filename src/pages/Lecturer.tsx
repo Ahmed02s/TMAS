@@ -120,6 +120,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   const [expandedCourse, setExpandedCourse] = useState<string | null>(null)
   const [courseStudentProgress, setCourseStudentProgress] = useState<Record<string, any[]>>({})
   const [loadingProgress, setLoadingProgress] = useState<Record<string, boolean>>({})
+  const [progressError, setProgressError] = useState<Record<string, string>>({})
   const [selectedMaterialId, setSelectedMaterialId] = useState<string>('')
   const [uploading, setUploading] = useState(false)
   const [uploadMessage, setUploadMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -226,20 +227,28 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     }
   }, [myCoursesState, selectedCourse, genCourse])
 
-  const loadCourseStudentProgress = useCallback(async (courseCode: string) => {
-    setCourseStudentProgress(prev => {
-      if (prev[courseCode]) return prev  // already loaded
-      return prev
-    })
+  const loadCourseStudentProgress = useCallback(async (courseCode: string, level?: string, program?: string) => {
     setLoadingProgress(p => ({ ...p, [courseCode]: true }))
+    setProgressError(p => ({ ...p, [courseCode]: '' }))
     try {
-      const res = await fetch(`${API_BASE}/api/courses/${encodeURIComponent(courseCode)}/student-progress`)
+      const params = new URLSearchParams()
+      if (level)   params.set('level',   level)
+      if (program) params.set('program', program)
+      const url = `${API_BASE}/api/courses/${encodeURIComponent(courseCode)}/student-progress${params.toString() ? '?' + params.toString() : ''}`
+      const res = await fetch(url)
       if (res.ok) {
         const data = await res.json()
         setCourseStudentProgress(p => ({ ...p, [courseCode]: data.students || [] }))
+        if (data.error) setProgressError(p => ({ ...p, [courseCode]: data.error }))
+      } else {
+        const err = await res.json().catch(() => ({}))
+        setProgressError(p => ({ ...p, [courseCode]: err.detail || `Error ${res.status}` }))
+        setCourseStudentProgress(p => ({ ...p, [courseCode]: [] }))
       }
-    } catch { /* silently ignore */ }
-    finally {
+    } catch (e: any) {
+      setProgressError(p => ({ ...p, [courseCode]: e?.message || 'Network error' }))
+      setCourseStudentProgress(p => ({ ...p, [courseCode]: [] }))
+    } finally {
       setLoadingProgress(p => ({ ...p, [courseCode]: false }))
     }
   }, [])
@@ -729,8 +738,8 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                       <div className="grid grid-cols-3 gap-4 mb-3">
                         {[
                           { label: 'Students', val: (c as any).student_count ?? 0 },
-                          { label: 'Materials', val: c.materials },
-                          { label: 'Quizzes', val: c.quizzes },
+                          { label: 'Materials', val: c.materials ?? 0 },
+                          { label: 'Quizzes', val: (c as any).quizzes_total ?? 0 },
                         ].map((stat, j) => (
                           <div key={j} className="text-center bg-muted/50 rounded-xl py-2">
                             <p className="text-lg font-bold font-mono text-foreground">{stat.val}</p>
@@ -856,7 +865,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                 setExpandedCourse(null)
                               } else {
                                 setExpandedCourse(course.code)
-                                loadCourseStudentProgress(course.code)
+                                loadCourseStudentProgress(course.code, course.level, course.program)
                               }
                             }}
                             className="w-full flex items-center justify-between gap-2 bg-primary/5 hover:bg-primary/10 border border-primary/15 text-primary font-semibold text-sm px-4 py-2.5 rounded-xl transition-all"
@@ -873,15 +882,49 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                         {/* ── Student Progress Drill-Down ── */}
                         {isExpanded && (
                           <div className="border-t border-border bg-muted/20">
+                            {/* Panel header with refresh */}
+                            <div className="flex items-center justify-between px-5 py-2.5 bg-muted/40 border-b border-border">
+                              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Student Progress — {course.code}</span>
+                              <button
+                                onClick={() => loadCourseStudentProgress(course.code, course.level, course.program)}
+                                disabled={isLoading}
+                                className="text-xs text-primary font-medium hover:underline flex items-center gap-1 disabled:opacity-50"
+                              >
+                                <i className={`fa-solid fa-rotate-right text-[10px] ${isLoading ? 'animate-spin' : ''}`} />
+                                Refresh
+                              </button>
+                            </div>
+
                             {isLoading ? (
                               <div className="flex items-center justify-center gap-3 py-10 text-muted-foreground text-sm">
                                 <span className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
                                 Loading student progress...
                               </div>
+                            ) : progressError[course.code] ? (
+                              <div className="px-6 py-6 space-y-2">
+                                <div className="flex items-start gap-2 text-sm text-danger">
+                                  <i className="fa-solid fa-triangle-exclamation mt-0.5" />
+                                  <span>{progressError[course.code]}</span>
+                                </div>
+                                <p className="text-xs text-muted-foreground">Course: {course.code} | Level: {course.level || '—'} | Program: {course.program || '—'}</p>
+                              </div>
+                            ) : progressStudents.length === 0 && courseStudentProgress[course.code] !== undefined ? (
+                              <div className="px-6 py-8 text-center">
+                                <i className="fa-solid fa-user-slash text-2xl mb-2 opacity-30 block text-muted-foreground" />
+                                {sc > 0 ? (
+                                  <>
+                                    <p className="text-sm font-semibold text-foreground mb-1">{sc} student{sc === 1 ? '' : 's'} enrolled by course level</p>
+                                    <p className="text-xs text-muted-foreground">Student records matched level <strong>{course.level}</strong>{course.program ? ` / ${course.program}` : ''} but detailed profiles are not fully linked yet.</p>
+                                    <p className="text-xs text-muted-foreground mt-1">Students in the Users table with level <strong>{course.level}</strong> will appear here once they log in.</p>
+                                  </>
+                                ) : (
+                                  <p className="text-sm text-muted-foreground">No students are currently enrolled in this course.</p>
+                                )}
+                              </div>
                             ) : progressStudents.length === 0 ? (
-                              <div className="px-6 py-8 text-center text-sm text-muted-foreground">
-                                <i className="fa-solid fa-user-slash text-2xl mb-2 opacity-30 block" />
-                                No students are currently enrolled in this course.
+                              <div className="flex items-center justify-center gap-3 py-10 text-muted-foreground text-sm">
+                                <span className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                                Loading...
                               </div>
                             ) : (
                               <div className="divide-y divide-border">

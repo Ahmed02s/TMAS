@@ -672,19 +672,19 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
             <div className="space-y-6">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                 {[
-                  { label: 'Total Students', val: String(students.length), sub: 'Current student records', color: 'text-blue-600', bg: 'bg-blue-50' },
-                  { label: 'Active Courses', val: String(allCourses.filter(course => course.status.toLowerCase() === 'active').length), sub: 'Across levels', color: 'text-purple-600', bg: 'bg-purple-50' },
-                  { label: 'Pending Approvals', val: String(visiblePending.length), sub: 'Lecturers waiting', color: 'text-amber-600', bg: 'bg-amber-50' },
-                  { label: 'Avg Completion Rate', val: `${students.length ? Math.round(students.reduce((sum, student) => sum + (Number((student as any).completion) || 0), 0) / students.length) : 0}%`, sub: 'Estimated progress average', color: 'text-green-600', bg: 'bg-green-50' },
+                  { label: 'Total Students', val: String(students.length), sub: 'Current student records', color: 'text-blue-600', bg: 'bg-blue-50', icon: 'fa-users' },
+                  { label: 'Active Courses', val: String(allCourses.filter(course => course.status.toLowerCase() === 'active').length), sub: 'Across all levels', color: 'text-purple-600', bg: 'bg-purple-50', icon: 'fa-book-open' },
+                  { label: 'Approved Lecturers', val: String(approvedLecturers.length), sub: `${visiblePending.length} pending approval`, color: 'text-emerald-600', bg: 'bg-emerald-50', icon: 'fa-chalkboard-teacher' },
+                  { label: 'Pending Approvals', val: String(visiblePending.length), sub: 'Lecturers awaiting review', color: 'text-amber-600', bg: 'bg-amber-50', icon: 'fa-hourglass-half' },
                 ].map((s, i) => (
-                  <div key={i} className="bg-card border border-border rounded-2xl p-5">
-                    <div className={`inline-flex p-2 rounded-xl ${s.bg} mb-3`}>
-                      <div className={`w-4 h-4 rounded-full ${s.color.replace('text-', 'bg-').replace('-600', '-500')}`} />
+                    <div key={i} className="bg-card border border-border rounded-2xl p-5">
+                      <div className={`inline-flex p-2.5 rounded-xl ${s.bg} mb-3`}>
+                        <i className={`fa-solid ${(s as any).icon || 'fa-circle'} ${s.color} text-sm`} />
+                      </div>
+                      <p className="text-2xl font-bold font-mono text-foreground">{s.val}</p>
+                      <p className="text-sm font-medium text-foreground mt-0.5">{s.label}</p>
+                      <p className="text-xs text-muted-foreground mt-1">{s.sub}</p>
                     </div>
-                    <p className="text-2xl font-bold font-mono text-foreground">{s.val}</p>
-                    <p className="text-sm font-medium text-foreground mt-0.5">{s.label}</p>
-                    <p className="text-xs text-muted-foreground mt-1">{s.sub}</p>
-                  </div>
                 ))}
               </div>
 
@@ -963,7 +963,26 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
                         <td className="px-4 py-3.5 font-mono text-xs font-bold text-primary">{c.code}</td>
                         <td className="px-4 py-3.5 text-foreground font-medium max-w-48 truncate">{c.title}</td>
                         <td className="px-4 py-3.5"><span className="text-xs bg-secondary text-secondary-foreground px-2 py-0.5 rounded-full font-medium">{c.level}</span></td>
-                        <td className="px-4 py-3.5 text-muted-foreground text-xs">{c.lecturer}</td>
+                        <td className="px-4 py-3.5 text-muted-foreground text-xs">
+                          {(() => {
+                            const lecName = (c.lecturer || '').trim().toLowerCase()
+                            const isRegistered = approvedLecturers.some(l => l.name.trim().toLowerCase() === lecName)
+                            return (
+                              <span className="flex items-center gap-1.5">
+                                <span>{c.lecturer || '—'}</span>
+                                {c.lecturer && !isRegistered && (
+                                  <span title="Lecturer not found in registered accounts" className="inline-flex items-center gap-1 text-[10px] bg-warning/10 text-warning border border-warning/20 px-1.5 py-0.5 rounded-full font-semibold">
+                                    <i className="fa-solid fa-triangle-exclamation text-[8px]" />
+                                    Unregistered
+                                  </span>
+                                )}
+                                {c.lecturer && isRegistered && (
+                                  <i className="fa-solid fa-circle-check text-success text-[10px]" title="Registered lecturer" />
+                                )}
+                              </span>
+                            )
+                          })()}
+                        </td>
                         <td className="px-4 py-3.5 text-foreground font-mono font-semibold text-sm">{c.enrolled}</td>
                         <td className="px-4 py-3.5"><Badge variant={c.status === 'Active' ? 'success' : 'default'}>{c.status}</Badge></td>
                         <td className="px-4 py-3.5">

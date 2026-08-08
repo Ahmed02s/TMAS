@@ -201,19 +201,40 @@ def delete_course(course_id: str):
 
 
 @router.get('/{course_code}/student-progress')
-def get_course_student_progress(course_code: str) -> dict[str, Any]:
+def get_course_student_progress(
+    course_code: str,
+    level: str | None = None,
+    program: str | None = None,
+) -> dict[str, Any]:
     """Return each enrolled student with their quiz attempts and material count for this course."""
     ensure_supabase_enabled()
 
-    # 1. Fetch course to get level + program
-    course_resp = supabase.table('courses').select('level,program,title').ilike('code', course_code).limit(1).execute()
-    if supabase_failed(course_resp) or not course_resp.data:
-        raise HTTPException(status_code=404, detail='Course not found')
-    course = course_resp.data[0]
-    c_level   = str(course.get('level')   or '').strip().lower()
-    c_program = str(course.get('program') or '').strip().lower()
+    # 1. Determine level + program — try DB lookup first, fall back to query params
+    c_level   = str(level   or '').strip().lower()
+    c_program = str(program or '').strip().lower()
 
-    # 2. Fetch enrolled students (match by level + program, case-insensitive)
+    if not c_level:
+        # Try exact match first, then ilike
+        for selector in [
+            lambda: supabase.table('courses').select('level,program,title').eq('code', course_code).limit(1).execute(),
+            lambda: supabase.table('courses').select('level,program,title').ilike('code', course_code).limit(1).execute(),
+            lambda: supabase.table('courses').select('level,program,title').ilike('code', f'%{course_code.strip()}%').limit(1).execute(),
+        ]:
+            try:
+                r = selector()
+                if not supabase_failed(r) and r.data:
+                    c_level   = str(r.data[0].get('level')   or '').strip().lower()
+                    c_program = str(r.data[0].get('program') or '').strip().lower()
+                    if c_level:
+                        break
+            except Exception:
+                continue
+
+    if not c_level:
+        # Return empty but with a helpful message rather than 404
+        return {'students': [], 'course': course_code, 'error': 'Course level could not be determined'}
+
+    # 2. Fetch ALL students and filter by level/program
     stu_resp = supabase.table('users').select('id,name,email,level,program,status').eq('role', 'student').execute()
     if supabase_failed(stu_resp):
         raise HTTPException(status_code=502, detail=supabase_error_message(stu_resp, 'Supabase fetch students failed'))
@@ -225,46 +246,72 @@ def get_course_student_progress(course_code: str) -> dict[str, Any]:
     ]
 
     if not students:
-        return {'students': [], 'course': course_code}
+        return {'students': [], 'course': course_code, 'debug': {'c_level': c_level, 'c_program': c_program}}
 
     student_ids = [s['id'] for s in students]
 
-    # 3. Fetch all quizzes for this course
-    quiz_resp = supabase.table('quizzes').select('id,title,tier,passing_score').ilike('course', course_code).execute()
-    quizzes = quiz_resp.data or [] if not supabase_failed(quiz_resp) else []
+    # 3. Fetch all quizzes for this course — try multiple matching strategies
+    quizzes: list[dict] = []
+    for q_selector in [
+        lambda: supabase.table('quizzes').select('id,title,tier,passing_score').eq('course', course_code).execute(),
+        lambda: supabase.table('quizzes').select('id,title,tier,passing_score').ilike('course', course_code).execute(),
+    ]:
+        try:
+            r = q_selector()
+            if not supabase_failed(r) and r.data:
+                quizzes = r.data
+                break
+        except Exception:
+            continue
+
     quiz_ids = [q['id'] for q in quizzes]
     quiz_map = {q['id']: q for q in quizzes}
 
-    # 4. Fetch all quiz attempts for enrolled students on this course's quizzes
-    attempts_by_student: dict[str, list[dict]] = {sid: [] for sid in student_ids}
+    # 4. Fetch quiz attempts for enrolled students
+    attempts_by_student: dict[str, list[dict]] = {str(sid): [] for sid in student_ids}
     if quiz_ids:
-        att_resp = supabase.table('quiz_attempts') \
-            .select('student_id,quiz_id,score,out_of,grade,passed,status,attempted_at') \
-            .in_('student_id', student_ids) \
-            .in_('quiz_id', quiz_ids) \
-            .execute()
-        for att in (att_resp.data or [] if not supabase_failed(att_resp) else []):
-            sid = att.get('student_id')
-            if sid in attempts_by_student:
-                q = quiz_map.get(att.get('quiz_id'), {})
-                att['quiz_title'] = q.get('title', 'Quiz')
-                att['quiz_tier']  = q.get('tier', '—')
-                attempts_by_student[sid].append(att)
+        try:
+            att_resp = supabase.table('quiz_attempts') \
+                .select('student_id,quiz_id,score,out_of,grade,passed,status,attempted_at') \
+                .in_('student_id', student_ids) \
+                .in_('quiz_id', quiz_ids) \
+                .execute()
+            for att in (att_resp.data or [] if not supabase_failed(att_resp) else []):
+                sid = str(att.get('student_id', ''))
+                if sid in attempts_by_student:
+                    q = quiz_map.get(att.get('quiz_id'), {})
+                    att['quiz_title'] = q.get('title', 'Quiz')
+                    att['quiz_tier']  = q.get('tier', '—')
+                    attempts_by_student[sid].append(att)
+        except Exception:
+            pass
 
     # 5. Fetch materials count for this course
-    mat_resp = supabase.table('materials').select('id').ilike('course', course_code).execute()
-    total_materials = len(mat_resp.data or []) if not supabase_failed(mat_resp) else 0
+    total_materials = 0
+    for m_selector in [
+        lambda: supabase.table('materials').select('id').eq('course', course_code).execute(),
+        lambda: supabase.table('materials').select('id').ilike('course', course_code).execute(),
+    ]:
+        try:
+            r = m_selector()
+            if not supabase_failed(r):
+                total_materials = len(r.data or [])
+                break
+        except Exception:
+            continue
 
     # 6. Build per-student summary
     result = []
     for s in students:
-        sid = s['id']
+        sid = str(s['id'])
         attempts = attempts_by_student.get(sid, [])
         completed = [a for a in attempts if a.get('status') == 'completed']
+        # Also count non-completed attempts as done (some systems mark final without completing)
+        all_attempts = attempts
         scores    = [a.get('score', 0) for a in completed]
         avg_score = round(sum(scores) / len(scores)) if scores else 0
-        quizzes_done = len(set(a.get('quiz_id') for a in completed))
-        passed_count = sum(1 for a in completed if a.get('passed'))
+        quizzes_done  = len(set(a.get('quiz_id') for a in completed))
+        passed_count  = sum(1 for a in completed if a.get('passed'))
         quiz_progress = round((quizzes_done / len(quizzes)) * 100) if quizzes else 0
 
         result.append({
@@ -280,7 +327,7 @@ def get_course_student_progress(course_code: str) -> dict[str, Any]:
             'quizzes_passed': passed_count,
             'avg_score':      avg_score,
             'total_materials':total_materials,
-            'attempts':       attempts,
+            'attempts':       all_attempts,
         })
 
     return {'students': result, 'course': course_code, 'total_materials': total_materials}
