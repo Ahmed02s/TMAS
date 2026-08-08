@@ -552,6 +552,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   }, [availableQuizzes])
 
   const availableQuizzesCount = useMemo(() => visibleQuizzes.filter(q => q.status === 'available').length, [visibleQuizzes])
+  const publishedQuizzesCount = useMemo(() => visibleQuizzes.length, [visibleQuizzes])
   const completedQuizzesCount = useMemo(() => completedQuizzes.length, [completedQuizzes])
 
   const activeQuizQuestions = useMemo(() => Array.isArray(quizQuestions) ? quizQuestions : [], [quizQuestions])
@@ -926,9 +927,9 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
               >
                 <i className={`fa-solid ${item.iconClass} w-4`} />
                 {item.label}
-                {item.key === 'quizzes' && availableQuizzesCount > 0 && (
+                {item.key === 'quizzes' && (availableQuizzesCount > 0 || publishedQuizzesCount > 0) && (
                   <span className="ml-auto bg-accent text-white text-xs rounded-full px-1.5 py-0.5 leading-none">
-                    {availableQuizzesCount}
+                    {availableQuizzesCount > 0 ? availableQuizzesCount : publishedQuizzesCount}
                   </span>
                 )}
               </button>
@@ -944,7 +945,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
             <div className="flex-1 min-w-0">
               <p className="text-sidebar-foreground text-xs font-semibold truncate">{studentName}</p>
               <p className="text-sidebar-muted text-xs truncate">{studentLevelLabel} Student</p>
-              <p className="text-sidebar-muted text-[11px] mt-1 truncate">{availableQuizzesCount} quiz{availableQuizzesCount === 1 ? '' : 'zes'} available</p>
+              <p className="text-sidebar-muted text-[11px] mt-1 truncate">{publishedQuizzesCount} quiz{publishedQuizzesCount === 1 ? '' : 'zes'} published</p>
             </div>
             <button onClick={() => {
               localStorage.removeItem('tmas-token')
@@ -1027,7 +1028,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                 <p className="text-primary-foreground/70 text-sm mb-1">Good morning,</p>
                 <h2 className="font-display text-3xl text-white mb-2">{studentName}</h2>
                 <p className="text-primary-foreground/70 text-sm">
-                  You have <span className="text-accent font-semibold">{availableQuizzesCount} quizzes</span> available and your overall progress is <span className="text-white font-semibold">{overallProgress}%</span>.
+                  You have <span className="text-accent font-semibold">{publishedQuizzesCount} quizzes</span> published and your overall progress is <span className="text-white font-semibold">{overallProgress}%</span>.
                 </p>
                 <p className="text-primary-foreground/75 text-xs mt-3">
                   <span className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-2 text-sm font-semibold text-white/90">
@@ -1040,7 +1041,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {[
                   { label: 'Enrolled Courses', val: String(visibleCourses.length), sub: studentProfile.level, icon: 'book-open' },
-                  { label: 'Quizzes Available', val: String(availableQuizzesCount), sub: 'Ready to attempt', icon: 'clipboard-question' },
+                  { label: 'Published Quizzes', val: String(publishedQuizzesCount), sub: 'Upcoming + open', icon: 'clipboard-question' },
                   { label: 'Avg Quiz Score', val: `${avgScore}%`, sub: `${completedQuizzesCount} completed`, icon: 'chart-line' },
                   { label: 'Overall Progress', val: `${overallProgress}%`, sub: 'This semester', icon: 'graduation-cap' },
                 ].map((s, i) => (
@@ -1088,32 +1089,46 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                     <button onClick={() => setTab('quizzes')} className="text-xs text-primary hover:underline">View all</button>
                   </div>
                   <div className="space-y-3">
-                    {visibleQuizzes.map(q => (
-                      <div key={q.id} className={`flex items-center gap-4 p-4 rounded-xl border ${q.status === 'overdue' ? 'border-danger/25 bg-danger/5' : 'border-border hover:border-primary/30 hover:bg-muted/30'} transition-colors`}>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-0.5">
-                            <span className="font-mono text-xs font-bold text-primary">{q.course}</span>
-                          {q.status === 'overdue' && <span className="text-xs text-danger font-semibold">Overdue</span>}
-                          {q.tier && <span className="text-xs bg-secondary text-secondary-foreground px-2 py-0.5 rounded-full">{q.tier}</span>}
+                    {visibleQuizzes.map(q => {
+                      const isAvailable = q.status === 'available' && !q.isLocked
+                      const isOverdue = q.status === 'overdue'
+                      const isScheduled = q.status === 'scheduled' || q.isLocked
+                      const hasOpenDate = !!q.openDate
+
+                      return (
+                        <div key={q.id} className={`flex items-center gap-4 p-4 rounded-xl border ${isOverdue ? 'border-danger/25 bg-danger/5' : 'border-border hover:border-primary/30 hover:bg-muted/30'} transition-colors`}>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <span className="font-mono text-xs font-bold text-primary">{q.course}</span>
+                              {isOverdue && <span className="text-xs text-danger font-semibold">Overdue</span>}
+                              {q.tier && <span className="text-xs bg-secondary text-secondary-foreground px-2 py-0.5 rounded-full">{q.tier}</span>}
+                            </div>
+                            <p className="text-sm text-foreground font-medium truncate">{q.title}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {q.questions} questions
+                              <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" />
+                              {q.timeLimit ?? '–'} min
+                              <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" />
+                              Due {q.dueDate || 'TBD'}
+                            </p>
+                            {hasOpenDate && (
+                              <p className="text-xs text-muted-foreground">Open from {q.openDate}</p>
+                            )}
+                            {q.closeDate && q.closeDate !== q.dueDate && (
+                              <p className="text-xs text-muted-foreground">Closes {q.closeDate}</p>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => isAvailable && setActiveQuiz(q.id)}
+                            disabled={!isAvailable && !isOverdue}
+                            className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap ${isOverdue ? 'bg-danger/10 text-danger hover:bg-danger/20' : isAvailable ? 'bg-primary/10 text-primary hover:bg-primary/20' : 'bg-muted text-muted-foreground cursor-not-allowed'}`}
+                          >
+                            {isOverdue ? 'Late Submit' : isAvailable ? 'Start' : 'Not Open'}
+                            {isAvailable && <i className="fa-solid fa-arrow-right text-xs ml-1" />}
+                          </button>
                         </div>
-                        <p className="text-sm text-foreground font-medium truncate">{q.title}</p>
-                        <p className="text-xs text-muted-foreground">{q.questions} questions <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {q.timeLimit} min <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> Due {q.dueDate}</p>
-                        {q.openDate && (
-                          <p className="text-xs text-muted-foreground">Open from {q.openDate}</p>
-                        )}
-                        {q.closeDate && q.closeDate !== q.dueDate && (
-                          <p className="text-xs text-muted-foreground">Closes {q.closeDate}</p>
-                        )}
-                        </div>
-                        <button
-                          onClick={() => { setActiveQuiz(q.id); setCurrentQ(0); setQuizAnswers({}) }}
-                          className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap ${q.status === 'overdue' ? 'bg-danger/10 text-danger hover:bg-danger/20' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
-                        >
-                          {q.status === 'overdue' ? 'Late Submit' : 'Start'}
-                          {q.status !== 'overdue' && <i className="fa-solid fa-arrow-right text-xs ml-1" />}
-                        </button>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 </div>
               </div>
