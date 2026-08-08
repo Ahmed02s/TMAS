@@ -221,6 +221,11 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   const [error, setError] = useState('')
 
   const [quizTimeLeft, setQuizTimeLeft] = useState<number | null>(null)
+  // Authoritative deadline (epoch ms) reported by the server when the attempt was started.
+  // Deriving the countdown from this instead of a locally-reset counter means refreshing
+  // the page (or the tab losing focus) can't grant a student extra time.
+  const [quizExpiresAt, setQuizExpiresAt] = useState<number | null>(null)
+  const [quizTimedOut, setQuizTimedOut] = useState(false)
   const quizAnswersRef = useRef<Record<number, string>>({})
   const isAutoSubmittingRef = useRef(false)
 
@@ -485,6 +490,8 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     async function loadQuizQuestions() {
       if (activeQuiz === null) {
         setQuizQuestions([])
+        setQuizExpiresAt(null)
+        setQuizTimedOut(false)
         return
       }
 
@@ -505,6 +512,14 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
           const startErr = await startRes.json().catch(() => ({ detail: startRes.statusText }))
           throw new Error(startErr.detail || 'You have already used your attempt for this quiz.')
         }
+        const startData = await startRes.json().catch(() => ({}))
+
+        // The server is the source of truth for when this attempt expires (start time +
+        // time limit), so the countdown survives refreshes instead of resetting to the
+        // full duration every time this component re-mounts.
+        const expiresAtMs = startData?.expires_at ? parseQuizDate(startData.expires_at)?.getTime() ?? null : null
+        setQuizExpiresAt(expiresAtMs)
+        setQuizTimeLeft(expiresAtMs !== null ? Math.max(0, Math.round((expiresAtMs - Date.now()) / 1000)) : null)
 
         // Step 2: Load the quiz questions
         const quizRes = await fetch(`${API_BASE}/api/quizzes/${activeQuiz}?level=${encodeURIComponent(studentProfile.level)}&program=${encodeURIComponent(studentProfile.program)}&student_id=${encodeURIComponent(studentId)}`)
@@ -528,7 +543,6 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
         setQuizQuestions(safeQuestions)
         setQuizAnswers({})
         setCurrentQ(0)
-        setQuizTimeLeft(null)
         isAutoSubmittingRef.current = false
       } catch (fetchError) {
         setError(fetchError instanceof Error ? fetchError.message : 'Unable to load quiz details')
@@ -606,6 +620,30 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
           })
         } catch {}
         await loadStudentData()
+      } else if (res.status === 403) {
+        // The server enforces the time limit / open-close window independently of the
+        // client-side countdown. If it rejects the submission, the attempt has already
+        // been recorded as missed (score 0) — reflect that instead of grading locally.
+        const errBody = await res.json().catch(() => ({}))
+        setQuizTimedOut(true)
+        const missedRecord: CompletedQuiz = {
+          quizId: activeQuiz,
+          title: selectedQuiz?.title ?? 'Quiz Attempt',
+          course: selectedQuiz?.course ?? '',
+          score: 0,
+          outOf: quizQuestions.length,
+          date: new Date().toISOString(),
+          grade: 'F',
+          passed: false,
+        }
+        attempt = missedRecord
+        setLastAttempt(missedRecord)
+        setError(errBody.detail || 'Time limit exceeded. This attempt has been recorded as missed.')
+        setCompletedQuizzes(prev => {
+          const filtered = prev.filter(q => q.quizId !== activeQuiz)
+          return [missedRecord, ...filtered]
+        })
+        await loadStudentData()
       } else {
         console.warn('Submit failed', await res.text())
       }
@@ -618,28 +656,40 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     }
   }
 
+  // Fallback for the rare case the server didn't return an authoritative expiry
+  // (e.g. an untimed quiz, or an older in-progress attempt): fall back to a plain countdown.
   useEffect(() => {
-    if (activeQuiz !== null && selectedQuiz && selectedQuiz.timeLimit > 0 && quizTimeLeft === null) {
+    if (activeQuiz !== null && quizExpiresAt === null && selectedQuiz && selectedQuiz.timeLimit > 0 && quizTimeLeft === null) {
       setQuizTimeLeft(selectedQuiz.timeLimit * 60)
     }
-  }, [activeQuiz, selectedQuiz, quizTimeLeft])
+  }, [activeQuiz, selectedQuiz, quizTimeLeft, quizExpiresAt])
 
   useEffect(() => {
-    if (activeQuiz !== null && quizTimeLeft !== null && quizTimeLeft > 0 && !quizSubmitted) {
-      const timer = setInterval(() => {
+    if (activeQuiz === null || quizSubmitted) return
+    if (quizExpiresAt === null && (quizTimeLeft === null || quizTimeLeft <= 0)) return
+
+    const tick = () => {
+      if (quizExpiresAt !== null) {
+        const remaining = Math.max(0, Math.round((quizExpiresAt - Date.now()) / 1000))
+        setQuizTimeLeft(remaining)
+        if (remaining <= 0) {
+          handleSubmitQuiz()
+        }
+      } else {
         setQuizTimeLeft(prev => {
           if (prev === null) return null
           if (prev <= 1) {
-            clearInterval(timer)
             handleSubmitQuiz()
             return 0
           }
           return prev - 1
         })
-      }, 1000)
-      return () => clearInterval(timer)
+      }
     }
-  }, [activeQuiz, quizTimeLeft, quizSubmitted])
+
+    const timer = setInterval(tick, 1000)
+    return () => clearInterval(timer)
+  }, [activeQuiz, quizExpiresAt, quizTimeLeft, quizSubmitted])
 
   const visibleCompletedQuizzes = useMemo(() => {
     return completedQuizzes
@@ -815,9 +865,14 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       <div className="min-h-screen bg-background font-sans flex items-center justify-center p-4 sm:p-8">
         <div className="w-full max-w-xl text-center space-y-6">
           <div className="bg-card border border-border rounded-3xl p-6 sm:p-10 shadow-2xl">
-            <div className="text-5xl mb-4">{score >= 60 ? <Icon name="celebrate" size={48} /> : <Icon name="book" size={48} />}</div>
-            <h2 className="font-display text-2xl sm:text-3xl text-foreground mb-2">{score >= 60 ? 'Quiz Passed!' : 'Keep Studying'}</h2>
+            <div className="text-5xl mb-4">{quizTimedOut ? <Icon name="timer" size={48} /> : score >= 60 ? <Icon name="celebrate" size={48} /> : <Icon name="book" size={48} />}</div>
+            <h2 className="font-display text-2xl sm:text-3xl text-foreground mb-2">{quizTimedOut ? 'Time Limit Exceeded' : score >= 60 ? 'Quiz Passed!' : 'Keep Studying'}</h2>
             <p className="text-muted-foreground text-sm mb-6">{selectedQuiz?.title ?? 'Quiz Attempt'} <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {selectedQuiz?.course ?? 'Course'}</p>
+            {quizTimedOut && (
+              <div className="mb-6 rounded-xl bg-danger/10 border border-danger/30 text-danger text-sm px-4 py-3 text-left">
+                Your time ran out before this attempt was submitted, so it has been recorded as missed with a score of 0%. Contact your lecturer if you believe this is an error.
+              </div>
+            )}
             <div className="flex justify-center mb-6">
               <ProgressRing value={score} size={96} />
             </div>

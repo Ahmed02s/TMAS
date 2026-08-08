@@ -17,6 +17,9 @@ from app.core.config import QROK_API_KEY, QROK_API_URL
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 
+# Small allowance for network/client latency when enforcing a student's per-attempt time limit.
+TIME_LIMIT_GRACE_SECONDS = 20
+
 
 def _clean_material_title(title: str) -> str:
     title = re.sub(r'\.[^.]+$', '', title)
@@ -563,6 +566,65 @@ def _finalize_overdue_attempts(quizzes: list[dict[str, Any]], student_id: str) -
             raise HTTPException(status_code=502, detail=supabase_error_message(insert_response, 'Supabase insert overdue quiz attempts failed'))
 
     return quizzes
+
+
+def _finalize_expired_in_progress_for_student(student_id: str) -> None:
+    """Best-effort cleanup: whenever a student's dashboard is polled, close out any of
+    their in-progress attempts whose quiz has passed its close_date, or whose personal
+    time limit has elapsed, so quizzes/attempts don't stay open indefinitely just because
+    nobody explicitly submitted or the tab was abandoned. Never raises — this is a
+    housekeeping side-effect of read endpoints, not something that should break them.
+    """
+    if not student_id:
+        return
+    try:
+        response = supabase.table('quiz_attempts').select('*').eq('student_id', student_id).eq('status', 'in_progress').execute()
+    except _postgrest_exceptions.APIError as exc:
+        if _is_missing_table_error(exc):
+            return
+        return
+    except Exception:
+        return
+
+    if supabase_failed(response) or not response.data:
+        return
+
+    in_progress = response.data
+    quiz_ids = [qid for qid in {a.get('quiz_id') for a in in_progress} if qid is not None]
+    if not quiz_ids:
+        return
+
+    try:
+        quizzes_resp = supabase.table('quizzes').select('*').in_('id', quiz_ids).execute()
+    except Exception:
+        return
+    if supabase_failed(quizzes_resp):
+        return
+    quizzes_by_id = {q['id']: q for q in (quizzes_resp.data or []) if q.get('id') is not None}
+
+    now = datetime.now(timezone.utc)
+    for attempt in in_progress:
+        quiz = quizzes_by_id.get(attempt.get('quiz_id'))
+        if not quiz:
+            continue
+        close_dt = _parse_datetime(quiz.get('close_date')) or _parse_datetime(quiz.get('due_date'))
+        time_limit_minutes = int(quiz.get('time_limit') or 0)
+        started_at = _parse_datetime(attempt.get('attempted_at'))
+
+        past_close = bool(close_dt and now > close_dt)
+        timed_out = bool(time_limit_minutes and started_at and (now - started_at).total_seconds() > time_limit_minutes * 60 + TIME_LIMIT_GRACE_SECONDS)
+
+        if past_close or timed_out:
+            try:
+                supabase.table('quiz_attempts').update({
+                    'status': 'missed',
+                    'score': 0,
+                    'grade': 'F',
+                    'passed': False,
+                    'attempted_at': now.isoformat(),
+                }).eq('id', attempt['id']).execute()
+            except Exception:
+                continue
 
 
 def _safe_insert(table_name: str, record: dict | list[dict]) -> Any:
@@ -1112,16 +1174,39 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest) -> dict[str, Any]:
     if completed:
         raise HTTPException(status_code=403, detail='No attempts remaining for this quiz')
 
-    # Already has an in-progress attempt — return it (idempotent)
+    time_limit_minutes = int(quiz.get('time_limit') or 0)
+
+    # Already has an in-progress attempt — return it (idempotent), unless its
+    # personal time limit has already elapsed, in which case it is finalized as missed.
     in_progress = [a for a in attempts if a.get('status') == 'in_progress']
     if in_progress:
-        return {'attempt': in_progress[0], 'already_started': True}
+        existing = in_progress[0]
+        started_at = _parse_datetime(existing.get('attempted_at'))
+        if time_limit_minutes and started_at and (now - started_at).total_seconds() > time_limit_minutes * 60 + TIME_LIMIT_GRACE_SECONDS:
+            supabase.table('quiz_attempts').update({
+                'status': 'missed',
+                'score': 0,
+                'grade': 'F',
+                'passed': False,
+                'attempted_at': now.isoformat(),
+            }).eq('id', existing['id']).execute()
+            raise HTTPException(status_code=403, detail='Time limit exceeded for your previous attempt; it has been recorded as missed.')
+
+        expires_at = _format_datetime(started_at + timedelta(minutes=time_limit_minutes)) if (time_limit_minutes and started_at) else None
+        return {
+            'attempt': existing,
+            'already_started': True,
+            'time_limit': time_limit_minutes,
+            'started_at': existing.get('attempted_at'),
+            'expires_at': expires_at,
+        }
 
     # Fetch total question count
     qcount_resp = supabase.table('quiz_questions').select('id').eq('quiz_id', quiz_id).execute()
     total_questions = len(qcount_resp.data or []) if not supabase_failed(qcount_resp) else 0
 
     # Record in-progress attempt with score 0 immediately
+    started_at_iso = now.isoformat()
     attempt_record = {
         'quiz_id': quiz_id,
         'student_id': payload.student_id,
@@ -1130,13 +1215,20 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest) -> dict[str, Any]:
         'grade': 'F',
         'passed': False,
         'status': 'in_progress',
-        'attempted_at': datetime.now(timezone.utc).isoformat(),
+        'attempted_at': started_at_iso,
     }
     insert_response = _safe_insert('quiz_attempts', attempt_record)
     if supabase_failed(insert_response):
         raise HTTPException(status_code=502, detail=supabase_error_message(insert_response, 'Supabase insert quiz attempt failed'))
 
-    return {'attempt': insert_response.data[0] if insert_response.data else attempt_record, 'already_started': False}
+    expires_at = _format_datetime(now + timedelta(minutes=time_limit_minutes)) if time_limit_minutes else None
+    return {
+        'attempt': insert_response.data[0] if insert_response.data else attempt_record,
+        'already_started': False,
+        'time_limit': time_limit_minutes,
+        'started_at': started_at_iso,
+        'expires_at': expires_at,
+    }
 
 
 @router.post('/{quiz_id}/submit')
@@ -1176,6 +1268,21 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest) -> dict[str, Any]:
     # If somehow they submit without starting (legacy), block if any attempt exists
     if not in_progress_attempt_id and len(attempts) >= 1:
         raise HTTPException(status_code=403, detail='No attempts remaining for this quiz')
+
+    # SECURITY: enforce the per-attempt time limit server-side, not just via the
+    # client-side countdown, so a tampered/stalled client cannot buy extra time.
+    time_limit_minutes = int(quiz.get('time_limit') or 0)
+    if in_progress_attempt_id and time_limit_minutes:
+        started_at = _parse_datetime(in_progress_attempts[0].get('attempted_at'))
+        if started_at and (now - started_at).total_seconds() > time_limit_minutes * 60 + TIME_LIMIT_GRACE_SECONDS:
+            supabase.table('quiz_attempts').update({
+                'status': 'missed',
+                'score': 0,
+                'grade': 'F',
+                'passed': False,
+                'attempted_at': now.isoformat(),
+            }).eq('id', in_progress_attempt_id).execute()
+            raise HTTPException(status_code=403, detail='Time limit exceeded. Your attempt has been recorded as missed with a score of 0.')
 
     questions_response = supabase.table('quiz_questions').select('*').eq('quiz_id', quiz_id).execute()
     if supabase_failed(questions_response):
@@ -1290,6 +1397,8 @@ def _quiz_is_locked(quiz: dict[str, Any], now: datetime) -> bool:
 @router.get('/available')
 def list_available_quizzes(level: str | None = None, program: str | None = None, student_id: str | None = None) -> dict[str, Any]:
     ensure_supabase_enabled()
+    if student_id:
+        _finalize_expired_in_progress_for_student(student_id)
     response = supabase.table('quizzes').select('*').execute()
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase list available quizzes failed'))
@@ -1368,6 +1477,8 @@ def list_completed_quizzes(student_id: str | None = None, level: str | None = No
     ensure_supabase_enabled()
     if not student_id:
         return {'quizzes': []}
+
+    _finalize_expired_in_progress_for_student(student_id)
 
     try:
         attempts_response = supabase.table('quiz_attempts').select('*').eq('student_id', student_id).execute()

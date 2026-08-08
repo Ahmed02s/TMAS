@@ -426,6 +426,12 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       if (isNaN(tl) || tl < 5 || tl > 180) errs[`${tier}_timeLimit`] = 'Duration must be 5–180 mins.'
       if (isNaN(ps) || ps < 1 || ps > 100) errs[`${tier}_passingScore`] = 'Pass score must be 1–100%.'
       if (qc === 0) errs[`${tier}_questions`] = 'No questions generated for this tier.'
+      if (!errs[`${tier}_timeLimit`] && cfg.openDate && cfg.closeDate) {
+        const windowMinutes = (new Date(cfg.closeDate).getTime() - new Date(cfg.openDate).getTime()) / 60000
+        if (windowMinutes > 0 && windowMinutes < tl) {
+          errs[`${tier}_timeLimit`] = `Duration (${tl}m) exceeds the open–close window (${Math.floor(windowMinutes)}m). Shorten the duration or widen the window.`
+        }
+      }
     }
     if (Object.keys(errs).length) {
       setScheduleErrors(errs)
