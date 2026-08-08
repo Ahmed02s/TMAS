@@ -16,8 +16,6 @@ type CourseModalProps = {
   initialCourse?: CourseFormValues
   levels: string[]
   lecturers: string[]
-  courseCodes?: string[]
-  courseTitles?: string[]
   saving?: boolean
   errorMessage?: string
 }
@@ -84,7 +82,13 @@ export default function CourseModal({
                 className="w-full rounded-2xl border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary/70 focus:ring-2 focus:ring-primary/20"
               />
               <datalist id="course-code-suggestions">
-                {(courseCodes || []).map(c => <option key={c} value={c} />)}
+                <option value="COMP 101" />
+                <option value="COMP 110" />
+                <option value="COMP 201" />
+                <option value="COMP 256" />
+                <option value="MATH 101" />
+                <option value="ENG 102" />
+                <option value="BUS 201" />
               </datalist>
             </label>
             <label className="space-y-2 text-sm text-foreground">
@@ -97,7 +101,12 @@ export default function CourseModal({
                 className="w-full rounded-2xl border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary/70 focus:ring-2 focus:ring-primary/20"
               />
               <datalist id="course-title-suggestions">
-                {(courseTitles || []).map(t => <option key={t} value={t} />)}
+                <option value="Programming with Python" />
+                <option value="Data Structures & Algorithms" />
+                <option value="Database Management Systems" />
+                <option value="Computer Fundamentals" />
+                <option value="Software Engineering" />
+                <option value="Calculus & Algebra" />
               </datalist>
             </label>
           </div>
@@ -122,7 +131,7 @@ export default function CourseModal({
               {lecturers.length > 0 ? (
                 <div className="max-h-36 overflow-y-auto rounded-2xl border border-border bg-muted p-2.5 space-y-1.5">
                   {lecturers.map(l => {
-                    const assignedList = form.lecturer ? form.lecturer.split(',').map(s => s.trim()) : []
+                    const assignedList = form.lecturer ? form.lecturer.split(', ').map(s => s.strip ? s.strip() : s.trim()) : []
                     const isChecked = assignedList.includes(l)
                     return (
                       <label key={l} className="flex items-center gap-2.5 px-2 py-1 rounded-xl hover:bg-background/80 cursor-pointer text-xs font-medium text-foreground">
