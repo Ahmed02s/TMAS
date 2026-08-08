@@ -110,12 +110,30 @@ def list_courses(
             except Exception:
                 pass
 
+    # 4. Student count per course (match by level + program, case-insensitive)
+    students_by_course: dict[str, int] = {}
+    try:
+        stu_resp = supabase.table('users').select('level,program').eq('role', 'student').execute()
+        if not supabase_failed(stu_resp):
+            for stu in stu_resp.data or []:
+                stu_level = str(stu.get('level') or '').strip().lower()
+                stu_program = str(stu.get('program') or '').strip().lower()
+                for course in courses:
+                    c_level = str(course.get('level') or '').strip().lower()
+                    c_program = str(course.get('program') or '').strip().lower()
+                    if c_level and c_level == stu_level and (not c_program or c_program == stu_program):
+                        code = course.get('code', '')
+                        students_by_course[code] = students_by_course.get(code, 0) + 1
+    except Exception:
+        pass
+
     # Apply enriched stats to each course
     for course in courses:
         code = course.get('code', '')
         mat_count = materials_by_course.get(code, course.get('materials', 0))
         course['materials'] = mat_count
         course['quizzes_total'] = quizzes_total_by_course.get(code, course.get('quizzes_total', 0))
+        course['student_count'] = students_by_course.get(code, 0)
         if student_id:
             course['quizzes_done'] = quizzes_done_by_course.get(code, 0)
             course['avg_score'] = avg_score_by_course.get(code, 0)

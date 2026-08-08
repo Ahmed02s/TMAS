@@ -474,9 +474,16 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     const assignedCourses = myCoursesState.length
     const studentsByCourse = myCoursesState.map(course => ({
       course,
-      students: studentsState.filter(student => student.level === course.level && student.program === course.program),
+      students: studentsState.filter(student => {
+        const sLevel = String(student.level || '').trim().toLowerCase()
+        const sProgram = String(student.program || '').trim().toLowerCase()
+        const cLevel = String(course.level || '').trim().toLowerCase()
+        const cProgram = String(course.program || '').trim().toLowerCase()
+        return cLevel && cLevel === sLevel && (!cProgram || cProgram === sProgram)
+      }),
     }))
-    const uniqueStudentCount = new Set(studentsState.map(student => student.id)).size
+    // Use API student_count (enriched by backend) as primary, fall back to filtered list
+    const uniqueStudentCount = myCoursesState.reduce((s, c) => s + ((c as any).student_count ?? 0), 0) || new Set(studentsState.map(s => s.id)).size
     const totalStudents = uniqueStudentCount
     const studentHeadcount = studentsByCourse.reduce((s, entry) => s + entry.students.length, 0)
     const avgQuizScore = myCoursesState.length ? Math.round(myCoursesState.reduce((s, c) => s + (c.avgScore || 0), 0) / myCoursesState.length) : null
@@ -749,7 +756,10 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                             <td className="px-5 py-4 text-foreground text-sm">{course.title}</td>
                             <td className="px-5 py-4 text-muted-foreground text-xs">{course.level || '—'}</td>
                             <td className="px-5 py-4 text-muted-foreground text-xs">{course.program || '—'}</td>
-                            <td className="px-5 py-4 text-muted-foreground text-xs">{courseStudents.length}</td>
+                            <td className="px-5 py-4 text-foreground font-semibold text-sm">
+                              {(course as any).student_count ?? courseStudents.length}
+                              <span className="ml-1 text-muted-foreground font-normal"> enrolled</span>
+                            </td>
                             <td className="px-5 py-4 text-muted-foreground text-xs">{course.progress ?? 0}%</td>
                             <td className="px-5 py-4 text-muted-foreground text-xs">{course.avg_score ?? course.avgScore ?? 0}%</td>
                             <td className="px-5 py-4 text-sm"><span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${course.status === 'active' ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'}`}>{course.status || 'active'}</span></td>
@@ -897,7 +907,8 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                     <h3 className="font-semibold text-foreground">Assigned Students</h3>
                     <p className="text-xs text-muted-foreground">Showing students grouped by your assigned course level/program.</p>
                   </div>
-                  <span className="text-xs text-muted-foreground">{uniqueStudentCount} unique students</span>
+                  <span className="text-sm font-bold text-foreground">{uniqueStudentCount}</span>
+                  <span className="text-xs text-muted-foreground ml-1">unique students enrolled</span>
                 </div>
               </div>
 
@@ -914,10 +925,18 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                           <p className="text-sm font-semibold text-foreground">{course.code} — {course.title}</p>
                           <p className="text-xs text-muted-foreground">{course.level || '-'} <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {course.program || '-'}</p>
                         </div>
-                        <span className="text-xs text-muted-foreground">{students.length} student{students.length === 1 ? '' : 's'}</span>
+                        <span className="inline-flex items-center gap-1.5 text-sm font-bold text-foreground">
+                          <i className="fa-solid fa-users text-primary text-xs" />
+                          {(course as any).student_count ?? students.length}
+                          <span className="text-xs font-normal text-muted-foreground">student{((course as any).student_count ?? students.length) === 1 ? '' : 's'}</span>
+                        </span>
                       </div>
                       {students.length === 0 ? (
-                        <div className="px-6 py-5 text-sm text-muted-foreground">No students currently enrolled in this course assignment.</div>
+                        <div className="px-6 py-5 text-sm text-muted-foreground flex items-center gap-2">
+                          {(course as any).student_count > 0
+                            ? <><i className="fa-solid fa-circle-info text-primary" /> {(course as any).student_count} student{(course as any).student_count === 1 ? '' : 's'} enrolled — detailed records loading or may require a page refresh.</>
+                            : <><i className="fa-solid fa-user-slash opacity-40" /> No students currently enrolled in this course assignment.</>}
+                        </div>
                       ) : (
                         <table className="w-full text-sm">
                           <thead>
