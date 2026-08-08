@@ -389,7 +389,21 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
         }
 
         const quizData = await quizRes.json()
-        setQuizQuestions(quizData.questions ?? [])
+        // Log the loaded quiz payload to help diagnose malformed responses
+        // and normalize questions to a safe shape to prevent React render errors.
+        try {
+          console.debug('Loaded quizData:', quizData)
+        } catch {}
+
+        const safeQuestions = Array.isArray(quizData.questions)
+          ? quizData.questions.map((qq: any, idx: number) => ({
+              question: String(qq?.question ?? qq?.text ?? `Question ${idx + 1}`),
+              options: Array.isArray(qq?.options) ? qq.options.map((opt: any) => typeof opt === 'string' ? opt : String(opt?.text ?? opt?.value ?? JSON.stringify(opt))) : [],
+              correct: String(qq?.answer ?? qq?.correct ?? '').trim(),
+            }))
+          : []
+
+        setQuizQuestions(safeQuestions)
         setQuizAnswers({})
         setCurrentQ(0)
         setQuizTimeLeft(null)
@@ -416,7 +430,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   }, [availableQuizzes])
 
 
-  const activeQuizQuestions = useMemo(() => quizQuestions, [quizQuestions])
+  const activeQuizQuestions = useMemo(() => Array.isArray(quizQuestions) ? quizQuestions : [], [quizQuestions])
 
   const overallProgress = useMemo(() => {
     return visibleCourses.length ? Math.round(visibleCourses.reduce((s, c) => s + c.progress, 0) / visibleCourses.length) : 0
@@ -581,7 +595,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
               <h2 className="text-xl font-semibold text-foreground mb-8 leading-relaxed">{q.question}</h2>
 
               <div className="space-y-3 mb-8">
-                {q.options && q.options.length > 0 ? (
+                {Array.isArray(q.options) && q.options.length > 0 ? (
                   q.options.map((opt, i) => (
                     <button
                       key={i}
