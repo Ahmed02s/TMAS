@@ -195,12 +195,14 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
             code: course.code ?? `COURSE-${course.id}`,
             title: course.title,
             level: course.level ?? 'N/A',
+            program: course.program ?? '',
             lecturer: course.lecturer ?? 'Unassigned',
-            enrolled: Number(course.enrolled ?? course.progress ?? 0),
+            enrolled: Number(course.student_count ?? course.enrolled ?? course.progress ?? 0),
             status: course.status ?? 'active',
             avgScore: Number(course.avg_score ?? 0),
             progress: Number(course.progress ?? 0),
             materials: Number(course.materials ?? 0),
+            quizzes_total: Number(course.quizzes_total ?? 0),
           })))
         }
 
@@ -459,12 +461,14 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
         code: savedCourse.code ?? course.code,
         title: savedCourse.title ?? course.title,
         level: savedCourse.level ?? course.level,
+        program: savedCourse.program ?? (course as any).program ?? '',
         lecturer: (savedCourse.lecturer ?? course.lecturer) || 'Unassigned',
-        enrolled: Number(savedCourse.enrolled ?? savedCourse.progress ?? 0),
+        enrolled: Number(savedCourse.student_count ?? savedCourse.enrolled ?? savedCourse.progress ?? 0),
         status: savedCourse.status ?? course.status,
         avgScore: Number(savedCourse.avg_score ?? savedCourse.avgScore ?? 0),
         progress: Number(savedCourse.progress ?? 0),
         materials: Number(savedCourse.materials ?? 0),
+        quizzes_total: Number(savedCourse.quizzes_total ?? 0),
       }
 
       setAllCourses(prev => {
@@ -965,25 +969,37 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
                         <td className="px-4 py-3.5"><span className="text-xs bg-secondary text-secondary-foreground px-2 py-0.5 rounded-full font-medium">{c.level}</span></td>
                         <td className="px-4 py-3.5 text-muted-foreground text-xs">
                           {(() => {
-                            const lecName = (c.lecturer || '').trim().toLowerCase()
-                            const isRegistered = approvedLecturers.some(l => l.name.trim().toLowerCase() === lecName)
+                            // Split lecturer field by comma, filter to only registered names
+                            const rawParts = (c.lecturer || '').split(',').map((s: string) => s.trim()).filter(Boolean)
+                            const registeredNames = rawParts.filter((name: string) =>
+                              approvedLecturers.some(l => l.name.trim().toLowerCase() === name.toLowerCase())
+                            )
+                            if (registeredNames.length === 0) {
+                              return (
+                                <span className="flex items-center gap-1.5 text-muted-foreground/60 italic">
+                                  <i className="fa-solid fa-circle-minus text-[10px]" />
+                                  Unassigned
+                                </span>
+                              )
+                            }
                             return (
                               <span className="flex items-center gap-1.5">
-                                <span>{c.lecturer || '—'}</span>
-                                {c.lecturer && !isRegistered && (
-                                  <span title="Lecturer not found in registered accounts" className="inline-flex items-center gap-1 text-[10px] bg-warning/10 text-warning border border-warning/20 px-1.5 py-0.5 rounded-full font-semibold">
-                                    <i className="fa-solid fa-triangle-exclamation text-[8px]" />
-                                    Unregistered
-                                  </span>
-                                )}
-                                {c.lecturer && isRegistered && (
-                                  <i className="fa-solid fa-circle-check text-success text-[10px]" title="Registered lecturer" />
-                                )}
+                                <i className="fa-solid fa-circle-check text-success text-[10px]" />
+                                <span>{registeredNames.join(', ')}</span>
                               </span>
                             )
                           })()}
                         </td>
-                        <td className="px-4 py-3.5 text-foreground font-mono font-semibold text-sm">{c.enrolled}</td>
+                        <td className="px-4 py-3.5 text-foreground font-mono font-semibold text-sm">
+                          {c.enrolled > 0 ? (
+                            <span className="flex items-center gap-1">
+                              <i className="fa-solid fa-user-graduate text-primary text-[10px]" />
+                              {c.enrolled}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground font-normal">0</span>
+                          )}
+                        </td>
                         <td className="px-4 py-3.5"><Badge variant={c.status === 'Active' ? 'success' : 'default'}>{c.status}</Badge></td>
                         <td className="px-4 py-3.5">
                           <div className="flex items-center gap-2">
