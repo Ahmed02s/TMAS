@@ -1143,15 +1143,22 @@ def list_completed_quizzes(student_id: str | None = None, level: str | None = No
         if existing is None or (attempt.get('attempted_at') or '') > (existing.get('attempted_at') or ''):
             attempts_by_quiz[quiz_id] = attempt
 
-    quiz_ids = [quiz_id for quiz_id in attempts_by_quiz.keys()]
+    quiz_ids = list(attempts_by_quiz.keys())
     if not quiz_ids:
         return {'quizzes': []}
 
-    quiz_response = supabase.table('quizzes').select('*').in_('id', quiz_ids).execute()
-    if supabase_failed(quiz_response):
-        raise HTTPException(status_code=502, detail=supabase_error_message(quiz_response, 'Supabase fetch quizzes failed'))
+    all_quizzes = []
+    chunk_size = 50
+    for i in range(0, len(quiz_ids), chunk_size):
+        chunk = quiz_ids[i:i + chunk_size]
+        try:
+            chunk_response = supabase.table('quizzes').select('*').in_('id', chunk).execute()
+            if not supabase_failed(chunk_response) and chunk_response.data:
+                all_quizzes.extend(chunk_response.data)
+        except Exception as e:
+            print(f"Error fetching quizzes chunk: {e}")
 
-    quizzes_by_id = {quiz['id']: quiz for quiz in (quiz_response.data or []) if quiz.get('id') is not None}
+    quizzes_by_id = {quiz['id']: quiz for quiz in all_quizzes if quiz.get('id') is not None}
     allowed_codes = None
     if level:
         allowed_codes = set(_fetch_allowed_course_codes(level, program))
