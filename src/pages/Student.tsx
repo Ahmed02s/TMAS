@@ -551,6 +551,8 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     return availableQuizzes
   }, [availableQuizzes])
 
+  const availableQuizzesCount = useMemo(() => visibleQuizzes.filter(q => q.status === 'available').length, [visibleQuizzes])
+  const completedQuizzesCount = useMemo(() => completedQuizzes.length, [completedQuizzes])
 
   const activeQuizQuestions = useMemo(() => Array.isArray(quizQuestions) ? quizQuestions : [], [quizQuestions])
 
@@ -924,9 +926,9 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
               >
                 <i className={`fa-solid ${item.iconClass} w-4`} />
                 {item.label}
-                {item.key === 'quizzes' && visibleQuizzes.filter(q => q.status === 'available').length > 0 && (
+                {item.key === 'quizzes' && availableQuizzesCount > 0 && (
                   <span className="ml-auto bg-accent text-white text-xs rounded-full px-1.5 py-0.5 leading-none">
-                    {visibleQuizzes.filter(q => q.status === 'available').length}
+                    {availableQuizzesCount}
                   </span>
                 )}
               </button>
@@ -942,6 +944,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
             <div className="flex-1 min-w-0">
               <p className="text-sidebar-foreground text-xs font-semibold truncate">{studentName}</p>
               <p className="text-sidebar-muted text-xs truncate">{studentLevelLabel} Student</p>
+              <p className="text-sidebar-muted text-[11px] mt-1 truncate">{availableQuizzesCount} quiz{availableQuizzesCount === 1 ? '' : 'zes'} available</p>
             </div>
             <button onClick={() => {
               localStorage.removeItem('tmas-token')
@@ -1024,15 +1027,21 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                 <p className="text-primary-foreground/70 text-sm mb-1">Good morning,</p>
                 <h2 className="font-display text-3xl text-white mb-2">{studentName}</h2>
                 <p className="text-primary-foreground/70 text-sm">
-                  You have <span className="text-accent font-semibold">{visibleQuizzes.filter(q => q.status === 'available').length} quizzes</span> available and your overall progress is <span className="text-white font-semibold">{overallProgress}%</span>.
+                  You have <span className="text-accent font-semibold">{availableQuizzesCount} quizzes</span> available and your overall progress is <span className="text-white font-semibold">{overallProgress}%</span>.
+                </p>
+                <p className="text-primary-foreground/75 text-xs mt-3">
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-2 text-sm font-semibold text-white/90">
+                    <i className="fa-solid fa-clipboard-question text-accent text-[10px]" />
+                    {availableQuizzesCount} quiz{availableQuizzesCount === 1 ? '' : 'zes'} ready to attempt
+                  </span>
                 </p>
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {[
                   { label: 'Enrolled Courses', val: String(visibleCourses.length), sub: studentProfile.level, icon: 'book-open' },
-                  { label: 'Quizzes Available', val: String(visibleQuizzes.filter(q => q.status === 'available').length), sub: 'Ready to attempt', icon: 'clipboard-question' },
-                  { label: 'Avg Quiz Score', val: `${avgScore}%`, sub: `${visibleCompletedQuizzes.length} completed`, icon: 'chart-line' },
+                  { label: 'Quizzes Available', val: String(availableQuizzesCount), sub: 'Ready to attempt', icon: 'clipboard-question' },
+                  { label: 'Avg Quiz Score', val: `${avgScore}%`, sub: `${completedQuizzesCount} completed`, icon: 'chart-line' },
                   { label: 'Overall Progress', val: `${overallProgress}%`, sub: 'This semester', icon: 'graduation-cap' },
                 ].map((s, i) => (
                   <div key={i} className="bg-card border border-border rounded-2xl p-5">
