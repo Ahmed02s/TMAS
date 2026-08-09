@@ -27,6 +27,159 @@ function ProgressBar({ value }: { value: number }) {
   )
 }
 
+// Shared per-student progress table (quiz progress, reading progress, avg score) — used
+// by both the Courses tab's drill-down and the Students tab, so the numbers a lecturer
+// sees for a given student are always computed and rendered identically in both places.
+function StudentProgressTable({ students }: { students: any[] }) {
+  return (
+    <div className="divide-y divide-border">
+      {/* Table Header */}
+      <div className="hidden sm:grid grid-cols-12 gap-2 px-5 py-3 bg-muted/40">
+        <span className="col-span-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Student</span>
+        <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Quiz Progress</span>
+        <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Reading Progress</span>
+        <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Avg Score</span>
+        <span className="col-span-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Passed</span>
+        <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Status</span>
+      </div>
+
+      {students.map(stu => {
+        const qDone  = stu.quizzes_done  ?? 0
+        const qTotal = stu.quizzes_total ?? 0
+        const qPct   = qTotal > 0 ? Math.round((qDone / qTotal) * 100) : 0
+        const matTotal = stu.total_materials ?? 0
+        const matRead  = stu.materials_read ?? 0
+        const rPct     = stu.reading_progress ?? (matTotal > 0 ? Math.round((matRead / matTotal) * 100) : 0)
+        const scoreColor = (stu.avg_score ?? 0) >= 70 ? 'text-success' : (stu.avg_score ?? 0) >= 50 ? 'text-warning' : 'text-danger'
+
+        return (
+          <div key={stu.id} className="px-5 py-4 hover:bg-muted/30 transition-colors">
+            {/* Mobile layout */}
+            <div className="sm:hidden space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-semibold text-foreground text-sm">{stu.name}</p>
+                  <p className="text-xs text-muted-foreground">{stu.email}</p>
+                </div>
+                <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${
+                  stu.status === 'active' ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'
+                }`}>{stu.status || 'active'}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-3 text-xs">
+                <div className="bg-card rounded-lg p-2.5 border border-border">
+                  <p className="text-muted-foreground mb-1">Quiz Progress</p>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${qPct}%` }} />
+                    </div>
+                    <span className="font-mono font-bold text-foreground">{qDone}/{qTotal}</span>
+                  </div>
+                </div>
+                <div className="bg-card rounded-lg p-2.5 border border-border">
+                  <p className="text-muted-foreground mb-1">Reading</p>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${rPct}%` }} />
+                    </div>
+                    <span className="font-mono font-bold text-foreground">{matRead}/{matTotal}</span>
+                  </div>
+                </div>
+                <div className="bg-card rounded-lg p-2.5 border border-border">
+                  <p className="text-muted-foreground mb-1">Avg Score</p>
+                  <p className={`font-mono font-bold text-lg ${scoreColor}`}>{stu.avg_score > 0 ? `${stu.avg_score}%` : '—'}</p>
+                </div>
+              </div>
+              {/* Individual quiz attempts */}
+              {(stu.attempts || []).length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Quiz Attempts</p>
+                  {(stu.attempts || []).map((att: any, ai: number) => (
+                    <div key={ai} className="flex items-center justify-between bg-card border border-border rounded-lg px-3 py-2 text-xs">
+                      <div>
+                        <span className={`font-bold mr-1.5 ${
+                          att.quiz_tier === 'Mastery' ? 'text-purple-600' :
+                          att.quiz_tier === 'Intermediate' ? 'text-amber-600' : 'text-emerald-600'
+                        }`}>[{att.quiz_tier}]</span>
+                        <span className="text-muted-foreground">{att.quiz_title}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-foreground">{att.score}/{att.out_of}</span>
+                        <span className={`font-bold ${att.passed ? 'text-success' : 'text-danger'}`}>{att.grade}</span>
+                        {att.passed
+                          ? <i className="fa-solid fa-circle-check text-success" />
+                          : <i className="fa-solid fa-circle-xmark text-danger" />}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Desktop layout */}
+            <div className="hidden sm:grid grid-cols-12 gap-2 items-center">
+              <div className="col-span-3">
+                <p className="font-semibold text-foreground text-sm">{stu.name}</p>
+                <p className="text-xs text-muted-foreground">{stu.email}</p>
+              </div>
+              <div className="col-span-2">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full transition-all ${
+                      qPct >= 80 ? 'bg-success' : qPct >= 50 ? 'bg-warning' : 'bg-primary'
+                    }`} style={{ width: `${qPct}%` }} />
+                  </div>
+                  <span className="text-xs font-mono font-bold text-foreground shrink-0">{qDone}/{qTotal}</span>
+                </div>
+                {(stu.attempts || []).length > 0 && (
+                  <div className="mt-1.5 space-y-1">
+                    {(stu.attempts || []).map((att: any, ai: number) => (
+                      <div key={ai} className="flex items-center gap-1.5 text-[10px]">
+                        <span className={`font-bold ${
+                          att.quiz_tier === 'Mastery' ? 'text-purple-600' :
+                          att.quiz_tier === 'Intermediate' ? 'text-amber-600' : 'text-emerald-600'
+                        }`}>{att.quiz_tier?.slice(0,1) ?? '?'}</span>
+                        <span className="text-muted-foreground truncate max-w-[80px]">{att.quiz_title}</span>
+                        <span className="font-mono font-bold text-foreground ml-auto">{att.score}/{att.out_of}</span>
+                        {att.passed
+                          ? <i className="fa-solid fa-circle-check text-success shrink-0" />
+                          : <i className="fa-solid fa-circle-xmark text-danger shrink-0" />}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="col-span-2">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full transition-all ${
+                      rPct >= 80 ? 'bg-success' : rPct >= 50 ? 'bg-warning' : 'bg-emerald-500'
+                    }`} style={{ width: `${rPct}%` }} />
+                  </div>
+                  <span className="text-xs font-mono font-bold text-foreground shrink-0">{matRead}/{matTotal}</span>
+                </div>
+              </div>
+              <div className="col-span-2">
+                <p className={`text-base font-mono font-bold ${scoreColor}`}>{stu.avg_score > 0 ? `${stu.avg_score}%` : '—'}</p>
+              </div>
+              <div className="col-span-1">
+                <span className="text-sm font-semibold text-foreground">{stu.quizzes_passed ?? 0}</span>
+                <span className="text-xs text-muted-foreground"> /{qTotal}</span>
+              </div>
+              <div className="col-span-2">
+                <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
+                  stu.status === 'active' ? 'bg-success/10 text-success' :
+                  stu.status === 'suspended' ? 'bg-warning/10 text-warning' :
+                  'bg-danger/10 text-danger'
+                }`}>{stu.status || 'active'}</span>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // `<input type="datetime-local">` always reads/writes the browser's LOCAL wall-clock time
 // (no timezone info). `Date.toISOString()` formats in UTC. Using toISOString() to seed a
 // datetime-local default silently shifts the displayed time by the lecturer's UTC offset —
@@ -134,6 +287,9 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     Intermediate: [],
     Mastery: [],
   })
+  // IDs of the draft quiz rows created immediately at generation time (see backend
+  // /quizzes/generate), so publishing updates the same rows instead of duplicating them.
+  const [draftQuizIds, setDraftQuizIds] = useState<Record<string, number>>({})
   const [savedUser, setSavedUser] = useState<Record<string, any> | null>(() =>
     typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('tmas-user') || 'null') : null,
   )
@@ -181,7 +337,26 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   const [selectedMaterialId, setSelectedMaterialId] = useState<string>('')
   const [uploading, setUploading] = useState(false)
   const [uploadMessage, setUploadMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [deletingMaterialId, setDeletingMaterialId] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  const handleDeleteMaterial = async (material: any) => {
+    if (!window.confirm(`Delete "${material.name}"? Students will no longer be able to view or download it. This cannot be undone.`)) return
+    setDeletingMaterialId(material.id)
+    try {
+      const res = await fetch(`${API_BASE}/api/materials/${material.id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || 'Failed to delete material')
+      }
+      setMaterialsState(prev => prev.filter(m => m.id !== material.id))
+      setUploadMessage({ type: 'success', text: `Deleted "${material.name}".` })
+    } catch (err) {
+      setUploadMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to delete material' })
+    } finally {
+      setDeletingMaterialId(null)
+    }
+  }
 
   const loadLecturerData = async () => {
     if (typeof window !== 'undefined') {
@@ -309,6 +484,18 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       setLoadingProgress(p => ({ ...p, [courseCode]: false }))
     }
   }, [])
+
+  // The Students tab shows the same real quiz/reading progress as the Courses tab's
+  // drill-down, so pre-load it for every assigned course rather than making the lecturer
+  // visit Courses first to warm the cache.
+  useEffect(() => {
+    if (tab !== 'students') return
+    for (const course of myCoursesState) {
+      if (!course.code) continue
+      if (courseStudentProgress[course.code] !== undefined || loadingProgress[course.code]) continue
+      loadCourseStudentProgress(course.code, course.level, course.program)
+    }
+  }, [tab, myCoursesState, courseStudentProgress, loadingProgress, loadCourseStudentProgress])
 
   const loadPublishedQuizzes = useCallback(async (course: string) => {
     if (!course) {
@@ -646,8 +833,11 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
 
       setGeneratedQuestionsByTier(processedByTier)
       setApprovedByTier(autoApproved)
+      setDraftQuizIds(data.draft_quiz_ids || {})
       setGenerated(true)
       setWizardStep(2)
+      // Surfaces immediately in Question Banks even before the lecturer publishes/schedules it.
+      loadQuestionBanks(String(savedUser?.name || ''))
     } catch (err: any) {
       setGenError(`Quiz generation failed: ${err.message || 'Unknown error'}`)
     } finally {
@@ -664,14 +854,14 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       const cfg = tierScheduleConfigs[tier]
       const tl = Number(cfg.timeLimit)
       const ps = Number(cfg.passingScore)
-      const qc = (generatedQuestionsByTier[tier] || []).length
+      const qc = (approvedByTier[tier] || []).length
       if (!cfg.openDate) errs[`${tier}_openDate`] = 'Open date is required.'
       if (!cfg.closeDate) errs[`${tier}_closeDate`] = 'Close date is required.'
       if (cfg.openDate && cfg.closeDate && new Date(cfg.closeDate) <= new Date(cfg.openDate))
         errs[`${tier}_closeDate`] = 'Close date must be after open date.'
       if (isNaN(tl) || tl < 5 || tl > 180) errs[`${tier}_timeLimit`] = 'Duration must be 5–180 mins.'
       if (isNaN(ps) || ps < 1 || ps > 100) errs[`${tier}_passingScore`] = 'Pass score must be 1–100%.'
-      if (qc === 0) errs[`${tier}_questions`] = 'No questions generated for this tier.'
+      if (qc === 0) errs[`${tier}_questions`] = 'No approved questions for this tier — approve at least one in Step 2.'
       if (!errs[`${tier}_timeLimit`] && cfg.openDate && cfg.closeDate) {
         const windowMinutes = (new Date(cfg.closeDate).getTime() - new Date(cfg.openDate).getTime()) / 60000
         if (windowMinutes > 0 && windowMinutes < tl) {
@@ -690,9 +880,14 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     try {
       const quizzesToPublish = (['Foundational', 'Intermediate', 'Mastery'] as const).map(tier => {
         const config = tierScheduleConfigs[tier]
-        const questions = generatedQuestionsByTier[tier] || []
+        const approvedIds = new Set(approvedByTier[tier] || [])
+        // Only publish what the lecturer actually approved in the review step — previously
+        // every generated question was sent regardless of approval state, making the
+        // approve/reject step purely cosmetic.
+        const questions = (generatedQuestionsByTier[tier] || []).filter((q: any) => approvedIds.has(q.id))
 
         return {
+          id: draftQuizIds[tier],
           title: `AI Generated ${tier} Quiz for ${genCourse}`,
           course: genCourse,
           tier: tier,
@@ -734,6 +929,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       setWizardStep(1)
       setGenerated(false)
       await loadPublishedQuizzes(genCourse)
+      loadQuestionBanks(String(savedUser?.name || ''))
     } catch (err: any) {
       setPublishError(`Publishing failed: ${err.message}`)
     } finally {
@@ -832,7 +1028,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
             </div>
             <div>
               <p className="text-sidebar-foreground font-semibold text-sm">TMAS</p>
-              <p className="text-sidebar-muted text-xs">Meridian University</p>
+              <p className="text-sidebar-muted text-xs">UENR</p>
             </div>
           </div>
           <button onClick={() => setMobileNavOpen(false)} className="md:hidden text-sidebar-muted hover:text-sidebar-foreground p-1">
@@ -1167,151 +1363,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                 Loading...
                               </div>
                             ) : (
-                              <div className="divide-y divide-border">
-                                {/* Table Header */}
-                                <div className="hidden sm:grid grid-cols-12 gap-2 px-5 py-3 bg-muted/40">
-                                  <span className="col-span-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Student</span>
-                                  <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Quiz Progress</span>
-                                  <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Reading Progress</span>
-                                  <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Avg Score</span>
-                                  <span className="col-span-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Passed</span>
-                                  <span className="col-span-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Status</span>
-                                </div>
-
-                                {progressStudents.map(stu => {
-                                  const qDone  = stu.quizzes_done  ?? 0
-                                  const qTotal = stu.quizzes_total ?? 0
-                                  const qPct   = qTotal > 0 ? Math.round((qDone / qTotal) * 100) : 0
-                                  const matTotal = stu.total_materials ?? 0
-                                  const matRead  = stu.materials_read ?? 0
-                                  const rPct     = stu.reading_progress ?? (matTotal > 0 ? Math.round((matRead / matTotal) * 100) : 0)
-                                  const scoreColor = (stu.avg_score ?? 0) >= 70 ? 'text-success' : (stu.avg_score ?? 0) >= 50 ? 'text-warning' : 'text-danger'
-
-                                  return (
-                                    <div key={stu.id} className="px-5 py-4 hover:bg-muted/30 transition-colors">
-                                      {/* Mobile layout */}
-                                      <div className="sm:hidden space-y-3">
-                                        <div className="flex items-center justify-between">
-                                          <div>
-                                            <p className="font-semibold text-foreground text-sm">{stu.name}</p>
-                                            <p className="text-xs text-muted-foreground">{stu.email}</p>
-                                          </div>
-                                          <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${
-                                            stu.status === 'active' ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'
-                                          }`}>{stu.status || 'active'}</span>
-                                        </div>
-                                        <div className="grid grid-cols-3 gap-3 text-xs">
-                                          <div className="bg-card rounded-lg p-2.5 border border-border">
-                                            <p className="text-muted-foreground mb-1">Quiz Progress</p>
-                                            <div className="flex items-center gap-2">
-                                              <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-                                                <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${qPct}%` }} />
-                                              </div>
-                                              <span className="font-mono font-bold text-foreground">{qDone}/{qTotal}</span>
-                                            </div>
-                                          </div>
-                                          <div className="bg-card rounded-lg p-2.5 border border-border">
-                                            <p className="text-muted-foreground mb-1">Reading</p>
-                                            <div className="flex items-center gap-2">
-                                              <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-                                                <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${rPct}%` }} />
-                                              </div>
-                                              <span className="font-mono font-bold text-foreground">{matRead}/{matTotal}</span>
-                                            </div>
-                                          </div>
-                                          <div className="bg-card rounded-lg p-2.5 border border-border">
-                                            <p className="text-muted-foreground mb-1">Avg Score</p>
-                                            <p className={`font-mono font-bold text-lg ${scoreColor}`}>{stu.avg_score > 0 ? `${stu.avg_score}%` : '—'}</p>
-                                          </div>
-                                        </div>
-                                        {/* Individual quiz attempts */}
-                                        {(stu.attempts || []).length > 0 && (
-                                          <div className="space-y-1.5">
-                                            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Quiz Attempts</p>
-                                            {(stu.attempts || []).map((att: any, ai: number) => (
-                                              <div key={ai} className="flex items-center justify-between bg-card border border-border rounded-lg px-3 py-2 text-xs">
-                                                <div>
-                                                  <span className={`font-bold mr-1.5 ${
-                                                    att.quiz_tier === 'Mastery' ? 'text-purple-600' :
-                                                    att.quiz_tier === 'Intermediate' ? 'text-amber-600' : 'text-emerald-600'
-                                                  }`}>[{att.quiz_tier}]</span>
-                                                  <span className="text-muted-foreground">{att.quiz_title}</span>
-                                                </div>
-                                                <div className="flex items-center gap-2">
-                                                  <span className="font-mono font-bold text-foreground">{att.score}/{att.out_of}</span>
-                                                  <span className={`font-bold ${att.passed ? 'text-success' : 'text-danger'}`}>{att.grade}</span>
-                                                  {att.passed
-                                                    ? <i className="fa-solid fa-circle-check text-success" />
-                                                    : <i className="fa-solid fa-circle-xmark text-danger" />}
-                                                </div>
-                                              </div>
-                                            ))}
-                                          </div>
-                                        )}
-                                      </div>
-
-                                      {/* Desktop layout */}
-                                      <div className="hidden sm:grid grid-cols-12 gap-2 items-center">
-                                        <div className="col-span-3">
-                                          <p className="font-semibold text-foreground text-sm">{stu.name}</p>
-                                          <p className="text-xs text-muted-foreground">{stu.email}</p>
-                                        </div>
-                                        <div className="col-span-2">
-                                          <div className="flex items-center gap-2">
-                                            <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-                                              <div className={`h-full rounded-full transition-all ${
-                                                qPct >= 80 ? 'bg-success' : qPct >= 50 ? 'bg-warning' : 'bg-primary'
-                                              }`} style={{ width: `${qPct}%` }} />
-                                            </div>
-                                            <span className="text-xs font-mono font-bold text-foreground shrink-0">{qDone}/{qTotal}</span>
-                                          </div>
-                                          {(stu.attempts || []).length > 0 && (
-                                            <div className="mt-1.5 space-y-1">
-                                              {(stu.attempts || []).map((att: any, ai: number) => (
-                                                <div key={ai} className="flex items-center gap-1.5 text-[10px]">
-                                                  <span className={`font-bold ${
-                                                    att.quiz_tier === 'Mastery' ? 'text-purple-600' :
-                                                    att.quiz_tier === 'Intermediate' ? 'text-amber-600' : 'text-emerald-600'
-                                                  }`}>{att.quiz_tier?.slice(0,1) ?? '?'}</span>
-                                                  <span className="text-muted-foreground truncate max-w-[80px]">{att.quiz_title}</span>
-                                                  <span className="font-mono font-bold text-foreground ml-auto">{att.score}/{att.out_of}</span>
-                                                  {att.passed
-                                                    ? <i className="fa-solid fa-circle-check text-success shrink-0" />
-                                                    : <i className="fa-solid fa-circle-xmark text-danger shrink-0" />}
-                                                </div>
-                                              ))}
-                                            </div>
-                                          )}
-                                        </div>
-                                        <div className="col-span-2">
-                                          <div className="flex items-center gap-2">
-                                            <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-                                              <div className={`h-full rounded-full transition-all ${
-                                                rPct >= 80 ? 'bg-success' : rPct >= 50 ? 'bg-warning' : 'bg-emerald-500'
-                                              }`} style={{ width: `${rPct}%` }} />
-                                            </div>
-                                            <span className="text-xs font-mono font-bold text-foreground shrink-0">{matRead}/{matTotal}</span>
-                                          </div>
-                                        </div>
-                                        <div className="col-span-2">
-                                          <p className={`text-base font-mono font-bold ${scoreColor}`}>{stu.avg_score > 0 ? `${stu.avg_score}%` : '—'}</p>
-                                        </div>
-                                        <div className="col-span-1">
-                                          <span className="text-sm font-semibold text-foreground">{stu.quizzes_passed ?? 0}</span>
-                                          <span className="text-xs text-muted-foreground"> /{qTotal}</span>
-                                        </div>
-                                        <div className="col-span-2">
-                                          <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                            stu.status === 'active' ? 'bg-success/10 text-success' :
-                                            stu.status === 'suspended' ? 'bg-warning/10 text-warning' :
-                                            'bg-danger/10 text-danger'
-                                          }`}>{stu.status || 'active'}</span>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  )
-                                })}
-                              </div>
+                              <StudentProgressTable students={progressStudents} />
                             )}
                           </div>
                         )}
@@ -1409,10 +1461,11 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                   <h3 className="font-semibold text-foreground">Uploaded Materials</h3>
                   <span className="text-xs text-muted-foreground">{materialsState.length} files</span>
                 </div>
+                <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-muted/40">
-                      {['File Name', 'Course', 'Size', 'Uploaded', 'AI Status', 'Quiz'].map(h => (
+                      {['File Name', 'Course', 'Size', 'Uploaded', 'AI Status', 'Quiz', 'Actions'].map(h => (
                         <th key={h} className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
                       ))}
                     </tr>
@@ -1440,10 +1493,22 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                             ? <span className="text-xs text-success font-semibold"><i className="fa-solid fa-check mr-1" />Generated</span>
                             : <button onClick={() => setTab('quizgen')} className="text-xs text-primary hover:underline font-medium">Generate</button>}
                         </td>
+                        <td className="px-5 py-3.5">
+                          <button
+                            onClick={() => handleDeleteMaterial(m)}
+                            disabled={deletingMaterialId === m.id}
+                            className="inline-flex items-center gap-1.5 text-xs font-semibold text-danger hover:bg-danger/10 px-2.5 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+                            title="Delete this material"
+                          >
+                            <i className="fa-solid fa-trash-can" />
+                            {deletingMaterialId === m.id ? 'Deleting...' : 'Delete'}
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             </div>
           )}
@@ -1468,49 +1533,40 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {studentsByCourse.map(({ course, students }) => (
-                    <div key={course.code} className="bg-card border border-border rounded-2xl overflow-hidden">
-                      <div className="px-6 py-4 border-b border-border flex items-center justify-between gap-4">
-                        <div>
-                          <p className="text-sm font-semibold text-foreground">{course.code} — {course.title}</p>
-                          <p className="text-xs text-muted-foreground">{course.level || '-'} <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {course.program || '-'}</p>
+                  {studentsByCourse.map(({ course, students }) => {
+                    const sc = (course as any).student_count ?? students.length
+                    const progressStudents = courseStudentProgress[course.code]
+                    const isLoading = loadingProgress[course.code]
+                    return (
+                      <div key={course.code} className="bg-card border border-border rounded-2xl overflow-hidden">
+                        <div className="px-6 py-4 border-b border-border flex items-center justify-between gap-4">
+                          <div>
+                            <p className="text-sm font-semibold text-foreground">{course.code} — {course.title}</p>
+                            <p className="text-xs text-muted-foreground">{course.level || '-'} <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {course.program || '-'}</p>
+                          </div>
+                          <span className="inline-flex items-center gap-1.5 text-sm font-bold text-foreground">
+                            <i className="fa-solid fa-users text-primary text-xs" />
+                            {sc}
+                            <span className="text-xs font-normal text-muted-foreground">student{sc === 1 ? '' : 's'}</span>
+                          </span>
                         </div>
-                        <span className="inline-flex items-center gap-1.5 text-sm font-bold text-foreground">
-                          <i className="fa-solid fa-users text-primary text-xs" />
-                          {(course as any).student_count ?? students.length}
-                          <span className="text-xs font-normal text-muted-foreground">student{((course as any).student_count ?? students.length) === 1 ? '' : 's'}</span>
-                        </span>
+                        {isLoading || progressStudents === undefined ? (
+                          <div className="flex items-center justify-center gap-3 py-10 text-muted-foreground text-sm">
+                            <span className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                            Loading student progress...
+                          </div>
+                        ) : progressStudents.length === 0 ? (
+                          <div className="px-6 py-5 text-sm text-muted-foreground flex items-center gap-2">
+                            {sc > 0
+                              ? <><i className="fa-solid fa-circle-info text-primary" /> {sc} student{sc === 1 ? '' : 's'} enrolled — detailed records loading or may require a page refresh.</>
+                              : <><i className="fa-solid fa-user-slash opacity-40" /> No students currently enrolled in this course assignment.</>}
+                          </div>
+                        ) : (
+                          <StudentProgressTable students={progressStudents} />
+                        )}
                       </div>
-                      {students.length === 0 ? (
-                        <div className="px-6 py-5 text-sm text-muted-foreground flex items-center gap-2">
-                          {(course as any).student_count > 0
-                            ? <><i className="fa-solid fa-circle-info text-primary" /> {(course as any).student_count} student{(course as any).student_count === 1 ? '' : 's'} enrolled — detailed records loading or may require a page refresh.</>
-                            : <><i className="fa-solid fa-user-slash opacity-40" /> No students currently enrolled in this course assignment.</>}
-                        </div>
-                      ) : (
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b border-border bg-muted/40">
-                              {['Name', 'Email', 'Level', 'Program', 'Status'].map(h => (
-                                <th key={h} className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border">
-                            {students.map(student => (
-                              <tr key={student.id} className="hover:bg-muted/30 transition-colors">
-                                <td className="px-5 py-4 text-foreground font-semibold">{student.name}</td>
-                                <td className="px-5 py-4 text-muted-foreground text-xs">{student.email}</td>
-                                <td className="px-5 py-4 text-muted-foreground text-xs">{student.level || '—'}</td>
-                                <td className="px-5 py-4 text-muted-foreground text-xs">{student.level || '-'} <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {student.program || '-'}</td>
-                                <td className="px-5 py-4"><span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${student.status === 'active' ? 'bg-success/10 text-success' : student.status === 'suspended' ? 'bg-warning/10 text-warning' : 'bg-danger/10 text-danger'}`}>{student.status || 'active'}</span></td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -2154,9 +2210,11 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                         const isExpanded = expandedBankQuizId === quiz.id
                         const isLoadingQuestions = loadingBankQuestionsId === quiz.id
                         const questions = bankQuestionsById[quiz.id] || []
+                        const displayStatus = quiz.status === 'draft' ? 'draft' : quiz.live_status
                         const statusBadge =
-                          quiz.live_status === 'available' ? 'bg-success/10 text-success' :
-                          quiz.live_status === 'closed' ? 'bg-danger/10 text-danger' :
+                          displayStatus === 'available' ? 'bg-success/10 text-success' :
+                          displayStatus === 'closed' ? 'bg-danger/10 text-danger' :
+                          displayStatus === 'draft' ? 'bg-muted text-muted-foreground' :
                           'bg-amber-500/10 text-amber-700'
                         return (
                           <div key={quiz.id} className="bg-card border border-border rounded-2xl overflow-hidden">
@@ -2168,7 +2226,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                   'bg-emerald-500/10 text-emerald-600'
                                 }`}>{quiz.tier || 'Foundational'}</span>
                                 <span className="text-sm font-semibold text-foreground">{quiz.title}</span>
-                                <span className={`text-xs font-bold px-2 py-0.5 rounded-full capitalize ${statusBadge}`}>{quiz.live_status}</span>
+                                <span className={`text-xs font-bold px-2 py-0.5 rounded-full capitalize ${statusBadge}`}>{displayStatus}</span>
                                 <span className="text-xs text-muted-foreground">{quiz.questions ?? 0} questions</span>
                               </div>
                               <div className="flex items-center gap-2">

@@ -590,6 +590,13 @@ def _finalize_expired_in_progress_for_student(student_id: str) -> None:
     """
     if not student_id:
         return
+
+    now = datetime.now(timezone.utc)
+    _finalize_in_progress_attempts(student_id, now)
+    _finalize_never_attempted_expired_quizzes(student_id, now)
+
+
+def _finalize_in_progress_attempts(student_id: str, now: datetime) -> None:
     try:
         response = supabase.table('quiz_attempts').select('*').eq('student_id', student_id).eq('status', 'in_progress').execute()
     except _postgrest_exceptions.APIError as exc:
@@ -615,7 +622,6 @@ def _finalize_expired_in_progress_for_student(student_id: str) -> None:
         return
     quizzes_by_id = {q['id']: q for q in (quizzes_resp.data or []) if q.get('id') is not None}
 
-    now = datetime.now(timezone.utc)
     for attempt in in_progress:
         quiz = quizzes_by_id.get(attempt.get('quiz_id'))
         if not quiz:
@@ -638,6 +644,89 @@ def _finalize_expired_in_progress_for_student(student_id: str) -> None:
                 }).eq('id', attempt['id']).execute()
             except Exception:
                 continue
+
+
+def _finalize_never_attempted_expired_quizzes(student_id: str, now: datetime) -> None:
+    """A quiz the student was eligible for but never even opened shouldn't just vanish
+    once it expires — it should land in their completed history as a missed (0-score)
+    result, the same visible consequence as failing it, so it's honestly reflected in
+    their record instead of silently disappearing.
+    """
+    try:
+        student_level, student_program = _student_level_program(student_id)
+    except Exception:
+        return
+
+    try:
+        all_quizzes_resp = supabase.table('quizzes').select('*').execute()
+    except Exception:
+        return
+    if supabase_failed(all_quizzes_resp):
+        return
+
+    try:
+        allowed_codes = set(_fetch_allowed_course_codes(student_level, student_program)) if student_level else set()
+    except Exception:
+        return
+    target_digit = _extract_level_digit(student_level) if student_level else None
+
+    expired_eligible: dict[int, dict[str, Any]] = {}
+    for quiz in (all_quizzes_resp.data or []):
+        if str(quiz.get('status') or '').lower() == 'draft':
+            continue
+        if not _quiz_is_expired(quiz, now):
+            continue
+        qid = quiz.get('id')
+        if qid is None:
+            continue
+
+        if student_level:
+            course_code = str(quiz.get('course') or '')
+            title = str(quiz.get('title') or '')
+            clean_q = _clean_code_str(course_code)
+            q_digit = _extract_level_digit(course_code) or _extract_level_digit(title)
+            eligible = (
+                course_code in allowed_codes
+                or clean_q in allowed_codes
+                or (target_digit is not None and q_digit is not None and target_digit == q_digit)
+            )
+            if not eligible:
+                continue
+
+        expired_eligible[qid] = quiz
+
+    if not expired_eligible:
+        return
+
+    try:
+        existing_resp = supabase.table('quiz_attempts').select('quiz_id').eq('student_id', student_id).in_('quiz_id', list(expired_eligible.keys())).execute()
+    except Exception:
+        return
+    if supabase_failed(existing_resp):
+        return
+    existing_quiz_ids = {a.get('quiz_id') for a in (existing_resp.data or [])}
+
+    missing_ids = [qid for qid in expired_eligible if qid not in existing_quiz_ids]
+    if not missing_ids:
+        return
+
+    insert_records = [{
+        'quiz_id': qid,
+        'student_id': student_id,
+        'score': 0,
+        'out_of': expired_eligible[qid].get('questions') or 0,
+        'grade': 'F',
+        'passed': False,
+        'status': 'missed',
+        'attempted_at': now.isoformat(),
+    } for qid in missing_ids]
+
+    try:
+        insert_resp = _safe_insert('quiz_attempts', insert_records)
+        if supabase_failed(insert_resp):
+            print(f"Failed to record missed (never-attempted) quizzes for student {student_id}: {supabase_error_message(insert_resp, '')}")
+    except Exception as exc:
+        print(f"Failed to record missed (never-attempted) quizzes for student {student_id}: {exc}")
 
 
 def _safe_insert(table_name: str, record: dict | list[dict]) -> Any:
@@ -926,15 +1015,61 @@ def generate_quiz(payload: GenerateQuizRequest) -> dict[str, Any]:
         if payload.generate_all_tiers:
             quiz_sets = []
             questions_by_tier: dict[str, list[dict[str, Any]]] = {}
+            draft_quiz_ids: dict[str, int] = {}
             for offset, tier in enumerate(['Foundational', 'Intermediate', 'Mastery']):
                 quiz_set = build_quiz_set(tier, offset)
-                questions_by_tier[tier] = quiz_set.pop('questions')
+                tier_questions = quiz_set.pop('questions')
+
+                # Persist as a draft immediately, rather than only on publish, so the bank
+                # shows up in the lecturer's Question Banks archive right away — previously
+                # a generated-but-not-yet-published bank existed only in React state and
+                # vanished (with no trace anywhere) the moment the lecturer navigated away.
+                draft_id: int | None = None
+                try:
+                    quiz_record = {
+                        'title': quiz_set['title'],
+                        'course': quiz_set['course'],
+                        'questions': len(tier_questions),
+                        'time_limit': quiz_set['time_limit'],
+                        'passing_score': quiz_set['passing_score'],
+                        'attempts': quiz_set['attempts'],
+                        'due_date': quiz_set['due_date'],
+                        'open_date': None,
+                        'close_date': None,
+                        'status': 'draft',
+                        'difficulty': quiz_set['difficulty'],
+                        'tier': tier,
+                        'material_ids': quiz_set['material_ids'],
+                    }
+                    quiz_resp = _safe_insert('quizzes', quiz_record)
+                    if not supabase_failed(quiz_resp) and quiz_resp.data:
+                        draft_id = quiz_resp.data[0]['id']
+                        question_rows = [{
+                            'quiz_id': draft_id,
+                            'question': q.get('question', ''),
+                            'options': q.get('options', []),
+                            'correct': q.get('answer', ''),
+                        } for q in tier_questions]
+                        q_resp = _safe_insert('quiz_questions', question_rows)
+                        if not supabase_failed(q_resp) and q_resp.data:
+                            for question, row in zip(tier_questions, q_resp.data):
+                                question['id'] = row['id']
+                except Exception as persist_err:
+                    # A persistence hiccup here shouldn't block the lecturer from reviewing
+                    # and publishing straight from the in-memory generation result.
+                    print(f"Draft quiz persistence failed for {tier}: {persist_err}")
+
+                if draft_id is not None:
+                    draft_quiz_ids[tier] = draft_id
+                quiz_set['id'] = draft_id
+                questions_by_tier[tier] = tier_questions
                 quiz_sets.append(quiz_set)
 
             return {
                 'quiz_sets': quiz_sets,
                 'questions_by_tier': questions_by_tier,
                 'materials': materials,
+                'draft_quiz_ids': draft_quiz_ids,
             }
 
         questions: list[dict[str, Any]] = []
@@ -1019,13 +1154,31 @@ def publish_quiz(payload: PublishQuizRequest) -> dict[str, Any]:
                 'material_id': q.get('material_id') or payload.material_id,
                 'material_ids': q.get('material_ids', payload.material_ids or []),
             }
-            quiz_response = _safe_insert('quizzes', quiz_record)
-            if supabase_failed(quiz_response):
-                raise HTTPException(status_code=502, detail=supabase_error_message(quiz_response, 'Supabase insert quiz failed'))
-            if not quiz_response.data:
-                raise HTTPException(status_code=502, detail='Failed to create quiz')
 
-            created_quiz = quiz_response.data[0]
+            draft_id = q.get('id')
+            if draft_id is not None:
+                # This bank was already persisted as a draft at generation time — publishing
+                # finalizes the SAME row (schedule + status) rather than inserting a duplicate.
+                quiz_response = _safe_update('quizzes', quiz_record, 'id', [draft_id])
+                if supabase_failed(quiz_response):
+                    raise HTTPException(status_code=502, detail=supabase_error_message(quiz_response, 'Supabase update draft quiz failed'))
+                if not quiz_response.data:
+                    raise HTTPException(status_code=502, detail='Draft quiz not found')
+                created_quiz = quiz_response.data[0]
+
+                # Replace the draft's questions with the lecturer's final (post-review,
+                # post-approval) set rather than appending duplicates.
+                delete_resp = supabase.table('quiz_questions').delete().eq('quiz_id', draft_id).execute()
+                if supabase_failed(delete_resp):
+                    raise HTTPException(status_code=502, detail=supabase_error_message(delete_resp, 'Supabase clear draft quiz questions failed'))
+            else:
+                quiz_response = _safe_insert('quizzes', quiz_record)
+                if supabase_failed(quiz_response):
+                    raise HTTPException(status_code=502, detail=supabase_error_message(quiz_response, 'Supabase insert quiz failed'))
+                if not quiz_response.data:
+                    raise HTTPException(status_code=502, detail='Failed to create quiz')
+                created_quiz = quiz_response.data[0]
+
             question_rows = []
             for question in q.get('questions', []):
                 question_rows.append({
@@ -1435,8 +1588,8 @@ def _quiz_is_locked(quiz: dict[str, Any], now: datetime) -> bool:
     open_dt = _parse_datetime(quiz.get('open_date'))
     if open_dt and now < open_dt:
         return True
-    # Also lock if quiz has no open_date AND was explicitly scheduled (status='scheduled' in DB)
-    if not open_dt and str(quiz.get('status') or '').lower() == 'scheduled':
+    # Also lock if quiz has no open_date AND was explicitly scheduled/still a draft
+    if not open_dt and str(quiz.get('status') or '').lower() in ('scheduled', 'draft'):
         return True
     return False
 
@@ -1605,6 +1758,11 @@ def list_available_quizzes(level: str | None = None, program: str | None = None,
     quizzes: list[dict[str, Any]] = []
     for quiz in all_quizzes:
         if _quiz_is_expired(quiz, now):
+            continue
+        # Drafts are persisted the moment a lecturer generates a bank (so it shows up in
+        # their Question Banks archive immediately), but haven't been through the schedule
+        # step yet — students must never see them, not even as a locked/upcoming entry.
+        if str(quiz.get('status') or '').lower() == 'draft':
             continue
 
         quiz_dict = dict(quiz)

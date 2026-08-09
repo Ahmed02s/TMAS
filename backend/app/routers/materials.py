@@ -405,6 +405,47 @@ async def upload_materials(
     return result
 
 
+@router.delete('/{material_id}')
+def delete_material(material_id: int) -> dict[str, Any]:
+    """Deletes a material the lecturer no longer wants students to see. Best-effort cleans
+    up the underlying file (local disk + Supabase Storage) and any reading-progress rows,
+    but never lets a missing/already-gone file block removing the database record."""
+    ensure_supabase_enabled()
+    response = supabase.table('materials').select('*').eq('id', material_id).limit(1).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase get material failed'))
+    if not response.data:
+        raise HTTPException(status_code=404, detail='Material not found')
+    material = response.data[0]
+
+    try:
+        local_path = _resolve_material_path(material)
+        if local_path and local_path.exists():
+            local_path.unlink()
+    except Exception:
+        pass
+
+    if material.get('file_url') and material.get('path'):
+        try:
+            course_name = str(material.get('course') or '').strip()
+            safe_course = re.sub(r'[^a-zA-Z0-9._-]', '_', course_name)
+            basename = Path(material['path']).name
+            supabase.storage.from_('materials').remove([f"{safe_course}/{basename}"])
+        except Exception:
+            pass
+
+    try:
+        supabase.table('material_reads').delete().eq('material_id', material_id).execute()
+    except Exception:
+        pass
+
+    delete_resp = supabase.table('materials').delete().eq('id', material_id).execute()
+    if supabase_failed(delete_resp):
+        raise HTTPException(status_code=502, detail=supabase_error_message(delete_resp, 'Supabase delete material failed'))
+
+    return {'status': 'deleted', 'material_id': material_id}
+
+
 @router.post('/{material_id}/mark_processed')
 def mark_material_processed(material_id: int):
     ensure_supabase_enabled()

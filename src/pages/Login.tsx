@@ -234,7 +234,7 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
         </button>
 
         <div>
-          <p className="text-accent text-xs font-bold uppercase tracking-widest mb-6">Meridian University</p>
+          <p className="text-accent text-xs font-bold uppercase tracking-widest mb-6">UENR</p>
           <h1 className="font-display text-5xl text-sidebar-foreground leading-tight mb-6">
             Empowering<br />education<br />through <span className="text-accent">intelligence.</span>
           </h1>

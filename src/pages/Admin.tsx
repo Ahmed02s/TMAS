@@ -562,7 +562,7 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
             </div>
             <div>
               <p className="text-sidebar-foreground font-semibold text-sm">TMAS</p>
-              <p className="text-sidebar-muted text-xs">Meridian University</p>
+              <p className="text-sidebar-muted text-xs">UENR</p>
             </div>
           </div>
           <button onClick={() => setMobileNavOpen(false)} className="md:hidden text-sidebar-muted hover:text-sidebar-foreground p-1">
@@ -880,7 +880,7 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
           {tab === 'levels' && (
             <div className="space-y-5">
               <div className="flex items-center justify-between">
-                <p className="text-muted-foreground text-sm">Manage the academic level structure for Meridian University.</p>
+                <p className="text-muted-foreground text-sm">Manage the academic level structure for UENR.</p>
                 <button
                   onClick={handleCreateLevel}
                   disabled={isSavingLevel}

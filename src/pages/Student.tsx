@@ -1018,7 +1018,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
             </div>
             <div>
               <p className="text-sidebar-foreground font-semibold text-sm">TMAS</p>
-              <p className="text-sidebar-muted text-xs">Meridian University</p>
+              <p className="text-sidebar-muted text-xs">UENR</p>
             </div>
           </div>
           <button onClick={() => setMobileNavOpen(false)} className="md:hidden text-sidebar-muted hover:text-sidebar-foreground p-1">
@@ -1630,6 +1630,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
               <div>
                 <h3 className="font-semibold text-foreground mb-4">Completed Quizzes</h3>
                 <div className="bg-card border border-border rounded-2xl overflow-hidden">
+                  <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-border bg-muted/40">
@@ -1656,6 +1657,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               </div>
             </div>
