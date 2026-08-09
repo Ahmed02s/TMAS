@@ -1,6 +1,10 @@
+import logging
 import os
+import secrets
 from pathlib import Path
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 DOTENV_PATH = BASE_DIR / '.env'
@@ -21,11 +25,20 @@ QROK_API_URL = os.getenv('QROK_API_URL', os.getenv('GROQ_API_URL', 'https://api.
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 
-# HMAC signing key for session JWTs (see app.core.security). Falls back to a fixed
-# development value so the app keeps working out of the box, but this means anyone with
-# the source can forge tokens — set a real JWT_SECRET env var in production (e.g.
-# `python -c "import secrets; print(secrets.token_hex(32))"`).
-JWT_SECRET = os.getenv('JWT_SECRET', 'tmas-dev-only-insecure-default-change-me')
+# HMAC signing key for session JWTs (see app.core.security). A fixed, source-visible
+# fallback would let anyone who reads this repo forge valid session tokens for any user
+# (including admins), so instead of a hardcoded default we generate a random secret for
+# this process if JWT_SECRET isn't set. That keeps the app working out of the box, but
+# every restart invalidates existing sessions — set a real JWT_SECRET env var in
+# production (e.g. `python -c "import secrets; print(secrets.token_hex(32))"`) so
+# restarts/redeploys don't log everyone out and so all worker processes share one key.
+JWT_SECRET = os.getenv('JWT_SECRET') or secrets.token_hex(32)
+if not os.getenv('JWT_SECRET'):
+    logger.warning(
+        'JWT_SECRET is not set — using a random per-process secret. All sessions will be '
+        'invalidated on restart, and this will break auth if you run more than one worker '
+        'process. Set a persistent JWT_SECRET env var before deploying.'
+    )
 JWT_ALGORITHM = 'HS256'
 JWT_EXPIRES_MINUTES = int(os.getenv('JWT_EXPIRES_MINUTES', str(60 * 24 * 7)))  # 7 days
 

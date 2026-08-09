@@ -93,6 +93,10 @@ export default function App() {
 
   // Fired by the global fetch patch (src/utils/apiAuth.ts) whenever the backend rejects
   // the stored token as missing/expired/invalid — e.g. it was issued before this session
+  // system existed, or its 7-day expiry passed. Local storage is already cleared at that
+  // point; this just makes sure the UI actually reflects "logged out" instead of staying
+  // stuck on a portal that will keep 401ing.
+  useEffect(() => {
     function handleUnauthorized() {
       setView('login')
     }
