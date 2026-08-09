@@ -74,7 +74,7 @@ export default function CourseModal({
     setCodeError('')
     setTitleError('')
     setLevelError('')
-  }, [initialCourse, levels, open])
+  }, [initialCourse, open])
 
   if (!open) return null
 
