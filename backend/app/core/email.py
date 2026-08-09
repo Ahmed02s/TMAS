@@ -14,6 +14,16 @@ def _build_email_payload(to_email: str, to_name: str, reset_token: str) -> dict[
     from_email = EMAIL_FROM.strip()
     reply_to = EMAIL_REPLY_TO.strip() or from_email
 
+    html_body = (
+        f'<p>Hi {to_name},</p>'
+        f'<p>We received a request to reset your TMAS password.</p>'
+        f'<p><a href="{reset_url}" target="_blank" rel="noopener noreferrer">Click here to reset your password</a></p>'
+        f'<p>If that does not work, copy and paste this link into your browser:</p>'
+        f'<p><a href="{reset_url}" target="_blank" rel="noopener noreferrer">{reset_url}</a></p>'
+        '<p>If you did not request this, you can safely ignore this message.</p>'
+        '<p>Thanks,<br/>TMAS Team</p>'
+    )
+
     return {
         'personalizations': [
             {
@@ -34,7 +44,11 @@ def _build_email_payload(to_email: str, to_name: str, reset_token: str) -> dict[
                     'Thanks,\n'
                     'TMAS Team'
                 ),
-            }
+            },
+            {
+                'type': 'text/html',
+                'value': html_body,
+            },
         ],
     }
 

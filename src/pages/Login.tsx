@@ -260,6 +260,7 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
     setIsSubmitting(true)
     setStatusMessage('')
     const name = `${firstName.trim()} ${lastName.trim()}`
+    const trimmedEmail = registerEmail.trim()
 
     try {
       const response = await fetch(`${API_BASE}/api/auth/register`, {
@@ -267,7 +268,7 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           name,
-          email: registerEmail.trim(),
+          email: trimmedEmail,
           password: registerPassword,
           role,
           ...(role === 'student'
@@ -285,7 +286,7 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
           const { dispatchPushNotification } = await import('../utils/notifications')
           await dispatchPushNotification({
             title: 'New Lecturer Registration Pending',
-            message: `${name} (${registerEmail.trim()}) has registered and is awaiting administrator approval.`,
+            message: `${name} (${trimmedEmail}) has registered and is awaiting administrator approval.`,
             target_role: 'admin',
             type: 'warning',
           })
