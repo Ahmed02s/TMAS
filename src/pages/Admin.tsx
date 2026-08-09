@@ -1,10 +1,9 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import Icon from '../components/Icon'
 import type { AppView } from '../App'
 import CourseModal, { type CourseFormValues } from '../components/CourseModal'
 import ProfileModal from '../components/ProfileModal'
 import { API_BASE } from '../config'
-const savedUser = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('tmas-user') || 'null') : null
 
 type Tab = 'overview' | 'levels' | 'courses' | 'lecturers' | 'students' | 'analytics'
 
@@ -16,6 +15,21 @@ const navItems: { key: Tab; label: string; icon: string }[] = [
   { key: 'students', label: 'Students', icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z' },
   { key: 'analytics', label: 'Analytics', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
 ]
+
+function formatRelativeTime(iso?: string): string {
+  if (!iso) return 'Recently'
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return 'Recently'
+  const diffMs = Date.now() - then
+  const diffMin = Math.floor(diffMs / 60000)
+  if (diffMin < 1) return 'Just now'
+  if (diffMin < 60) return `${diffMin}m ago`
+  const diffHr = Math.floor(diffMin / 60)
+  if (diffHr < 24) return `${diffHr}h ago`
+  const diffDay = Math.floor(diffHr / 24)
+  if (diffDay < 30) return `${diffDay}d ago`
+  return new Date(iso).toLocaleDateString()
+}
 
 function Badge({ children, variant }: { children: React.ReactNode; variant: 'success' | 'warning' | 'danger' | 'default' }) {
   const cls = {
@@ -40,6 +54,17 @@ function ProgressBar({ value }: { value: number }) {
 }
 
 export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void }) {
+  // Read fresh on every mount (not module load) — the previous module-level constant was
+  // evaluated once when the bundle first loaded, which could freeze in whichever account
+  // (e.g. a student) was logged in at that moment and never update after logging in as admin.
+  const [savedUser, setSavedUser] = useState<Record<string, any> | null>(() =>
+    typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('tmas-user') || 'null') : null,
+  )
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setSavedUser(JSON.parse(localStorage.getItem('tmas-user') || 'null'))
+  }, [])
+
   const [tab, setTab] = useState<Tab>('overview')
   const [lecturerSubTab, setLecturerSubTab] = useState<'pending' | 'approved'>('pending')
   const [levelFilter, setLevelFilter] = useState('All Levels')
@@ -57,8 +82,10 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
   const [dashboardLecturers, setDashboardLecturers] = useState<Array<{ id: string; name: string; email: string; role: string; status: string; program?: string; created_at?: string }>>([])
   const [allCourses, setAllCourses] = useState<Array<{ id?: string; code: string; title: string; level: string; lecturer: string; enrolled: number; status: string; avgScore: number; progress: number; materials: number }>>([])
   const [materialsCount, setMaterialsCount] = useState(0)
+  const [recentMaterials, setRecentMaterials] = useState<Array<{ name: string; course?: string; uploaded?: string }>>([])
   const [availableQuizzesCount, setAvailableQuizzesCount] = useState(0)
   const [completedQuizzesCount, setCompletedQuizzesCount] = useState(0)
+  const [quizStats, setQuizStats] = useState<{ total_quizzes: number; quizzes_with_completions: number } | null>(null)
   const [courseModalOpen, setCourseModalOpen] = useState(false)
   const [selectedCourse, setSelectedCourse] = useState<CourseFormValues | null>(null)
   const [courseModalError, setCourseModalError] = useState('')
@@ -208,7 +235,10 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
 
         if (materialsRes.ok) {
           const data = await materialsRes.json()
-          if (Array.isArray(data.materials)) setMaterialsCount(data.materials.length)
+          if (Array.isArray(data.materials)) {
+            setMaterialsCount(data.materials.length)
+            setRecentMaterials(data.materials.map((m: any) => ({ name: m.name, course: m.course, uploaded: m.uploaded })))
+          }
         }
 
         if (availableQuizzesRes.ok) {
@@ -220,6 +250,9 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
           const data = await completedQuizzesRes.json()
           if (Array.isArray(data.quizzes)) setCompletedQuizzesCount(data.quizzes.length)
         }
+
+        const quizStatsRes = await fetch(`${API_BASE}/api/quizzes/stats`)
+        if (quizStatsRes.ok) setQuizStats(await quizStatsRes.json())
 
         if (notifRes.ok) {
           const data = await notifRes.json()
@@ -281,9 +314,13 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
   const avgCourseScore = allCourses.length ? Math.round(allCourses.reduce((sum, course) => sum + course.avgScore, 0) / allCourses.length) : 0
   const materialsUploaded = materialsCount
   const inactiveStudents = students.filter(student => student.status !== 'active').length
-  const totalQuizCount = availableQuizzesCount + completedQuizzesCount
-  const quizCompletionRate = totalQuizCount ? Math.round((completedQuizzesCount / totalQuizCount) * 100) : 0
-  const quizTrend = totalQuizCount ? `${completedQuizzesCount} completed / ${totalQuizCount} total` : 'No quizzes available yet'
+  // `/quizzes/completed` is per-student (needs a student_id), so it always returns empty
+  // for an admin-scoped call — `/quizzes/stats` is the real institution-wide aggregate:
+  // how many of all published quizzes have at least one completed student attempt.
+  const totalQuizCount = quizStats?.total_quizzes ?? 0
+  const quizzesCompletedCount = quizStats?.quizzes_with_completions ?? 0
+  const quizCompletionRate = totalQuizCount ? Math.round((quizzesCompletedCount / totalQuizCount) * 100) : 0
+  const quizTrend = totalQuizCount ? `${quizzesCompletedCount} completed / ${totalQuizCount} total` : 'No quizzes available yet'
   const coursesByLevel = levels.map(level => {
     const levelCourses = allCourses.filter(course => course.level === level.name)
     const levelStudents = students.filter(student => student.level === level.name)
@@ -298,62 +335,83 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
       order: level.order,
     }
   })
-  const studentsByLevel = coursesByLevel.map(group => ({
-    level: group.level,
-    count: group.studentCount,
-    percentage: group.percentage,
-  }))
+  // Real completion rate per level: average of the (already class-wide-real) per-course
+  // completion percentage for courses taught at that level — not a population share.
+  const studentsByLevel = coursesByLevel.map(group => {
+    const levelCourses = allCourses.filter(c => c.level === group.level)
+    const avgCompletion = levelCourses.length
+      ? Math.round(levelCourses.reduce((sum, c) => sum + (c.progress || 0), 0) / levelCourses.length)
+      : 0
+    return {
+      level: group.level,
+      count: group.studentCount,
+      percentage: avgCompletion,
+    }
+  })
   const topCourses = [...allCourses]
     .sort((a, b) => b.avgScore - a.avgScore || b.progress - a.progress)
     .slice(0, 5)
 
-  const activityNotifs = [
-    {
-      icon: 'robot',
-      text: `${visiblePending.length} lecturer registration request${visiblePending.length === 1 ? '' : 's'} waiting review`,
-      time: visiblePending.length ? 'Now' : 'No new notifications',
-      color: 'bg-blue-100 text-blue-700',
-    },
-    {
-      icon: 'book',
-      text: `${materialsCount} learning material${materialsCount === 1 ? '' : 's'} indexed`,
-      time: 'Today',
-      color: 'bg-green-100 text-green-700',
-    },
-    {
-      icon: 'robot',
-      text: `${availableQuizzesCount} quiz${availableQuizzesCount === 1 ? '' : 'zes'} available for students`,
-      time: 'This week',
-      color: 'bg-purple-100 text-purple-700',
-    },
-    {
-      icon: 'trophy',
-      text: `${completedQuizzesCount} completed quiz${completedQuizzesCount === 1 ? '' : 'zes'}`,
-      time: 'This week',
-      color: 'bg-success/20 text-success',
-    },
-  ]
+  // Real per-student enrollment/completion: courses enrolled = courses at the student's
+  // level; completion = average of those courses' real (class-wide) completion rate.
+  // There's no per-student join table, so this mirrors the same level-based matching used
+  // everywhere else in this codebase (course monitor, dashboards) rather than a fabricated 0.
+  const studentsWithStats = useMemo(() => {
+    return students.map(s => {
+      const sLevel = String(s.level || '').trim().toLowerCase()
+      const matchingCourses = sLevel ? allCourses.filter(c => String(c.level || '').trim().toLowerCase() === sLevel) : []
+      const avgCompletion = matchingCourses.length
+        ? Math.round(matchingCourses.reduce((sum, c) => sum + (c.progress || 0), 0) / matchingCourses.length)
+        : 0
+      return { ...s, courses: matchingCourses.length, completion: avgCompletion }
+    })
+  }, [students, allCourses])
 
+  const studentsGroupedByLevel = useMemo(() => {
+    const filtered = studentsWithStats.filter(s =>
+      !searchQuery || `${s.name} ${s.email} ${s.level}`.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    const groups: Record<string, typeof filtered> = {}
+    for (const s of filtered) {
+      const key = s.level || 'Unassigned'
+      groups[key] = groups[key] || []
+      groups[key].push(s)
+    }
+    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b))
+  }, [studentsWithStats, searchQuery])
+
+  // A real, chronologically-sorted activity feed built from actual registration and
+  // upload timestamps, instead of static counts labeled "Today"/"This week" regardless
+  // of when anything actually happened.
   const recentActivity = [
-    ...visiblePending.slice(0, 3).map((l) => ({
-      icon: 'robot',
-      text: `${l.name} requested lecturer access in ${l.dept}`,
-      time: l.applied,
-      color: 'bg-blue-100 text-blue-700',
-    })),
-    {
-      icon: 'book',
-      text: `${materialsCount} new material${materialsCount === 1 ? '' : 's'} available for review`,
-      time: 'Today',
-      color: 'bg-green-100 text-green-700',
-    },
-    {
-      icon: 'robot',
-      text: `${completedQuizzesCount} quiz${completedQuizzesCount === 1 ? '' : 'zes'} were completed`,
-      time: 'This week',
-      color: 'bg-purple-100 text-purple-700',
-    },
+    ...dashboardLecturers
+      .filter(l => l.created_at)
+      .map(l => ({
+        icon: 'robot',
+        text: `${l.name} registered as a lecturer${l.status === 'pending' ? ' (awaiting approval)' : ''}`,
+        time: l.created_at as string,
+        color: 'bg-blue-100 text-blue-700',
+      })),
+    ...students
+      .filter(s => s.created_at)
+      .map(s => ({
+        icon: 'trophy',
+        text: `${s.name} registered as a student${s.level ? ` (${s.level})` : ''}`,
+        time: s.created_at as string,
+        color: 'bg-purple-100 text-purple-700',
+      })),
+    ...recentMaterials
+      .filter(m => m.uploaded)
+      .map(m => ({
+        icon: 'book',
+        text: `New material "${m.name}" uploaded${m.course ? ` for ${m.course}` : ''}`,
+        time: m.uploaded as string,
+        color: 'bg-green-100 text-green-700',
+      })),
   ]
+    .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
+    .slice(0, 8)
+    .map(a => ({ ...a, time: formatRelativeTime(a.time) }))
 
   async function setLecturerStatus(lecturerId: string, status: 'active' | 'rejected' | 'suspended') {
     setActionLoadingLecturerIds(ids => [...ids, lecturerId])
@@ -620,30 +678,55 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
                 <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-accent"></span>
               </button>
               {notifOpen && (
-                <div className="absolute right-0 top-10 w-80 bg-card border border-border rounded-2xl shadow-xl z-50 overflow-hidden">
-                  <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-                    <p className="font-semibold text-foreground text-sm">Notifications</p>
-                    <span className="text-xs text-muted-foreground">{notifications.length} new</span>
+                <>
+                  {/* Invisible overlay so clicking anywhere outside the panel closes it */}
+                  <div className="fixed inset-0 z-40" onClick={() => setNotifOpen(false)} />
+                  <div className="absolute right-0 top-10 w-80 bg-card border border-border rounded-2xl shadow-xl z-50 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+                      <p className="font-semibold text-foreground text-sm">Notifications</p>
+                      <span className="text-xs text-muted-foreground">{notifications.length} new</span>
+                    </div>
+                    <div className="max-h-72 overflow-y-auto">
+                      {notifications.length === 0 ? (
+                        <div className="p-6 text-center text-xs text-muted-foreground">No new notifications</div>
+                      ) : (
+                        notifications.map((a: any, i) => {
+                          // Some notification types have a clear, direct follow-up action for
+                          // an admin — surface that instead of just displaying inert text.
+                          const title = String(a.title || a.text || '')
+                          const isLecturerRegistration = /lecturer registration/i.test(title)
+                          const action = isLecturerRegistration
+                            ? () => {
+                                setTab('lecturers')
+                                setLecturerSubTab('pending')
+                                setNotifOpen(false)
+                              }
+                            : null
+
+                          return (
+                            <div
+                              key={i}
+                              onClick={action ?? undefined}
+                              className={`flex items-start gap-3 px-4 py-3 border-b border-border/50 last:border-0 transition-colors ${action ? 'cursor-pointer hover:bg-primary/5' : 'hover:bg-muted/50'}`}
+                            >
+                              <span className={`text-xs font-bold rounded-full px-2 py-1 ${a.color || 'bg-primary/10 text-primary'}`}>
+                                <Icon name={a.icon || 'bell'} size={14} />
+                              </span>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-foreground text-xs font-semibold leading-snug">{title || 'Notification'}</p>
+                                {a.message && <p className="text-muted-foreground text-xs mt-0.5 line-clamp-2">{a.message}</p>}
+                                <div className="flex items-center justify-between mt-1">
+                                  <p className="text-[10px] text-muted-foreground/70">{a.created_at ? new Date(a.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (a.time || 'Recently')}</p>
+                                  {action && <span className="text-[10px] font-semibold text-primary">Review →</span>}
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })
+                      )}
+                    </div>
                   </div>
-                  <div className="max-h-72 overflow-y-auto">
-                    {notifications.length === 0 ? (
-                      <div className="p-6 text-center text-xs text-muted-foreground">No new notifications</div>
-                    ) : (
-                      notifications.map((a: any, i) => (
-                        <div key={i} className="flex items-start gap-3 px-4 py-3 hover:bg-muted/50 border-b border-border/50 last:border-0 transition-colors">
-                          <span className={`text-xs font-bold rounded-full px-2 py-1 ${a.color || 'bg-primary/10 text-primary'}`}>
-                            <Icon name={a.icon || 'bell'} size={14} />
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-foreground text-xs font-semibold leading-snug">{a.title || a.text || 'Notification'}</p>
-                            {a.message && <p className="text-muted-foreground text-xs mt-0.5 line-clamp-2">{a.message}</p>}
-                            <p className="text-[10px] text-muted-foreground/70 mt-1">{a.created_at ? new Date(a.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (a.time || 'Recently')}</p>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
+                </>
               )}
             </div>
             <button
@@ -740,7 +823,7 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
                   <div className="divide-y divide-border">
                     {recentActivity.length > 0 ? recentActivity.slice(0, 5).map((a, i) => (
                       <div key={i} className="flex items-start gap-3 px-5 py-3.5">
-                        <span className={`text-base rounded-full px-2 py-1 ${a.color}`}>{a.icon}</span>
+                        <span className={`rounded-full px-2 py-1.5 ${a.color}`}><Icon name={a.icon} size={14} /></span>
                         <div className="flex-1 min-w-0">
                           <p className="text-xs text-foreground leading-snug">{a.text}</p>
                           <p className="text-xs text-muted-foreground mt-0.5">{a.time}</p>
@@ -777,7 +860,12 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
                             <td className="px-6 py-4 text-muted-foreground">{group.courseCount}</td>
                             <td className="px-6 py-4 text-foreground font-mono font-medium">{group.studentCount}</td>
                             <td className="px-6 py-4 w-40"><ProgressBar value={pct} /></td>
-                            <td className="px-6 py-4"><Badge variant="success">{levels.find(level => level.name === group.level)?.status ?? 'active'}</Badge></td>
+                            <td className="px-6 py-4">
+                              {(() => {
+                                const levelStatus = levels.find(level => level.name === group.level)?.status ?? 'active'
+                                return <Badge variant={levelStatus === 'active' ? 'success' : levelStatus === 'archived' ? 'default' : 'warning'}>{levelStatus}</Badge>
+                              })()}
+                            </td>
                           </tr>
                         )
                       })}
@@ -1056,7 +1144,7 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
             <div className="space-y-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex bg-muted rounded-xl p-1 w-fit">
-                  {([['pending', `Pending (${visiblePending.length})`], ['approved', 'Approved']] as [string, string][]).map(([key, label]) => (
+                  {([['pending', `Pending (${visiblePending.length})`], ['approved', `Approved (${approvedLecturers.length})`]] as [string, string][]).map(([key, label]) => (
                     <button key={key} onClick={() => setLecturerSubTab(key as 'pending' | 'approved')} className={`px-5 py-2 text-sm font-medium rounded-lg transition-all ${lecturerSubTab === key ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
                       {label}
                     </button>
@@ -1252,66 +1340,79 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
                   <span>Import Students (CSV)</span>
                 </button>
               </div>
-              <div className="bg-card border border-border rounded-2xl overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border bg-muted/40">
-                      {['Student', 'Email', 'Level', 'Courses', 'Completion', 'Enrolled', 'Status'].map(h => (
-                        <th key={h} className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {students.filter(s => !searchQuery || `${s.name} ${s.email} ${s.level}`.toLowerCase().includes(searchQuery.toLowerCase())).map((s, i) => (
-                      <tr key={i} className="hover:bg-muted/30 transition-colors">
-                        <td className="px-5 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center shrink-0">
-                              <span className="text-muted-foreground text-xs font-bold">{s.name.charAt(0)}</span>
-                            </div>
-                            <span className="font-semibold text-foreground">{s.name}</span>
-                          </div>
-                        </td>
-                        <td className="px-5 py-4 text-muted-foreground text-xs">{s.email}</td>
-                        <td className="px-5 py-4"><span className="text-xs bg-secondary text-secondary-foreground px-2 py-0.5 rounded-full font-medium">{s.level}</span></td>
-                        <td className="px-5 py-4 text-foreground font-mono font-semibold">{s.courses}</td>
-                        <td className="px-5 py-4 w-36"><ProgressBar value={s.completion ?? 0} /></td>
-                        <td className="px-5 py-4 text-muted-foreground text-xs">{s.enrolled ?? 0}</td>
-                        <td className="px-5 py-4">
-                          <select
-                            value={s.status || 'active'}
-                            onChange={async e => {
-                              const newStatus = e.target.value
-                              try {
-                                const res = await fetch(`${API_BASE}/api/dashboard/students/${s.id}`, {
-                                  method: 'PATCH',
-                                  headers: { 'content-type': 'application/json' },
-                                  body: JSON.stringify({ status: newStatus }),
-                                })
-                                const d = await res.json()
-                                if (!res.ok) throw new Error(d.detail || d.error || 'Could not update student status')
-                                setStudents(prev => prev.map(st => st.id === s.id ? { ...st, status: d.student.status } : st))
-                              } catch (err) {
-                                console.error('Update student status failed', err)
-                                window.alert(err instanceof Error ? err.message : 'Could not update student status')
-                              }
-                            }}
-                            className={`px-2.5 py-1 text-xs font-semibold rounded-lg border focus:outline-none transition-colors ${
-                              s.status === 'active' ? 'bg-green-100 text-green-800 border-green-300' :
-                              s.status === 'suspended' ? 'bg-amber-100 text-amber-800 border-amber-300' :
-                              'bg-red-100 text-red-800 border-red-300'
-                            }`}
-                          >
-                            <option value="active">Active</option>
-                            <option value="suspended">Suspended</option>
-                            <option value="revoked">Revoked</option>
-                          </select>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {studentsGroupedByLevel.length === 0 ? (
+                <div className="bg-card border border-border rounded-2xl p-8 text-center text-sm text-muted-foreground">
+                  No students match your search.
+                </div>
+              ) : (
+                studentsGroupedByLevel.map(([levelName, group]) => (
+                  <div key={levelName} className="bg-card border border-border rounded-2xl overflow-hidden">
+                    <div className="px-5 py-3 border-b border-border bg-muted/30 flex items-center gap-2">
+                      <span className="text-xs font-bold uppercase tracking-wider text-primary bg-primary/10 px-2.5 py-1 rounded-lg">{levelName}</span>
+                      <span className="text-xs text-muted-foreground">{group.length} student{group.length === 1 ? '' : 's'}</span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-border bg-muted/20">
+                            {['Student', 'Email', 'Courses Enrolled', 'Completion', 'Registered', 'Status'].map(h => (
+                              <th key={h} className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {group.map((s, i) => (
+                            <tr key={s.id || i} className="hover:bg-muted/30 transition-colors">
+                              <td className="px-5 py-4">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center shrink-0">
+                                    <span className="text-muted-foreground text-xs font-bold">{s.name.charAt(0)}</span>
+                                  </div>
+                                  <span className="font-semibold text-foreground">{s.name}</span>
+                                </div>
+                              </td>
+                              <td className="px-5 py-4 text-muted-foreground text-xs">{s.email}</td>
+                              <td className="px-5 py-4 text-foreground font-mono font-semibold">{s.courses}</td>
+                              <td className="px-5 py-4 w-36"><ProgressBar value={s.completion ?? 0} /></td>
+                              <td className="px-5 py-4 text-muted-foreground text-xs">{s.created_at ? new Date(s.created_at).toLocaleDateString() : '—'}</td>
+                              <td className="px-5 py-4">
+                                <select
+                                  value={s.status || 'active'}
+                                  onChange={async e => {
+                                    const newStatus = e.target.value
+                                    try {
+                                      const res = await fetch(`${API_BASE}/api/dashboard/students/${s.id}`, {
+                                        method: 'PATCH',
+                                        headers: { 'content-type': 'application/json' },
+                                        body: JSON.stringify({ status: newStatus }),
+                                      })
+                                      const d = await res.json()
+                                      if (!res.ok) throw new Error(d.detail || d.error || 'Could not update student status')
+                                      setStudents(prev => prev.map(st => st.id === s.id ? { ...st, status: d.student.status } : st))
+                                    } catch (err) {
+                                      console.error('Update student status failed', err)
+                                      window.alert(err instanceof Error ? err.message : 'Could not update student status')
+                                    }
+                                  }}
+                                  className={`px-2.5 py-1 text-xs font-semibold rounded-lg border focus:outline-none transition-colors ${
+                                    s.status === 'active' ? 'bg-green-100 text-green-800 border-green-300' :
+                                    s.status === 'suspended' ? 'bg-amber-100 text-amber-800 border-amber-300' :
+                                    'bg-red-100 text-red-800 border-red-300'
+                                  }`}
+                                >
+                                  <option value="active">Active</option>
+                                  <option value="suspended">Suspended</option>
+                                  <option value="revoked">Revoked</option>
+                                </select>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           )}
 

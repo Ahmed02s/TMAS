@@ -59,6 +59,88 @@ def update_lecturer_status(lecturer_id: str, payload: dict[str, str]) -> dict[st
     raise HTTPException(status_code=404, detail='Lecturer not found')
 
 
+@router.get('/lecturer-analytics')
+def lecturer_analytics(lecturer: str) -> dict[str, Any]:
+    """Real analytics for a lecturer's own courses: average score, pass rate, at-risk
+    student count, highest-completion course, and per-course score distribution. Reuses
+    the same per-course/per-student aggregation as the course monitor drill-down so the
+    numbers here are always consistent with what a lecturer sees when they expand a course.
+    """
+    ensure_supabase_enabled()
+    lecturer = lecturer.strip()
+    empty: dict[str, Any] = {
+        'avg_score': 0,
+        'pass_rate': 0,
+        'at_risk_students': 0,
+        'highest_completion_course': None,
+        'score_distribution': [],
+    }
+    if not lecturer:
+        return empty
+
+    courses_resp = supabase.table('courses').select('*').ilike('lecturer', lecturer).execute()
+    if supabase_failed(courses_resp):
+        raise HTTPException(status_code=502, detail=supabase_error_message(courses_resp, 'Supabase list lecturer courses failed'))
+    courses = courses_resp.data or []
+    if not courses:
+        return empty
+
+    from app.routers.courses import get_course_student_progress
+
+    score_distribution: list[dict[str, Any]] = []
+    all_scores: list[float] = []
+    total_attempts = 0
+    total_passed = 0
+    at_risk_student_ids: set[str] = set()
+    highest: dict[str, Any] | None = None
+
+    for course in courses:
+        code = course.get('code')
+        if not code:
+            continue
+        try:
+            result = get_course_student_progress(code, course.get('level'), course.get('program'))
+        except HTTPException:
+            continue
+
+        students = result.get('students', [])
+        course_scores = [s['avg_score'] for s in students if s.get('avg_score', 0) > 0]
+        course_avg = round(sum(course_scores) / len(course_scores)) if course_scores else 0
+        quizzes_total = students[0].get('quizzes_total', 0) if students else 0
+        completed_count = sum(1 for s in students if quizzes_total and s.get('quizzes_done', 0) >= quizzes_total)
+        completion_pct = round((completed_count / len(students)) * 100) if students else 0
+
+        for s in students:
+            for att in s.get('attempts', []):
+                total_attempts += 1
+                if att.get('passed'):
+                    total_passed += 1
+            if s.get('quizzes_total', 0) > 0:
+                student_pct = round((s.get('quizzes_done', 0) / s['quizzes_total']) * 100)
+                if student_pct < 50:
+                    at_risk_student_ids.add(s['id'])
+            if s.get('avg_score', 0) > 0:
+                all_scores.append(s['avg_score'])
+
+        score_distribution.append({
+            'code': code,
+            'title': course.get('title'),
+            'avg_score': course_avg,
+            'students': len(students),
+            'completion': completion_pct,
+        })
+        if students and (highest is None or completion_pct > highest['completion']):
+            highest = {'code': code, 'title': course.get('title'), 'completion': completion_pct}
+
+    return {
+        'avg_score': round(sum(all_scores) / len(all_scores)) if all_scores else 0,
+        'pass_rate': round((total_passed / total_attempts) * 100) if total_attempts else 0,
+        'at_risk_students': len(at_risk_student_ids),
+        'highest_completion_course': highest,
+        'score_distribution': score_distribution,
+    }
+
+
 @router.patch('/students/{student_id}')
 def update_student(student_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Update student fields such as status, level, name or email."""

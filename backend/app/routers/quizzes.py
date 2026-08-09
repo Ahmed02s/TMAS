@@ -1390,6 +1390,40 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest) -> dict[str, Any]:
     return {'attempt': attempt_record, 'quiz': quiz}
 
 
+class QuizForfeitRequest(BaseModel):
+    student_id: str
+
+
+@router.post('/{quiz_id}/forfeit')
+def forfeit_quiz(quiz_id: int, payload: QuizForfeitRequest) -> dict[str, Any]:
+    """Called the instant a student navigates away from / backgrounds an in-progress
+    attempt (tab switch, app switch, closing the window). Leaving the assessment screen
+    is how a student would copy questions out to a third-party solver, so the attempt is
+    finalized immediately as a 0-score miss rather than left open for them to resume."""
+    ensure_supabase_enabled()
+    if not payload.student_id:
+        raise HTTPException(status_code=400, detail='student_id is required')
+
+    attempts = _get_student_attempts(quiz_id, payload.student_id)
+    in_progress = [a for a in attempts if a.get('status') == 'in_progress']
+    if not in_progress:
+        # Already completed/missed, or never started — nothing to forfeit.
+        return {'status': 'no_active_attempt'}
+
+    attempt = in_progress[0]
+    update_resp = supabase.table('quiz_attempts').update({
+        'status': 'missed',
+        'score': 0,
+        'grade': 'F',
+        'passed': False,
+        'attempted_at': datetime.now(timezone.utc).isoformat(),
+    }).eq('id', attempt['id']).execute()
+    if supabase_failed(update_resp):
+        raise HTTPException(status_code=502, detail=supabase_error_message(update_resp, 'Supabase forfeit quiz attempt failed'))
+
+    return {'status': 'forfeited', 'quiz_id': quiz_id}
+
+
 def _quiz_is_expired(quiz: dict[str, Any], now: datetime) -> bool:
     close_dt = _parse_datetime(quiz.get('close_date')) or _parse_datetime(quiz.get('due_date'))
     if close_dt and now > close_dt:
@@ -1407,15 +1441,47 @@ def _quiz_is_locked(quiz: dict[str, Any], now: datetime) -> bool:
     return False
 
 
+@router.get('/stats')
+def get_quiz_stats() -> dict[str, Any]:
+    """Institution-wide quiz completion snapshot for the admin dashboard. `/completed`
+    is per-student (requires student_id) so it always returned empty for admin callers —
+    this is the aggregate equivalent: how many of all published quizzes have received at
+    least one completed attempt from any student."""
+    ensure_supabase_enabled()
+    quizzes_resp = supabase.table('quizzes').select('id').execute()
+    if supabase_failed(quizzes_resp):
+        raise HTTPException(status_code=502, detail=supabase_error_message(quizzes_resp, 'Supabase list quizzes failed'))
+    total_quizzes = len(quizzes_resp.data or [])
+
+    quizzes_with_completions = 0
+    try:
+        attempts_resp = supabase.table('quiz_attempts').select('quiz_id,status').eq('status', 'completed').execute()
+        if not supabase_failed(attempts_resp):
+            quizzes_with_completions = len({a['quiz_id'] for a in (attempts_resp.data or []) if a.get('quiz_id') is not None})
+    except Exception:
+        pass
+
+    return {'total_quizzes': total_quizzes, 'quizzes_with_completions': quizzes_with_completions}
+
+
 @router.get('')
-def list_all_quizzes(course: str | None = None) -> dict[str, Any]:
-    """Lecturer-facing management listing: every quiz for a course (or all courses),
-    with a live-computed status so a stale DB 'status' column never misleads a lecturer
-    trying to figure out why a quiz is still locked/closed."""
+def list_all_quizzes(course: str | None = None, lecturer: str | None = None) -> dict[str, Any]:
+    """Lecturer-facing management listing: every quiz for a course (or all of a lecturer's
+    courses), with a live-computed status so a stale DB 'status' column never misleads a
+    lecturer trying to figure out why a quiz is still locked/closed."""
     ensure_supabase_enabled()
     query = supabase.table('quizzes').select('*')
     if course:
         query = query.eq('course', course)
+    elif lecturer:
+        lecturer = lecturer.strip()
+        courses_resp = supabase.table('courses').select('code').ilike('lecturer', lecturer).execute()
+        if supabase_failed(courses_resp):
+            raise HTTPException(status_code=502, detail=supabase_error_message(courses_resp, 'Supabase list lecturer courses failed'))
+        course_codes = [c['code'] for c in (courses_resp.data or []) if c.get('code')]
+        if not course_codes:
+            return {'quizzes': []}
+        query = query.in_('course', course_codes)
     response = query.execute()
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase list quizzes failed'))
@@ -1432,6 +1498,26 @@ def list_all_quizzes(course: str | None = None) -> dict[str, Any]:
         quizzes.append(q)
     quizzes.sort(key=lambda q: (q.get('course') or '', q.get('tier') or '', q.get('id') or 0))
     return {'quizzes': quizzes}
+
+
+@router.get('/{quiz_id}/full')
+def get_quiz_full(quiz_id: int) -> dict[str, Any]:
+    """Lecturer-only view of a quiz's complete question bank (including correct answers),
+    with no lock/open-date restriction — used by the Question Banks archive to preview and
+    export a hardcopy of what was generated, independent of whether students can see it yet."""
+    ensure_supabase_enabled()
+    response = supabase.table('quizzes').select('*').eq('id', quiz_id).limit(1).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase get quiz failed'))
+    if not response.data:
+        raise HTTPException(status_code=404, detail='Quiz not found')
+    quiz = response.data[0]
+
+    questions_response = supabase.table('quiz_questions').select('*').eq('quiz_id', quiz_id).execute()
+    if supabase_failed(questions_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(questions_response, 'Supabase get quiz questions failed'))
+
+    return {'quiz': quiz, 'questions': questions_response.data or []}
 
 
 class UpdateQuizScheduleRequest(BaseModel):
@@ -1553,21 +1639,29 @@ def list_available_quizzes(level: str | None = None, program: str | None = None,
 
         quizzes.append(quiz_dict)
 
-    # Security: strip question details from locked entries so students cannot
-    # retrieve questions/answers for quizzes that haven't opened yet
+    # Security: strip actual question content from locked entries so students can't
+    # retrieve questions/answers for a quiz that hasn't opened yet. Schedule/format
+    # metadata (question count, time limit, pass score, due date) is safe to show —
+    # it comes from the `quizzes` row, not the `quiz_questions` table, so exposing it
+    # can't leak any question text or answers, and it's what students need to prepare.
     safe_quizzes = []
     for q in quizzes:
         if q.get('is_locked'):
             safe_q = {
-                'id':           q.get('id'),
-                'title':        q.get('title'),
-                'course':       q.get('course'),
-                'tier':         q.get('tier'),
-                'status':       q.get('status'),
-                'is_locked':    True,
-                'open_date':    q.get('open_date'),
-                'close_date':   q.get('close_date'),
-                # Intentionally omitted: questions, options, answers, passing_score, time_limit
+                'id':             q.get('id'),
+                'title':          q.get('title'),
+                'course':         q.get('course'),
+                'tier':           q.get('tier'),
+                'status':         q.get('status'),
+                'is_locked':      True,
+                'open_date':      q.get('open_date'),
+                'close_date':     q.get('close_date'),
+                'due_date':       q.get('due_date'),
+                'questions':      q.get('questions'),
+                'time_limit':     q.get('time_limit'),
+                'passing_score':  q.get('passing_score'),
+                'attempts':       q.get('attempts'),
+                # Intentionally omitted: actual question text, options, and answers.
             }
             safe_quizzes.append(safe_q)
         else:

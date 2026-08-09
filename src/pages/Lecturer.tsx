@@ -11,7 +11,7 @@ const navItems: { key: Tab; label: string; iconClass: string }[] = [
   { key: 'materials',  label: 'Materials',         iconClass: 'fa-cloud-arrow-up' },
   { key: 'students',   label: 'Students',          iconClass: 'fa-users' },
   { key: 'quizgen',    label: '3-Tier Quiz Wizard', iconClass: 'fa-wand-magic-sparkles' },
-  { key: 'quizreview', label: 'Quiz Review',       iconClass: 'fa-clipboard-check' },
+  { key: 'quizreview', label: 'Question Banks',    iconClass: 'fa-folder-open' },
   { key: 'analytics',  label: 'Analytics',         iconClass: 'fa-chart-column' },
 ]
 
@@ -49,6 +49,20 @@ function getInitials(name?: string) {
   const parts = name.trim().split(/\s+/)
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
+
+// The `/api/courses` API returns snake_case fields (progress, avg_score, student_count),
+// but several views in this file read camelCase names (completion, avgScore, students)
+// that don't exist on the raw response — which silently rendered as 0/blank everywhere
+// those names were used (Overview stats, "My Courses at a Glance", Analytics). This adds
+// the expected aliases without touching every call site.
+function mapLecturerCourse(course: Record<string, any>) {
+  return {
+    ...course,
+    completion: course.progress ?? course.completion ?? 0,
+    avgScore: course.avg_score ?? course.avgScore ?? 0,
+    students: course.student_count ?? course.students ?? 0,
+  }
 }
 
 export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => void }) {
@@ -102,7 +116,6 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     },
   })
 
-  const [approved, setApproved] = useState<number[]>([])
   const [generating, setGenerating] = useState(false)
   const [generated, setGenerated] = useState(false)
   const [genCourse, setGenCourse] = useState('')
@@ -132,13 +145,32 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   const [scheduleDrafts, setScheduleDrafts] = useState<Record<number, { openDate: string; closeDate: string }>>({})
   const [savingScheduleId, setSavingScheduleId] = useState<number | null>(null)
   const [scheduleSaveError, setScheduleSaveError] = useState<Record<number, string>>({})
+  const [scheduleSaveSuccess, setScheduleSaveSuccess] = useState<Record<number, string>>({})
+
+  // Question Banks archive: every quiz ever published for this lecturer's courses,
+  // grouped by course, with the ability to preview or download a hardcopy of the
+  // questions — independent of the in-wizard review step, which only covers the
+  // current generation session.
+  const [questionBankQuizzes, setQuestionBankQuizzes] = useState<any[]>([])
+  const [loadingQuestionBanks, setLoadingQuestionBanks] = useState(false)
+  const [questionBankError, setQuestionBankError] = useState('')
+  const [expandedBankQuizId, setExpandedBankQuizId] = useState<number | null>(null)
+  const [bankQuestionsById, setBankQuestionsById] = useState<Record<number, any[]>>({})
+  const [loadingBankQuestionsId, setLoadingBankQuestionsId] = useState<number | null>(null)
+  const [downloadingBankId, setDownloadingBankId] = useState<number | null>(null)
 
   const getActiveTier = () => activeReviewTier
 
   const [myCoursesState, setMyCoursesState] = useState<any[]>([])
   const [materialsState, setMaterialsState] = useState<any[]>([])
   const [studentsState, setStudentsState] = useState<any[]>([])
-  const [generatedState, setGeneratedState] = useState<any[]>([])
+  const [lecturerAnalytics, setLecturerAnalytics] = useState<{
+    avg_score: number
+    pass_rate: number
+    at_risk_students: number
+    highest_completion_course: { code: string; title: string; completion: number } | null
+    score_distribution: { code: string; title: string; avg_score: number; students: number; completion: number }[]
+  } | null>(null)
   const [selectedCourse, setSelectedCourse] = useState<string>('')
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   // Course monitoring drill-down state
@@ -160,17 +192,21 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     const lecturerName = String(storedUser?.name || '').trim()
     if (!lecturerName) return
     try {
-      const [coursesRes, materialsRes, studentsRes, quizzesRes] = await Promise.all([
+      const [coursesRes, materialsRes, studentsRes, analyticsRes] = await Promise.all([
         fetch(`${API_BASE}/api/courses?lecturer=${encodeURIComponent(lecturerName)}`),
         fetch(`${API_BASE}/api/materials?lecturer=${encodeURIComponent(lecturerName)}`),
         fetch(`${API_BASE}/api/dashboard/students?lecturer=${encodeURIComponent(lecturerName)}`),
-        fetch(`${API_BASE}/api/quizzes/available`),
+        fetch(`${API_BASE}/api/dashboard/lecturer-analytics?lecturer=${encodeURIComponent(lecturerName)}`),
       ])
+
+      if (analyticsRes.ok) {
+        setLecturerAnalytics(await analyticsRes.json())
+      }
 
       let fetchedCourses: any[] = []
       if (coursesRes.ok) {
         const data = await coursesRes.json()
-        fetchedCourses = data.courses || []
+        fetchedCourses = (data.courses || []).map(mapLecturerCourse)
         setMyCoursesState(fetchedCourses)
       }
 
@@ -184,10 +220,6 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
         setStudentsState(data.students || [])
       }
 
-      if (quizzesRes.ok) {
-        const data = await quizzesRes.json()
-        // Do not overwrite generatedState here as it holds draft AI quiz questions being reviewed by the lecturer
-      }
     } catch (err) {
       console.error('Failed to load lecturer data', err)
     }
@@ -308,7 +340,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   }, [])
 
   useEffect(() => {
-    if ((tab === 'quizgen' || tab === 'quizreview') && genCourse) {
+    if (tab === 'quizgen' && genCourse) {
       loadPublishedQuizzes(genCourse)
     }
   }, [tab, genCourse, loadPublishedQuizzes])
@@ -316,8 +348,19 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   const handleSaveQuizSchedule = async (quizId: number) => {
     const draft = scheduleDrafts[quizId]
     if (!draft) return
-    setSavingScheduleId(quizId)
+    setScheduleSaveSuccess(prev => ({ ...prev, [quizId]: '' }))
     setScheduleSaveError(prev => ({ ...prev, [quizId]: '' }))
+
+    if (!draft.openDate && !draft.closeDate) {
+      setScheduleSaveError(prev => ({ ...prev, [quizId]: 'Pick an open date and/or close date before saving.' }))
+      return
+    }
+    if (draft.openDate && draft.closeDate && new Date(draft.closeDate) <= new Date(draft.openDate)) {
+      setScheduleSaveError(prev => ({ ...prev, [quizId]: 'Close date must be after open date.' }))
+      return
+    }
+
+    setSavingScheduleId(quizId)
     try {
       const body: Record<string, string> = {}
       if (draft.openDate) body.open_date = new Date(draft.openDate).toISOString()
@@ -332,6 +375,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
         throw new Error(err.detail || 'Failed to update schedule')
       }
       await loadPublishedQuizzes(genCourse)
+      setScheduleSaveSuccess(prev => ({ ...prev, [quizId]: 'Schedule saved.' }))
     } catch (err: any) {
       setScheduleSaveError(prev => ({ ...prev, [quizId]: err.message || 'Failed to update schedule' }))
     } finally {
@@ -359,6 +403,94 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       setScheduleSaveError(prev => ({ ...prev, [quizId]: err.message || 'Failed to open quiz now' }))
     } finally {
       setSavingScheduleId(null)
+    }
+  }
+
+  const loadQuestionBanks = useCallback(async (lecturerName: string) => {
+    if (!lecturerName) {
+      setQuestionBankQuizzes([])
+      return
+    }
+    setLoadingQuestionBanks(true)
+    setQuestionBankError('')
+    try {
+      const res = await fetch(`${API_BASE}/api/quizzes?lecturer=${encodeURIComponent(lecturerName)}`)
+      if (!res.ok) throw new Error('Failed to load question banks')
+      const data = await res.json()
+      setQuestionBankQuizzes(data.quizzes || [])
+    } catch (err: any) {
+      setQuestionBankError(err.message || 'Failed to load question banks')
+      setQuestionBankQuizzes([])
+    } finally {
+      setLoadingQuestionBanks(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (tab === 'quizreview' && savedUser?.name) {
+      loadQuestionBanks(String(savedUser.name))
+    }
+  }, [tab, savedUser?.name, loadQuestionBanks])
+
+  const fetchBankQuestions = async (quizId: number): Promise<any[]> => {
+    if (bankQuestionsById[quizId]) return bankQuestionsById[quizId]
+    const res = await fetch(`${API_BASE}/api/quizzes/${quizId}/full`)
+    if (!res.ok) throw new Error('Failed to load this question bank')
+    const data = await res.json()
+    const questions = data.questions || []
+    setBankQuestionsById(prev => ({ ...prev, [quizId]: questions }))
+    return questions
+  }
+
+  const handleTogglePreviewBank = async (quizId: number) => {
+    if (expandedBankQuizId === quizId) {
+      setExpandedBankQuizId(null)
+      return
+    }
+    setExpandedBankQuizId(quizId)
+    if (!bankQuestionsById[quizId]) {
+      setLoadingBankQuestionsId(quizId)
+      try {
+        await fetchBankQuestions(quizId)
+      } catch (err: any) {
+        setQuestionBankError(err.message || 'Failed to load questions')
+      } finally {
+        setLoadingBankQuestionsId(null)
+      }
+    }
+  }
+
+  const handleDownloadQuestionBank = async (quiz: any) => {
+    setDownloadingBankId(quiz.id)
+    setQuestionBankError('')
+    try {
+      const questions = await fetchBankQuestions(quiz.id)
+      const lines: string[] = []
+      lines.push(quiz.title || 'Question Bank')
+      lines.push(`Course: ${quiz.course || '-'}   Tier: ${quiz.tier || '-'}   Questions: ${questions.length}`)
+      lines.push('='.repeat(70))
+      questions.forEach((q: any, i: number) => {
+        lines.push('')
+        lines.push(`${i + 1}. ${q.question || ''}`)
+        const opts = Array.isArray(q.options) ? q.options : []
+        opts.forEach((opt: string, oi: number) => {
+          lines.push(`   ${String.fromCharCode(65 + oi)}. ${opt}`)
+        })
+        lines.push(`   Answer: ${q.correct ?? q.answer ?? ''}`)
+      })
+      const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${String(quiz.course || 'course').replace(/[^a-zA-Z0-9]/g, '_')}_${quiz.tier || 'Tier'}_QuestionBank.txt`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+    } catch (err: any) {
+      setQuestionBankError(err.message || 'Failed to download question bank')
+    } finally {
+      setDownloadingBankId(null)
     }
   }
 
@@ -428,7 +560,12 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       const data = await response.json()
       setSelectedFiles([])
       if (fileInputRef.current) fileInputRef.current.value = ''
-      setUploadMessage({ type: 'success', text: `Uploaded ${data.materials.length} material${data.materials.length === 1 ? '' : 's'} successfully.` })
+      const successText = `Uploaded ${data.materials.length} material${data.materials.length === 1 ? '' : 's'} successfully.`
+      setUploadMessage(
+        data.warning
+          ? { type: 'error', text: `${successText} ${data.warning}` }
+          : { type: 'success', text: successText },
+      )
 
       try {
         const { dispatchPushNotification } = await import('../utils/notifications')
@@ -671,26 +808,12 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     const studentHeadcount = studentsByCourse.reduce((s, entry) => s + entry.students.length, 0)
     const avgQuizScore = myCoursesState.length ? Math.round(myCoursesState.reduce((s, c) => s + (c.avgScore || 0), 0) / myCoursesState.length) : null
     const levelsStr = Array.from(new Set(myCoursesState.map(c => c.level).filter(Boolean))).slice(0, 2).join(', ')
-    const pendingReviews = generatedState.filter(q => !approved.includes(q.id)).length
-    const highestCompletionCourse = myCoursesState.slice().sort((a, b) => (b.completion || 0) - (a.completion || 0))[0]
-    const atRiskStudents = myCoursesState.reduce((acc, c) => acc + ((c.completion || 0) < 50 ? (c.students || 0) : 0), 0)
-  
-    // difficulty stats derived from generated questions
-    const difficultyGroups = generatedState.reduce((map: Record<string, any[]>, q) => {
-      const k = q.difficulty || 'Medium'
-      map[k] = map[k] || []
-      map[k].push(q)
-      return map
-    }, {} as Record<string, any[]>)
-
-    const difficultyStats = ['Easy', 'Medium', 'Hard'].map(level => {
-      const list = difficultyGroups[level] || []
-      const count = list.length
-      const approvedCount = list.filter(q => approved.includes(q.id)).length
-      const correct = count > 0 ? Math.round((approvedCount / count) * 100) : 0
-      const color = level === 'Easy' ? 'bg-success' : level === 'Medium' ? 'bg-warning' : 'bg-danger'
-      return { level, count, correct, color }
-    })
+    // Real data from the active 3-tier wizard session — questions generated but not yet
+    // approved for publish. (There's no persisted "pending review" queue across sessions:
+    // once a bank is published, everything in it was, by definition, approved.)
+    const allGeneratedQuestions = (['Foundational', 'Intermediate', 'Mastery'] as const).flatMap(t => generatedQuestionsByTier[t] || [])
+    const allApprovedIds = new Set((['Foundational', 'Intermediate', 'Mastery'] as const).flatMap(t => approvedByTier[t] || []))
+    const pendingReviews = allGeneratedQuestions.filter(q => !allApprovedIds.has(q.id)).length
 
   return (
     <div className="flex h-screen bg-background overflow-hidden font-sans relative">
@@ -731,9 +854,9 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
               >
                 <i className={`fa-solid ${item.iconClass} w-4 shrink-0`} />
                 {item.label}
-                {item.key === 'quizreview' && generatedState.filter(q => !approved.includes(q.id)).length > 0 && (
+                {item.key === 'quizgen' && pendingReviews > 0 && (
                   <span className="ml-auto bg-accent text-white text-xs rounded-full px-1.5 py-0.5 leading-none">
-                    {generatedState.filter(q => !approved.includes(q.id)).length}
+                    {pendingReviews}
                   </span>
                 )}
               </button>
@@ -769,7 +892,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
               <i className="fa-solid fa-bars text-lg" />
             </button>
             <h1 className="text-foreground font-semibold text-sm">
-              {tab === 'overview' ? 'My Dashboard' : tab === 'courses' ? 'My Teaching Assignments' : tab === 'materials' ? 'Learning Materials' : tab === 'quizgen' ? 'AI Quiz Generator' : tab === 'quizreview' ? 'Quiz Review' : 'Course Analytics'}
+              {tab === 'overview' ? 'My Dashboard' : tab === 'courses' ? 'My Teaching Assignments' : tab === 'materials' ? 'Learning Materials' : tab === 'quizgen' ? 'AI Quiz Generator' : tab === 'quizreview' ? 'Question Banks' : 'Course Analytics'}
             </h1>
           </div>
           <div className="flex items-center gap-2">
@@ -881,7 +1004,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                     {[
                       { label: 'Upload Material', desc: 'Add new learning content', action: () => setTab('materials'), icon: 'upload' },
                       { label: 'Generate Quiz', desc: 'AI quiz from materials', action: () => setTab('quizgen'), icon: 'robot' },
-                      { label: 'Review Questions', desc: `${generatedState.filter(q => !approved.includes(q.id)).length} pending approval`, action: () => setTab('quizreview'), icon: 'clipboard' },
+                      { label: 'Review Questions', desc: `${pendingReviews} pending approval`, action: () => setTab('quizgen'), icon: 'clipboard' },
                       { label: 'View Analytics', desc: 'Student performance data', action: () => setTab('analytics'), icon: 'analytics' },
                     ].map((qa, i) => (
                       <button key={i} onClick={qa.action} className="w-full flex items-center gap-3 bg-card border border-border rounded-xl p-4 hover:border-primary/30 hover:shadow-sm transition-all text-left group">
@@ -1394,7 +1517,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
           )}
 
           {/* ── 3-FOLD AI QUIZ STEPPER WIZARD ── */}
-          {(tab === 'quizgen' || tab === 'quizreview') && (
+          {tab === 'quizgen' && (
             <div className="space-y-4 sm:space-y-6">
               {/* Stepper Navigation Header */}
               <div className="bg-card border border-border rounded-2xl p-4 sm:p-6 shadow-sm">
@@ -1691,6 +1814,9 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                             {scheduleSaveError[q.id] && (
                               <p className="text-xs text-danger flex items-center gap-1"><i className="fa-solid fa-triangle-exclamation text-[10px]" />{scheduleSaveError[q.id]}</p>
                             )}
+                            {scheduleSaveSuccess[q.id] && (
+                              <p className="text-xs text-success flex items-center gap-1"><i className="fa-solid fa-circle-check text-[10px]" />{scheduleSaveSuccess[q.id]}</p>
+                            )}
 
                             <div className="flex flex-wrap items-center gap-2">
                               <button
@@ -1983,6 +2109,121 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
             </div>
           )}
 
+          {/* ── QUESTION BANKS ARCHIVE ── */}
+          {tab === 'quizreview' && (
+            <div className="space-y-6">
+              <div className="bg-card border border-border rounded-2xl p-5 sm:p-6">
+                <h3 className="font-display text-lg font-bold text-foreground">Question Banks</h3>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Every quiz question bank you've generated, grouped by course. Preview or download a hardcopy at any time.
+                </p>
+              </div>
+
+              {questionBankError && (
+                <div className="flex items-start gap-2 bg-danger/10 border border-danger/30 text-danger rounded-xl px-4 py-3 text-sm font-medium">
+                  <i className="fa-solid fa-triangle-exclamation mt-0.5 shrink-0" />
+                  <span>{questionBankError}</span>
+                </div>
+              )}
+
+              {loadingQuestionBanks ? (
+                <div className="flex items-center justify-center gap-3 py-14 text-muted-foreground text-sm">
+                  <span className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                  Loading question banks...
+                </div>
+              ) : questionBankQuizzes.length === 0 ? (
+                <div className="bg-card border border-border rounded-2xl p-8 text-center text-sm text-muted-foreground">
+                  No question banks generated yet. Use the 3-Tier Quiz Wizard to generate and publish one.
+                </div>
+              ) : (
+                Object.entries(
+                  questionBankQuizzes.reduce((groups: Record<string, any[]>, q) => {
+                    const key = q.course || 'Unassigned'
+                    groups[key] = groups[key] || []
+                    groups[key].push(q)
+                    return groups
+                  }, {} as Record<string, any[]>)
+                ).map(([courseCode, quizzes]) => (
+                  <div key={courseCode} className="space-y-3">
+                    <div className="flex items-center gap-2 border-b border-border pb-2">
+                      <span className="font-mono text-xs font-bold text-primary bg-primary/10 px-2.5 py-1 rounded-lg">{courseCode}</span>
+                      <span className="text-xs text-muted-foreground">{quizzes.length} question bank{quizzes.length === 1 ? '' : 's'}</span>
+                    </div>
+                    <div className="space-y-3">
+                      {quizzes.map((quiz: any) => {
+                        const isExpanded = expandedBankQuizId === quiz.id
+                        const isLoadingQuestions = loadingBankQuestionsId === quiz.id
+                        const questions = bankQuestionsById[quiz.id] || []
+                        const statusBadge =
+                          quiz.live_status === 'available' ? 'bg-success/10 text-success' :
+                          quiz.live_status === 'closed' ? 'bg-danger/10 text-danger' :
+                          'bg-amber-500/10 text-amber-700'
+                        return (
+                          <div key={quiz.id} className="bg-card border border-border rounded-2xl overflow-hidden">
+                            <div className="p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                                  quiz.tier === 'Mastery' ? 'bg-purple-500/10 text-purple-600' :
+                                  quiz.tier === 'Intermediate' ? 'bg-amber-500/10 text-amber-600' :
+                                  'bg-emerald-500/10 text-emerald-600'
+                                }`}>{quiz.tier || 'Foundational'}</span>
+                                <span className="text-sm font-semibold text-foreground">{quiz.title}</span>
+                                <span className={`text-xs font-bold px-2 py-0.5 rounded-full capitalize ${statusBadge}`}>{quiz.live_status}</span>
+                                <span className="text-xs text-muted-foreground">{quiz.questions ?? 0} questions</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => handleTogglePreviewBank(quiz.id)}
+                                  className="text-xs font-semibold text-primary hover:underline px-2 py-1"
+                                >
+                                  {isExpanded ? 'Hide' : 'Preview'}
+                                </button>
+                                <button
+                                  onClick={() => handleDownloadQuestionBank(quiz)}
+                                  disabled={downloadingBankId === quiz.id}
+                                  className="inline-flex items-center gap-1.5 bg-primary text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-950 transition-colors disabled:opacity-60"
+                                >
+                                  <i className="fa-solid fa-download" />
+                                  {downloadingBankId === quiz.id ? 'Preparing...' : 'Download'}
+                                </button>
+                              </div>
+                            </div>
+                            {isExpanded && (
+                              <div className="border-t border-border bg-muted/20 p-4 sm:p-5 space-y-3 max-h-96 overflow-y-auto">
+                                {isLoadingQuestions ? (
+                                  <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+                                    <span className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                                    Loading questions...
+                                  </div>
+                                ) : (
+                                  questions.map((q: any, i: number) => (
+                                    <div key={q.id ?? i} className="bg-card border border-border rounded-xl p-3 text-sm">
+                                      <p className="font-medium text-foreground">{i + 1}. {q.question}</p>
+                                      {Array.isArray(q.options) && q.options.length > 0 && (
+                                        <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                                          {q.options.map((opt: string, oi: number) => (
+                                            <li key={oi} className={opt === q.correct ? 'text-success font-semibold' : ''}>
+                                              {String.fromCharCode(65 + oi)}. {opt}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                      <p className="mt-2 text-xs font-semibold text-foreground">Answer: <span className="text-success">{q.correct}</span></p>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
           {/* ── ANALYTICS ── */}
           {tab === 'analytics' && (
             <div className="space-y-6">
@@ -2002,10 +2243,10 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
 
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 {[
-                  { label: 'Avg Quiz Score', val: avgQuizScore !== null ? `${avgQuizScore}%` : '—', trend: 'Across all courses' },
-                  { label: 'Highest Completion', val: highestCompletionCourse ? highestCompletionCourse.code : '—', trend: highestCompletionCourse ? `${highestCompletionCourse.completion}% complete` : '—' },
-                  { label: 'Pass Rate', val: avgQuizScore !== null ? `${avgQuizScore}%` : '—', trend: 'This semester' },
-                  { label: 'At-Risk Students', val: String(atRiskStudents), trend: 'Below 50% completion' },
+                  { label: 'Avg Quiz Score', val: lecturerAnalytics ? `${lecturerAnalytics.avg_score}%` : '—', trend: 'Across all courses' },
+                  { label: 'Highest Completion', val: lecturerAnalytics?.highest_completion_course ? lecturerAnalytics.highest_completion_course.code : '—', trend: lecturerAnalytics?.highest_completion_course ? `${lecturerAnalytics.highest_completion_course.completion}% complete` : '—' },
+                  { label: 'Pass Rate', val: lecturerAnalytics ? `${lecturerAnalytics.pass_rate}%` : '—', trend: 'Of all quiz attempts' },
+                  { label: 'At-Risk Students', val: lecturerAnalytics ? String(lecturerAnalytics.at_risk_students) : '—', trend: 'Below 50% completion' },
                 ].map((s, i) => (
                   <div key={i} className="bg-card border border-border rounded-2xl p-5">
                     <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-2">{s.label}</p>
@@ -2015,43 +2256,27 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                 ))}
               </div>
 
-              <div className="grid lg:grid-cols-2 gap-6">
-                <div className="bg-card border border-border rounded-2xl p-6">
-                  <h3 className="font-semibold text-foreground mb-5">Score Distribution by Course</h3>
-                  <div className="space-y-5">
-                    {myCoursesState.map((c, i) => (
-                      <div key={i}>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm font-medium text-foreground font-mono">{c.code}</span>
-                          <span className="text-sm font-bold font-mono text-foreground">{c.avgScore}%</span>
-                        </div>
-                        <div className="h-3 bg-muted rounded-full overflow-hidden">
-                          <div className="h-full bg-primary rounded-full" style={{ width: `${c.avgScore}%` }} />
-                        </div>
-                        <div className="flex items-center justify-between mt-1">
-                          <span className="text-xs text-muted-foreground">{c.students} students</span>
-                          <span className="text-xs text-muted-foreground">{c.completion}% completion</span>
-                        </div>
+              <div className="bg-card border border-border rounded-2xl p-6">
+                <h3 className="font-semibold text-foreground mb-5">Score Distribution by Course</h3>
+                <div className="space-y-5">
+                  {(lecturerAnalytics?.score_distribution || []).map((c, i) => (
+                    <div key={i}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-foreground font-mono">{c.code}</span>
+                        <span className="text-sm font-bold font-mono text-foreground">{c.avg_score}%</span>
                       </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="bg-card border border-border rounded-2xl p-6">
-                  <h3 className="font-semibold text-foreground mb-5">Question Difficulty Analysis</h3>
-                  <div className="space-y-3">
-                    {difficultyStats.map((d, i) => (
-                      <div key={i} className="bg-muted/40 rounded-xl p-4">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm font-semibold text-foreground">{d.level}</span>
-                          <span className="text-xs text-muted-foreground">{d.count} questions <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {d.correct} correct</span>
-                        </div>
-                        <div className="h-2 bg-muted rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full ${d.color}`} style={{ width: `${d.correct}%` }} />
-                        </div>
+                      <div className="h-3 bg-muted rounded-full overflow-hidden">
+                        <div className="h-full bg-primary rounded-full" style={{ width: `${c.avg_score}%` }} />
                       </div>
-                    ))}
-                  </div>
+                      <div className="flex items-center justify-between mt-1">
+                        <span className="text-xs text-muted-foreground">{c.students} students</span>
+                        <span className="text-xs text-muted-foreground">{c.completion}% completion</span>
+                      </div>
+                    </div>
+                  ))}
+                  {lecturerAnalytics && lecturerAnalytics.score_distribution.length === 0 && (
+                    <p className="text-xs text-muted-foreground italic">No quiz activity yet for your courses.</p>
+                  )}
                 </div>
               </div>
             </div>

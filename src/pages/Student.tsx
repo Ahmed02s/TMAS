@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef } from 'react'
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import type { AppView } from '../App'
 import { API_BASE } from '../config'
 import Icon from '../components/Icon'
@@ -128,11 +128,12 @@ function mapQuiz(quiz: Record<string, any>): Quiz {
     id: quiz.id,
     title: quiz.title,
     course: quiz.course,
-    // SECURITY: these fields are stripped by backend for locked quizzes
-    questions: isLocked ? 0 : (quiz.questions ?? 0),
-    timeLimit: isLocked ? undefined : quiz.time_limit,
-    passingScore: isLocked ? undefined : quiz.passing_score,
-    attempts: isLocked ? undefined : quiz.attempts,
+    // Schedule/format metadata (count, duration, pass score, due date) is safe to show
+    // even while locked — only actual question text/answers are withheld by the backend.
+    questions: quiz.questions ?? 0,
+    timeLimit: quiz.time_limit,
+    passingScore: quiz.passing_score,
+    attempts: quiz.attempts,
     dueDate: quiz.due_date,
     openDate: quiz.open_date,
     closeDate: quiz.close_date,
@@ -227,6 +228,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   // the page (or the tab losing focus) can't grant a student extra time.
   const [quizExpiresAt, setQuizExpiresAt] = useState<number | null>(null)
   const [quizTimedOut, setQuizTimedOut] = useState(false)
+  const [quizForfeited, setQuizForfeited] = useState(false)
   const quizAnswersRef = useRef<Record<number, string>>({})
   const isAutoSubmittingRef = useRef(false)
 
@@ -489,6 +491,8 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
 
       setQuizLoading(true)
       setError('')
+      setQuizTimedOut(false)
+      setQuizForfeited(false)
 
       try {
         const studentId = savedUser?.id || ''
@@ -648,6 +652,65 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     }
   }
 
+  // Leaving the assessment screen (switching tabs/apps, closing the window) is how a
+  // student could copy questions out to a third-party solver, so it immediately forfeits
+  // the attempt with a score of 0 rather than leaving it open to resume. Uses sendBeacon
+  // so the request has the best chance of completing even as the tab is backgrounded/closing.
+  const forfeitQuizForLeaving = useCallback(() => {
+    if (activeQuiz === null || quizSubmitted || isAutoSubmittingRef.current) return
+    isAutoSubmittingRef.current = true
+
+    const student = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('tmas-user') || 'null') : null
+    const payload = JSON.stringify({ student_id: student?.id || '' })
+    const url = `${API_BASE}/api/quizzes/${activeQuiz}/forfeit`
+    try {
+      const blob = new Blob([payload], { type: 'application/json' })
+      if (!navigator.sendBeacon(url, blob)) {
+        fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload, keepalive: true }).catch(() => {})
+      }
+    } catch {
+      fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload, keepalive: true }).catch(() => {})
+    }
+
+    const forfeitRecord: CompletedQuiz = {
+      quizId: activeQuiz,
+      title: selectedQuiz?.title ?? 'Quiz Attempt',
+      course: selectedQuiz?.course ?? '',
+      score: 0,
+      outOf: quizQuestions.length,
+      date: new Date().toISOString(),
+      grade: 'F',
+      passed: false,
+    }
+    setLastAttempt(forfeitRecord)
+    setCompletedQuizzes(prev => {
+      const filtered = prev.filter(q => q.quizId !== activeQuiz)
+      return [forfeitRecord, ...filtered]
+    })
+    setQuizForfeited(true)
+    setQuizSubmitted(true)
+  }, [activeQuiz, quizSubmitted, selectedQuiz, quizQuestions.length])
+
+  useEffect(() => {
+    if (activeQuiz === null || quizSubmitted) return
+
+    function handleVisibilityChange() {
+      if (document.hidden) forfeitQuizForLeaving()
+    }
+    function handleBeforeUnload(e: BeforeUnloadEvent) {
+      forfeitQuizForLeaving()
+      e.preventDefault()
+      e.returnValue = ''
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [activeQuiz, quizSubmitted, forfeitQuizForLeaving])
+
   // Fallback for the rare case the server didn't return an authoritative expiry
   // (e.g. an untimed quiz, or an older in-progress attempt): fall back to a plain countdown.
   useEffect(() => {
@@ -695,11 +758,36 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   const passedQuizCount = visibleCompletedQuizzes.filter(q => q.passed).length
   const quizProgress = visibleCourses.length ? Math.round((visibleCourses.reduce((sum, course) => sum + course.progress, 0) / visibleCourses.length)) : 0
   const gpaEquivalent = avgScore ? Number(Math.min(4, Math.max(0, (avgScore / 25))).toFixed(1)) : 0
-  const achievementMessages = [
-    `Passed ${passedQuizCount} quiz${passedQuizCount === 1 ? '' : 'zes'}`,
-    `Completed ${visibleCourses.length} enrolled course${visibleCourses.length === 1 ? '' : 's'}`,
-    `${availableQuizzes.filter(q => q.status === 'available').length} quizzes available`,
-  ]
+
+  // Real, per-item achievements sourced from actual completed quiz attempts —
+  // not generic index-matched placeholder text.
+  const recentAchievements = useMemo(() => {
+    type Achievement = { icon: string; title: string; detail: string; date?: string }
+    const items: Achievement[] = []
+    const sorted = [...visibleCompletedQuizzes].sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+    const passedRecent = sorted.filter(q => q.passed).slice(0, 3)
+    for (const q of passedRecent) {
+      items.push({
+        icon: 'trophy',
+        title: `Passed ${q.title}`,
+        detail: `${q.course} • Scored ${q.score}%`,
+        date: q.date,
+      })
+    }
+    if (items.length === 0 && sorted.length > 0) {
+      const latest = sorted[0]
+      items.push({
+        icon: 'book',
+        title: `Attempted ${latest.title}`,
+        detail: `${latest.course} • Scored ${latest.score}%`,
+        date: latest.date,
+      })
+    }
+    if (items.length === 0) {
+      items.push({ icon: 'target', title: 'No achievements yet', detail: 'Complete a quiz to see your progress here.' })
+    }
+    return items
+  }, [visibleCompletedQuizzes])
 
   if (activeQuiz !== null && !quizSubmitted) {
     if (quizLoading) {
@@ -741,8 +829,22 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
               <Icon name="timer" />
               <span>{quizTimeLeft !== null ? `${Math.floor(quizTimeLeft / 60)}:${String(quizTimeLeft % 60).padStart(2, '0')}` : `${selectedQuiz?.timeLimit ?? 0} min`}</span>
             </div>
-            <button onClick={() => setActiveQuiz(null)} className="text-primary-foreground/70 hover:text-primary-foreground text-sm">Exit</button>
+            <button
+              onClick={() => {
+                if (window.confirm('Leaving now will forfeit this quiz and record a score of 0. Are you sure you want to exit?')) {
+                  forfeitQuizForLeaving()
+                }
+              }}
+              className="text-primary-foreground/70 hover:text-primary-foreground text-sm"
+            >
+              Exit
+            </button>
           </div>
+        </div>
+
+        <div className="bg-danger/10 border-b border-danger/20 text-danger text-xs font-semibold px-6 py-2 flex items-center gap-2">
+          <i className="fa-solid fa-triangle-exclamation" />
+          Do not switch tabs, minimize, or leave this screen — doing so immediately forfeits this attempt with a score of 0.
         </div>
 
         <div className="flex-1 flex items-center justify-center p-8">
@@ -857,10 +959,15 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       <div className="min-h-screen bg-background font-sans flex items-center justify-center p-4 sm:p-8">
         <div className="w-full max-w-xl text-center space-y-6">
           <div className="bg-card border border-border rounded-3xl p-6 sm:p-10 shadow-2xl">
-            <div className="text-5xl mb-4">{quizTimedOut ? <Icon name="timer" size={48} /> : score >= 60 ? <Icon name="celebrate" size={48} /> : <Icon name="book" size={48} />}</div>
-            <h2 className="font-display text-2xl sm:text-3xl text-foreground mb-2">{quizTimedOut ? 'Time Limit Exceeded' : score >= 60 ? 'Quiz Passed!' : 'Keep Studying'}</h2>
+            <div className="text-5xl mb-4">{quizTimedOut || quizForfeited ? <Icon name="timer" size={48} /> : score >= 60 ? <Icon name="celebrate" size={48} /> : <Icon name="book" size={48} />}</div>
+            <h2 className="font-display text-2xl sm:text-3xl text-foreground mb-2">{quizForfeited ? 'Attempt Forfeited' : quizTimedOut ? 'Time Limit Exceeded' : score >= 60 ? 'Quiz Passed!' : 'Keep Studying'}</h2>
             <p className="text-muted-foreground text-sm mb-6">{selectedQuiz?.title ?? 'Quiz Attempt'} <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {selectedQuiz?.course ?? 'Course'}</p>
-            {quizTimedOut && (
+            {quizForfeited && (
+              <div className="mb-6 rounded-xl bg-danger/10 border border-danger/30 text-danger text-sm px-4 py-3 text-left">
+                You left the assessment screen while this quiz was in progress, so it has been forfeited and recorded with a score of 0%. Contact your lecturer if you believe this is an error.
+              </div>
+            )}
+            {quizTimedOut && !quizForfeited && (
               <div className="mb-6 rounded-xl bg-danger/10 border border-danger/30 text-danger text-sm px-4 py-3 text-left">
                 Your time ran out before this attempt was submitted, so it has been recorded as missed with a score of 0%. Contact your lecturer if you believe this is an error.
               </div>
@@ -926,7 +1033,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
               </div>
             )}
 
-            <button onClick={() => { setActiveQuiz(null); setQuizSubmitted(false); setCurrentQ(0); setQuizAnswers({}); setFlippedFlashcards({}) }} className="w-full mt-6 bg-primary hover:bg-blue-950 text-white font-semibold py-3.5 rounded-xl transition-colors">
+            <button onClick={() => { setActiveQuiz(null); setQuizSubmitted(false); setQuizTimedOut(false); setQuizForfeited(false); setCurrentQ(0); setQuizAnswers({}); setFlippedFlashcards({}) }} className="w-full mt-6 bg-primary hover:bg-blue-950 text-white font-semibold py-3.5 rounded-xl transition-colors">
               Back to Dashboard
             </button>
           </div>
@@ -1472,6 +1579,19 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                                               Opening time to be announced by lecturer
                                             </div>
                                           )}
+                                          {/* Format details are safe to preview even while locked — only the
+                                              questions themselves stay hidden until the quiz opens. */}
+                                          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground pt-1">
+                                            {q.questions > 0 && (
+                                              <span className="inline-flex items-center gap-1.5"><i className="fa-solid fa-list-ol text-amber-600/70" /> {q.questions} questions</span>
+                                            )}
+                                            {q.timeLimit ? (
+                                              <span className="inline-flex items-center gap-1.5"><i className="fa-solid fa-clock text-amber-600/70" /> {q.timeLimit} min limit</span>
+                                            ) : null}
+                                            {q.dueDate && (
+                                              <span className="inline-flex items-center gap-1.5"><i className="fa-solid fa-calendar-xmark text-amber-600/70" /> Due {new Date(q.dueDate).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>
+                                            )}
+                                          </div>
                                         </div>
                                         <div className="shrink-0">
                                           <div className="flex flex-col items-center justify-center w-24 h-20 rounded-2xl bg-amber-500/10 border-2 border-amber-500/20 gap-1">
@@ -1655,8 +1775,19 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                 <div className="bg-card border border-border rounded-2xl p-4 sm:p-6">
                   <h3 className="font-semibold text-foreground mb-5">Material Completion</h3>
                   <div className="space-y-4">
-                    {visibleCourses.map((c, i) => {
-                      const read = Math.round(c.materials * (c.progress / 100))
+                    {visibleCourses.filter(c => c.materials > 0).map((c, i) => {
+                      // Real reading counts: prefer the live in-memory count if the reader
+                      // is currently open for this course, otherwise the server-recorded
+                      // per-course count from material_reads (matched tolerantly on course code).
+                      const read = materialsReaderCourse?.code === c.code && materials.length > 0
+                        ? materials.filter(m => readMaterials[String(m.id)]).length
+                        : Math.min(
+                            Object.entries(courseReadProgress).find(
+                              ([k]) => k.replace(/\s+/g, '').toLowerCase() === c.code.replace(/\s+/g, '').toLowerCase()
+                            )?.[1] ?? 0,
+                            c.materials,
+                          )
+                      const pct = c.materials > 0 ? Math.round((read / c.materials) * 100) : 0
                       return (
                         <div key={i}>
                           <div className="flex items-center justify-between mb-1.5">
@@ -1664,32 +1795,32 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                             <span className="text-xs text-muted-foreground">{read}/{c.materials} materials read</span>
                           </div>
                           <div className="h-2 bg-muted rounded-full overflow-hidden">
-                            <div className="h-full bg-accent rounded-full" style={{ width: `${(read / c.materials) * 100}%` }} />
+                            <div className="h-full bg-accent rounded-full" style={{ width: `${pct}%` }} />
                           </div>
                         </div>
                       )
                     })}
+                    {visibleCourses.every(c => c.materials === 0) && (
+                      <p className="text-xs text-muted-foreground italic">No materials uploaded yet for your enrolled courses.</p>
+                    )}
                   </div>
                 </div>
 
                 <div className="bg-card border border-border rounded-2xl p-4 sm:p-6">
                   <h3 className="font-semibold text-foreground mb-5">Recent Achievements</h3>
                   <div className="space-y-3">
-                    {achievementMessages.map((message, i) => {
-                      const icons = ['trophy', 'book', 'bolt', 'target']
-                      return (
-                        <div key={i} className="flex items-center gap-3 p-3 bg-muted/40 rounded-xl">
-                          <span className="text-2xl"><Icon name={icons[i] ?? 'trophy'} size={28} /></span>
-                          <div className="flex-1">
-                            <p className="text-sm font-semibold text-foreground">Achievement</p>
-                            <p className="text-xs text-muted-foreground">{message}</p>
-                          </div>
-                          <span className="text-xs text-muted-foreground font-mono">
-                            {completedQuizzes[i]?.date ? new Date(completedQuizzes[i].date).toLocaleDateString() : `${i + 1}d ago`}
-                          </span>
+                    {recentAchievements.map((a, i) => (
+                      <div key={i} className="flex items-center gap-3 p-3 bg-muted/40 rounded-xl">
+                        <span className="text-2xl"><Icon name={a.icon} size={28} /></span>
+                        <div className="flex-1">
+                          <p className="text-sm font-semibold text-foreground">{a.title}</p>
+                          <p className="text-xs text-muted-foreground">{a.detail}</p>
                         </div>
-                      )
-                    })}
+                        {a.date && (
+                          <span className="text-xs text-muted-foreground font-mono">{new Date(a.date).toLocaleDateString()}</span>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>

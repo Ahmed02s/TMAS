@@ -110,6 +110,35 @@ def list_courses(
             except Exception:
                 pass
 
+    # 3b. Class-wide quiz attempt stats — used for the lecturer's aggregate view (average
+    # score and completion rate across ALL enrolled students, not just one). Without this,
+    # a lecturer's "Avg Quiz Score" / course completion bar just echoed a static DB column
+    # that nothing ever updates, instead of reflecting real student performance.
+    class_avg_score_by_course: dict[str, float] = {}
+    class_completed_by_course: dict[str, int] = {}
+    all_quiz_ids_flat = [qid for ids in quiz_ids_by_course.values() for qid in ids]
+    if all_quiz_ids_flat:
+        try:
+            class_att_resp = supabase.table('quiz_attempts').select('quiz_id,student_id,score,status') \
+                .in_('quiz_id', all_quiz_ids_flat) \
+                .execute()
+            if not supabase_failed(class_att_resp):
+                qid_to_course_class = {qid: code for code, ids in quiz_ids_by_course.items() for qid in ids}
+                class_scores_by_course: dict[str, list[float]] = {}
+                for att in class_att_resp.data or []:
+                    if att.get('status') not in ('completed', 'missed'):
+                        continue
+                    code = qid_to_course_class.get(att.get('quiz_id'), '')
+                    if not code:
+                        continue
+                    class_completed_by_course[code] = class_completed_by_course.get(code, 0) + 1
+                    if att.get('status') == 'completed':
+                        class_scores_by_course.setdefault(code, []).append(float(att.get('score', 0)))
+                for code, scores in class_scores_by_course.items():
+                    class_avg_score_by_course[code] = round(sum(scores) / len(scores)) if scores else 0
+        except Exception:
+            pass
+
     # 4. Student count per course (match by level + program, case-insensitive)
     students_by_course: dict[str, int] = {}
     try:
@@ -137,6 +166,15 @@ def list_courses(
         if student_id:
             course['quizzes_done'] = quizzes_done_by_course.get(code, 0)
             course['avg_score'] = avg_score_by_course.get(code, 0)
+        else:
+            # Lecturer/aggregate view: real class-wide average score and completion rate,
+            # replacing the static `progress`/`avg_score` DB columns nothing else updates.
+            course['avg_score'] = class_avg_score_by_course.get(code, 0)
+            student_count = students_by_course.get(code, 0)
+            quizzes_total = course['quizzes_total']
+            possible = student_count * quizzes_total
+            completed = class_completed_by_course.get(code, 0)
+            course['progress'] = round(min(completed, possible) / possible * 100) if possible > 0 else 0
 
     return {'courses': courses}
 

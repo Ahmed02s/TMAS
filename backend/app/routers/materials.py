@@ -37,6 +37,65 @@ def _clean_course_code(value: str) -> str:
     return re.sub(r'[^a-zA-Z0-9]', '', value or '').lower()
 
 
+def _resolve_material_path(material: dict) -> Path | None:
+    """Look for the material's file on local disk, trying the stored path first, then a
+    few likely locations by course/filename."""
+    path = material.get('path')
+    candidates: list[Path] = []
+    if path:
+        candidates.append(Path(path))
+
+    course_name = str(material.get('course') or '').strip()
+    material_name = str(material.get('name') or '').strip()
+    if course_name:
+        safe_course = re.sub(r'[^a-zA-Z0-9._-]', '_', course_name)
+        candidates.append(UPLOAD_DIR / safe_course / material_name)
+    candidates.append(UPLOAD_DIR / material_name)
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+
+    if material_name:
+        target_name = material_name.lower()
+        for file_item in UPLOAD_DIR.rglob('*'):
+            if file_item.is_file() and (file_item.name.lower() == target_name or file_item.name.lower().endswith(f"_{target_name}") or target_name in file_item.name.lower()):
+                return file_item
+
+    return None
+
+
+def _fetch_remote_material_copy(material: dict) -> Path | None:
+    """Render's filesystem is ephemeral — every deploy/restart wipes locally-written
+    uploads, which is why a material that resolved fine minutes ago can suddenly 404
+    with 'not found on disk'. When the local copy is missing, pull the durable copy back
+    from Supabase Storage (recorded as file_url at upload time) into a temp file so
+    downstream code (preview extraction, download) can treat it like a normal local file.
+    """
+    file_url = material.get('file_url')
+    if not file_url:
+        return None
+    try:
+        import httpx
+        with httpx.Client(timeout=20.0, follow_redirects=True) as client:
+            resp = client.get(file_url)
+            if resp.status_code != 200 or not resp.content:
+                return None
+        material_name = str(material.get('name') or 'material')
+        suffix = Path(material_name).suffix
+        cache_dir = UPLOAD_DIR / '_remote_cache'
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / f"{material.get('id')}{suffix}"
+        cache_path.write_bytes(resp.content)
+        return cache_path
+    except Exception:
+        return None
+
+
+def _resolve_material_file(material: dict) -> Path | None:
+    return _resolve_material_path(material) or _fetch_remote_material_copy(material)
+
+
 @router.get('')
 def list_materials(course: str | None = None, lecturer: str | None = None) -> dict[str, Any]:
     ensure_supabase_enabled()
@@ -160,6 +219,10 @@ async def upload_materials(
     course_dir.mkdir(parents=True, exist_ok=True)
 
     created_materials: list[Any] = []
+    # Local disk is NOT durable on most hosts (e.g. Render wipes it on every deploy/restart),
+    # so Supabase Storage is the only reliable long-term copy. Track failures here instead of
+    # only printing them server-side, so the lecturer actually finds out a file is at risk.
+    storage_warnings: list[str] = []
     for upload in files:
         filename = _sanitize_filename(upload.filename)
         file_ext = Path(filename).suffix.lower()
@@ -184,6 +247,7 @@ async def upload_materials(
             file_url = supabase.storage.from_('materials').get_public_url(storage_path)
         except Exception as err:
             print(f"Supabase storage bucket upload fallback to local disk: {err}")
+            storage_warnings.append(filename)
 
         record = {
             'name': filename,
@@ -221,7 +285,13 @@ async def upload_materials(
                 raise HTTPException(status_code=502, detail=supabase_error_message(response, f'Supabase insert material failed for {filename}'))
             created_materials.extend(response.data or [])
 
-    return {'materials': created_materials}
+    result: dict[str, Any] = {'materials': created_materials}
+    if storage_warnings:
+        result['warning'] = (
+            f"Cloud backup failed for: {', '.join(storage_warnings)}. "
+            "These files were saved locally only and may be lost if the server restarts — try re-uploading."
+        )
+    return result
 
 
 @router.post('/{material_id}/mark_processed')
@@ -250,33 +320,11 @@ def download_material(material_id: int):
         raise HTTPException(status_code=404, detail='Material not found')
 
     material = response.data[0]
-    path = material.get('path')
-    candidates: list[Path] = []
-    if path:
-        candidates.append(Path(path))
-
-    course_name = str(material.get('course') or '').strip()
-    material_name = str(material.get('name') or '').strip()
-    if course_name:
-        safe_course = re.sub(r'[^a-zA-Z0-9._-]', '_', course_name)
-        candidates.append(UPLOAD_DIR / safe_course / material_name)
-    candidates.append(UPLOAD_DIR / material_name)
-
-    resolved_path = None
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_file():
-            resolved_path = candidate
-            break
-
-    if not resolved_path and material_name:
-        target_name = material_name.lower()
-        for file_item in UPLOAD_DIR.rglob('*'):
-            if file_item.is_file() and (file_item.name.lower() == target_name or file_item.name.lower().endswith(f"_{target_name}") or target_name in file_item.name.lower()):
-                resolved_path = file_item
-                break
+    resolved_path = _resolve_material_path(material)
 
     if not resolved_path:
-        # Fallback: redirect to Supabase Storage public URL if available
+        # Local disk copy is gone (e.g. server redeployed/restarted). Try to redirect
+        # straight to the durable Supabase Storage copy before giving up.
         file_url = material.get('file_url')
         if file_url:
             from fastapi.responses import RedirectResponse
@@ -296,30 +344,11 @@ def get_material_content(material_id: int):
         raise HTTPException(status_code=404, detail='Material not found')
 
     material = response.data[0]
-    path = material.get('path')
-    candidates: list[Path] = []
-    if path:
-        candidates.append(Path(path))
-
-    course_name = str(material.get('course') or '').strip()
     material_name = str(material.get('name') or '').strip()
-    if course_name:
-        safe_course = re.sub(r'[^a-zA-Z0-9._-]', '_', course_name)
-        candidates.append(UPLOAD_DIR / safe_course / material_name)
-    candidates.append(UPLOAD_DIR / material_name)
+    course_name = str(material.get('course') or '').strip()
 
-    resolved_path = None
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_file():
-            resolved_path = candidate
-            break
-
-    if not resolved_path and material_name:
-        target_name = material_name.lower()
-        for file_item in UPLOAD_DIR.rglob('*'):
-            if file_item.is_file() and (file_item.name.lower() == target_name or file_item.name.lower().endswith(f"_{target_name}") or target_name in file_item.name.lower()):
-                resolved_path = file_item
-                break
+    # Falls back to Supabase Storage automatically if the local disk copy is gone.
+    resolved_path = _resolve_material_file(material)
 
     text_content = ''
     if resolved_path:

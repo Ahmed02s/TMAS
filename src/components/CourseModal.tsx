@@ -88,6 +88,7 @@ export default function CourseModal({
               <datalist id="course-code-suggestions">
                 {(courseCodes || []).map(c => <option key={c} value={c} />)}
               </datalist>
+              <span className="block text-xs text-muted-foreground">Type any code — the suggestions are just a shortcut, not a restriction.</span>
             </label>
             <label className="space-y-2 text-sm text-foreground">
               <span>Course title</span>
@@ -101,6 +102,7 @@ export default function CourseModal({
               <datalist id="course-title-suggestions">
                 {(courseTitles || []).map(t => <option key={t} value={t} />)}
               </datalist>
+              <span className="block text-xs text-muted-foreground">Type any title — the suggestions are just a shortcut, not a restriction.</span>
             </label>
           </div>
 
