@@ -1,10 +1,49 @@
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, EmailStr, field_validator
 
+from app.core.security import require_roles
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 
 router = APIRouter(prefix='/api/dashboard', tags=['dashboard'])
+
+_VALID_LECTURER_STATUSES = {'active', 'rejected', 'suspended'}
+_VALID_STUDENT_STATUSES = {'active', 'suspended', 'revoked'}
+
+
+class UpdateLecturerStatusRequest(BaseModel):
+    status: str
+
+    @field_validator('status')
+    @classmethod
+    def _valid_status(cls, v: str) -> str:
+        if v not in _VALID_LECTURER_STATUSES:
+            raise ValueError(f"status must be one of {sorted(_VALID_LECTURER_STATUSES)}")
+        return v
+
+
+class UpdateStudentRequest(BaseModel):
+    status: str | None = None
+    level: str | None = None
+    name: str | None = None
+    email: EmailStr | None = None
+    program: str | None = None
+    institution: str | None = None
+
+    @field_validator('status')
+    @classmethod
+    def _valid_status_if_present(cls, v: str | None) -> str | None:
+        if v is not None and v not in _VALID_STUDENT_STATUSES:
+            raise ValueError(f"status must be one of {sorted(_VALID_STUDENT_STATUSES)}")
+        return v
+
+    @field_validator('name')
+    @classmethod
+    def _not_blank_if_present(cls, v: str | None) -> str | None:
+        if v is not None and not v.strip():
+            raise ValueError('Name cannot be blank')
+        return v
 
 
 @router.get('/students')
@@ -45,13 +84,9 @@ def list_lecturers() -> dict[str, Any]:
 
 
 @router.patch('/lecturers/{lecturer_id}/status')
-def update_lecturer_status(lecturer_id: str, payload: dict[str, str]) -> dict[str, Any]:
+def update_lecturer_status(lecturer_id: str, payload: UpdateLecturerStatusRequest, _claims: dict = Depends(require_roles('admin', 'administrator'))) -> dict[str, Any]:
     ensure_supabase_enabled()
-    status = payload.get('status')
-    if status not in {'active', 'rejected', 'suspended'}:
-        raise HTTPException(status_code=400, detail='Invalid lecturer status')
-
-    response = supabase.table('users').update({'status': status}).eq('id', lecturer_id).eq('role', 'lecturer').execute()
+    response = supabase.table('users').update({'status': payload.status}).eq('id', lecturer_id).eq('role', 'lecturer').execute()
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase update lecturer status failed'))
     if response.data:
@@ -142,11 +177,10 @@ def lecturer_analytics(lecturer: str) -> dict[str, Any]:
 
 
 @router.patch('/students/{student_id}')
-def update_student(student_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+def update_student(student_id: str, payload: UpdateStudentRequest, _claims: dict = Depends(require_roles('admin', 'administrator'))) -> dict[str, Any]:
     """Update student fields such as status, level, name or email."""
     ensure_supabase_enabled()
-    allowed = {'status', 'level', 'name', 'email', 'program', 'institution'}
-    record = {k: payload[k] for k in payload.keys() if k in allowed}
+    record = payload.model_dump(exclude_unset=True)
     if not record:
         raise HTTPException(status_code=400, detail='No updatable fields provided')
 

@@ -1,0 +1,48 @@
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, EmailStr, field_validator
+
+from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_error_message, supabase_failed
+
+router = APIRouter(prefix='/api/contact', tags=['contact'])
+
+
+class ContactMessageRequest(BaseModel):
+    name: str
+    email: EmailStr
+    message: str
+
+    @field_validator('name')
+    @classmethod
+    def _name_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError('Name is required')
+        return v
+
+    @field_validator('message')
+    @classmethod
+    def _message_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 5:
+            raise ValueError('Message is too short')
+        return v
+
+
+@router.post('', status_code=201)
+def send_contact_message(payload: ContactMessageRequest) -> dict[str, Any]:
+    """Landing page 'Send us a message' form. No outbound email provider is configured, so
+    the message is persisted for an admin to review — this at minimum makes the form
+    genuinely capture what a visitor submits instead of silently doing nothing."""
+    ensure_supabase_enabled()
+    record = {
+        'name': payload.name,
+        'email': payload.email,
+        'message': payload.message.strip(),
+        'status': 'new',
+    }
+    response = supabase.table('contact_messages').insert(record).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase insert contact message failed'))
+    return {'status': 'received', 'message': "Thanks — we've received your message and will get back to you soon."}

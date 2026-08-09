@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AppView } from '../App'
 import { API_BASE } from '../config'
+import LegalModal from '../components/LegalModal'
 
 const fallbackLevelOptions = ['Level 100', 'Level 200', 'Level 300', 'Level 400']
 const programOptions = ['Computer Science', 'Mathematics', 'Engineering', 'Business']
@@ -47,6 +48,7 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
   // ── Login fields ──────────────────────────────────────────────────────────
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showLoginPassword, setShowLoginPassword] = useState(false)
   const [emailErr, setEmailErr] = useState('')
   const [passwordErr, setPasswordErr] = useState('')
 
@@ -55,6 +57,7 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
   const [lastName, setLastName] = useState('')
   const [registerEmail, setRegisterEmail] = useState('')
   const [registerPassword, setRegisterPassword] = useState('')
+  const [showRegisterPassword, setShowRegisterPassword] = useState(false)
   const [studentIndexNumber, setStudentIndexNumber] = useState('')
   const [studentLevel, setStudentLevel] = useState(fallbackLevelOptions[0])
   const [studentProgram, setStudentProgram] = useState('Computer Science')
@@ -71,6 +74,84 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
   const [statusMessage, setStatusMessage] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [lecturerPendingModal, setLecturerPendingModal] = useState(false)
+  const [legalModal, setLegalModal] = useState<'terms' | 'privacy' | null>(null)
+
+  // ── Forgot / reset password ──────────────────────────────────────────────
+  const [forgotOpen, setForgotOpen] = useState(false)
+  const [forgotStep, setForgotStep] = useState<'request' | 'reset'>('request')
+  const [forgotEmail, setForgotEmail] = useState('')
+  const [resetToken, setResetToken] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [forgotBusy, setForgotBusy] = useState(false)
+  const [forgotMessage, setForgotMessage] = useState('')
+  const [forgotError, setForgotError] = useState('')
+
+  function closeForgotModal() {
+    setForgotOpen(false)
+    setForgotStep('request')
+    setForgotEmail('')
+    setResetToken('')
+    setNewPassword('')
+    setForgotMessage('')
+    setForgotError('')
+  }
+
+  async function handleForgotSubmit() {
+    const eErr = validateEmail(forgotEmail)
+    if (eErr) {
+      setForgotError(eErr)
+      return
+    }
+    setForgotBusy(true)
+    setForgotError('')
+    setForgotMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail.trim() }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || data.error || 'Could not process request')
+      setForgotMessage(data.message || 'If that email is registered, password reset instructions have been sent.')
+      if (data.dev_reset_token) setResetToken(data.dev_reset_token)
+      setForgotStep('reset')
+    } catch (error) {
+      setForgotError(error instanceof Error ? error.message : 'Could not process request')
+    } finally {
+      setForgotBusy(false)
+    }
+  }
+
+  async function handleResetSubmit() {
+    if (!resetToken.trim()) {
+      setForgotError('Reset token is required.')
+      return
+    }
+    if (newPassword.length < 6) {
+      setForgotError('Password must be at least 6 characters.')
+      return
+    }
+    setForgotBusy(true)
+    setForgotError('')
+    setForgotMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: resetToken.trim(), new_password: newPassword }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || data.error || 'Could not reset password')
+      closeForgotModal()
+      setTab('login')
+      setStatusMessage('Password updated successfully. Please sign in with your new password.')
+    } catch (error) {
+      setForgotError(error instanceof Error ? error.message : 'Could not reset password')
+    } finally {
+      setForgotBusy(false)
+    }
+  }
 
   useEffect(() => {
     async function loadLevels() {
@@ -314,16 +395,32 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="block text-sm font-medium text-foreground">Password</label>
-                      <a href="#" className="text-xs text-primary hover:underline">Forgot password?</a>
+                      <button
+                        type="button"
+                        onClick={() => setForgotOpen(true)}
+                        className="text-xs text-primary hover:underline"
+                      >
+                        Forgot password?
+                      </button>
                     </div>
-                    <input
-                      type="password"
-                      value={password}
-                      onChange={e => { setPassword(e.target.value); setPasswordErr('') }}
-                      onBlur={() => setPasswordErr(!password ? 'Password is required.' : '')}
-                      placeholder="••••••••"
-                      className={inputCls(!!passwordErr)}
-                    />
+                    <div className="relative">
+                      <input
+                        type={showLoginPassword ? 'text' : 'password'}
+                        value={password}
+                        onChange={e => { setPassword(e.target.value); setPasswordErr('') }}
+                        onBlur={() => setPasswordErr(!password ? 'Password is required.' : '')}
+                        placeholder="••••••••"
+                        className={inputCls(!!passwordErr)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowLoginPassword(prev => !prev)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
+                      >
+                        <i className={`fa-solid ${showLoginPassword ? 'fa-eye-slash' : 'fa-eye'}`} />
+                      </button>
+                    </div>
                     <FieldError msg={passwordErr} />
                   </div>
 
@@ -406,14 +503,24 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
                   {/* Password */}
                   <div>
                     <label className="block text-sm font-medium text-foreground mb-1.5">Password</label>
-                    <input
-                      type="password"
-                      value={registerPassword}
-                      onChange={e => { setRegisterPassword(e.target.value); setRegPasswordErr('') }}
-                      onBlur={() => setRegPasswordErr(!registerPassword ? 'Password is required.' : registerPassword.length < 6 ? 'At least 6 characters.' : '')}
-                      placeholder="••••••••"
-                      className={inputCls(!!regPasswordErr)}
-                    />
+                    <div className="relative">
+                      <input
+                        type={showRegisterPassword ? 'text' : 'password'}
+                        value={registerPassword}
+                        onChange={e => { setRegisterPassword(e.target.value); setRegPasswordErr('') }}
+                        onBlur={() => setRegPasswordErr(!registerPassword ? 'Password is required.' : registerPassword.length < 6 ? 'At least 6 characters.' : '')}
+                        placeholder="••••••••"
+                        className={inputCls(!!regPasswordErr)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowRegisterPassword(prev => !prev)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        aria-label={showRegisterPassword ? 'Hide password' : 'Show password'}
+                      >
+                        <i className={`fa-solid ${showRegisterPassword ? 'fa-eye-slash' : 'fa-eye'}`} />
+                      </button>
+                    </div>
                     <FieldError msg={regPasswordErr} />
                   </div>
 
@@ -514,9 +621,9 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
 
             <p className="text-xs text-muted-foreground text-center mt-6">
               By continuing you agree to the TMAS{' '}
-              <a href="#" className="text-primary hover:underline">Terms of Service</a>{' '}
+              <button type="button" onClick={() => setLegalModal('terms')} className="text-primary hover:underline">Terms of Service</button>{' '}
               and{' '}
-              <a href="#" className="text-primary hover:underline">Privacy Policy</a>.
+              <button type="button" onClick={() => setLegalModal('privacy')} className="text-primary hover:underline">Privacy Policy</button>.
             </p>
           </div>
         </div>
@@ -561,6 +668,94 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
           </div>
         </div>
       )}
+
+      {/* ── Forgot / Reset Password Modal ── */}
+      {forgotOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+          <div className="bg-card border border-border rounded-3xl p-8 max-w-md w-full space-y-5 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-2xl font-bold text-foreground">
+                {forgotStep === 'request' ? 'Reset your password' : 'Set a new password'}
+              </h3>
+              <button
+                onClick={closeForgotModal}
+                aria-label="Close"
+                className="w-9 h-9 rounded-full bg-muted hover:bg-secondary flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <i className="fa-solid fa-xmark" />
+              </button>
+            </div>
+
+            {forgotStep === 'request' ? (
+              <>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  Enter the email address on your account and we'll send you instructions to reset your password.
+                </p>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1.5">Email Address</label>
+                  <input
+                    type="email"
+                    value={forgotEmail}
+                    onChange={e => { setForgotEmail(e.target.value); setForgotError('') }}
+                    placeholder="you@university.edu"
+                    className={inputCls(!!forgotError)}
+                  />
+                  <FieldError msg={forgotError} />
+                </div>
+                <button
+                  onClick={handleForgotSubmit}
+                  disabled={forgotBusy}
+                  className="w-full bg-primary hover:bg-blue-950 text-white font-semibold py-3.5 rounded-xl transition-colors disabled:opacity-60"
+                >
+                  {forgotBusy ? <><i className="fa-solid fa-spinner fa-spin mr-2" />Sending...</> : 'Send Reset Instructions'}
+                </button>
+              </>
+            ) : (
+              <>
+                {forgotMessage && (
+                  <p className="text-sm text-emerald-600 font-medium leading-relaxed">{forgotMessage}</p>
+                )}
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1.5">Reset Token</label>
+                  <input
+                    type="text"
+                    value={resetToken}
+                    onChange={e => { setResetToken(e.target.value); setForgotError('') }}
+                    placeholder="Paste the reset token"
+                    className={inputCls(false)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1.5">New Password</label>
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={e => { setNewPassword(e.target.value); setForgotError('') }}
+                    placeholder="••••••••"
+                    className={inputCls(!!forgotError)}
+                  />
+                  <FieldError msg={forgotError} />
+                </div>
+                <button
+                  onClick={handleResetSubmit}
+                  disabled={forgotBusy}
+                  className="w-full bg-primary hover:bg-blue-950 text-white font-semibold py-3.5 rounded-xl transition-colors disabled:opacity-60"
+                >
+                  {forgotBusy ? <><i className="fa-solid fa-spinner fa-spin mr-2" />Updating...</> : 'Update Password'}
+                </button>
+                <button
+                  onClick={() => setForgotStep('request')}
+                  className="w-full text-xs text-muted-foreground hover:text-foreground text-center"
+                >
+                  Didn't get a token? Send again
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {legalModal && <LegalModal type={legalModal} onClose={() => setLegalModal(null)} />}
 
     </div>
   )

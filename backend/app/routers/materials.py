@@ -1,16 +1,28 @@
+import logging
 import re
 from pathlib import Path
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from app.core.security import get_current_claims_optional, require_roles
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 import postgrest
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix='/api/materials', tags=['materials'])
+
+
+def _verify_acting_as_self_if_authenticated(claims: dict[str, Any] | None, student_id: str) -> None:
+    """Same rationale as quizzes._verify_acting_as_self, but optional: reading-progress
+    telemetry is sent via `navigator.sendBeacon` on unmount (see MaterialViewer.tsx), which
+    cannot attach an Authorization header, so this only enforces identity when a token IS
+    present rather than hard-requiring one and breaking that beacon path."""
+    if claims is not None and str(claims.get('sub') or '') != str(student_id or ''):
+        raise HTTPException(status_code=403, detail='You can only do this for your own account')
 
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / 'data' / 'uploads'
 ALLOWED_EXTENSIONS = {'.pdf', '.doc', '.docx', '.ppt', '.pptx', '.txt', '.md'}
@@ -170,6 +182,7 @@ def get_reading_progress(student_id: str | None = None, course: str | None = Non
 
         return {'read_ids': read_ids, 'course_progress': course_read}
     except Exception:
+        logger.exception('get_reading_progress failed for student_id=%s course=%s', student_id, course)
         return {'read_ids': [], 'course_progress': {}}
 
 
@@ -193,13 +206,18 @@ class MarkReadRequest(BaseModel):
 
 
 @router.post('/{material_id}/mark-read')
-def mark_material_read(material_id: int, payload: MarkReadRequest) -> dict[str, Any]:
+def mark_material_read(
+    material_id: int,
+    payload: MarkReadRequest,
+    claims: dict[str, Any] | None = Depends(get_current_claims_optional),
+) -> dict[str, Any]:
     """Records that a student has opened/read a material, so reading-progress endpoints
     (student-facing and the lecturer's per-student course monitor) have real data to show.
     Idempotent: re-reading the same material doesn't create duplicate rows."""
     ensure_supabase_enabled()
     if not payload.student_id:
         raise HTTPException(status_code=400, detail='student_id is required')
+    _verify_acting_as_self_if_authenticated(claims, payload.student_id)
 
     response = supabase.table('materials').select('id,course').eq('id', material_id).limit(1).execute()
     if supabase_failed(response):
@@ -240,15 +258,24 @@ class MaterialProgressRequest(BaseModel):
 
 
 @router.post('/{material_id}/progress')
-def update_material_progress(material_id: int, payload: MaterialProgressRequest) -> dict[str, Any]:
+def update_material_progress(
+    material_id: int,
+    payload: MaterialProgressRequest,
+    claims: dict[str, Any] | None = Depends(get_current_claims_optional),
+) -> dict[str, Any]:
     """Scroll-depth + time-on-page telemetry, reported periodically while a student has a
     material open. `time_spent_delta` is the active seconds since the previous report (not
     a cumulative total) so repeated reports never double-count; scroll_percent is the
     farthest point reached this report and only ever ratchets up server-side.
+
+    Auth is optional (not required) because MaterialViewer.tsx sends the final report via
+    `navigator.sendBeacon` on unmount, which cannot attach an Authorization header; identity
+    is still checked whenever a token IS present.
     """
     ensure_supabase_enabled()
     if not payload.student_id:
         raise HTTPException(status_code=400, detail='student_id is required')
+    _verify_acting_as_self_if_authenticated(claims, payload.student_id)
 
     response = supabase.table('materials').select('id,course').eq('id', material_id).limit(1).execute()
     if supabase_failed(response):
@@ -289,10 +316,15 @@ def update_material_progress(material_id: int, payload: MaterialProgressRequest)
 
 
 @router.get('/{material_id}/my-progress')
-def get_material_progress(material_id: int, student_id: str) -> dict[str, Any]:
+def get_material_progress(
+    material_id: int,
+    student_id: str,
+    claims: dict[str, Any] | None = Depends(get_current_claims_optional),
+) -> dict[str, Any]:
     """Lets the reader resume showing a student's real progress on a material they've
     already partially read, instead of restarting the telemetry display from zero."""
     ensure_supabase_enabled()
+    _verify_acting_as_self_if_authenticated(claims, student_id)
     if not student_id:
         return {'scroll_percent': 0, 'time_spent_seconds': 0, 'completed': False}
     try:
@@ -315,6 +347,7 @@ async def upload_materials(
     course: str = Form(...),
     lecturer: str = Form(...),
     files: list[UploadFile] = File(...),
+    _claims: dict[str, Any] = Depends(require_roles('lecturer', 'admin', 'administrator')),
 ) -> dict[str, Any]:
     ensure_supabase_enabled()
     lecturer = lecturer.strip()
@@ -406,7 +439,10 @@ async def upload_materials(
 
 
 @router.delete('/{material_id}')
-def delete_material(material_id: int) -> dict[str, Any]:
+def delete_material(
+    material_id: int,
+    _claims: dict[str, Any] = Depends(require_roles('lecturer', 'admin', 'administrator')),
+) -> dict[str, Any]:
     """Deletes a material the lecturer no longer wants students to see. Best-effort cleans
     up the underlying file (local disk + Supabase Storage) and any reading-progress rows,
     but never lets a missing/already-gone file block removing the database record."""
@@ -447,7 +483,10 @@ def delete_material(material_id: int) -> dict[str, Any]:
 
 
 @router.post('/{material_id}/mark_processed')
-def mark_material_processed(material_id: int):
+def mark_material_processed(
+    material_id: int,
+    _claims: dict[str, Any] = Depends(require_roles('lecturer', 'admin', 'administrator')),
+):
     ensure_supabase_enabled()
     response = supabase.table('materials').select('*').eq('id', material_id).limit(1).execute()
     if supabase_failed(response):

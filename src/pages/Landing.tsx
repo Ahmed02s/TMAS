@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import type { AppView } from '../App'
+import { API_BASE } from '../config'
+import LegalModal from '../components/LegalModal'
 
 const features = [
   { iconClass: 'fa-solid fa-robot text-primary', title: 'AI-Powered Quiz Generation', desc: 'Upload PDFs, slides, or documents and our AI extracts topics, identifies learning objectives, and generates a comprehensive question bank — ready for lecturer review.' },
@@ -56,6 +58,35 @@ export default function Landing({ onNavigate }: { onNavigate: (v: AppView) => vo
   const [openFaq, setOpenFaq] = useState<number | null>(null)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [form, setForm] = useState({ name: '', email: '', message: '' })
+  const [contactBusy, setContactBusy] = useState(false)
+  const [contactStatus, setContactStatus] = useState('')
+  const [contactError, setContactError] = useState('')
+  const [legalModal, setLegalModal] = useState<'terms' | 'privacy' | null>(null)
+
+  async function handleContactSubmit() {
+    setContactError('')
+    setContactStatus('')
+    if (!form.name.trim() || !form.email.trim() || !form.message.trim()) {
+      setContactError('Please fill in your name, email, and message.')
+      return
+    }
+    setContactBusy(true)
+    try {
+      const response = await fetch(`${API_BASE}/api/contact`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: form.name.trim(), email: form.email.trim(), message: form.message.trim() }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || data.error || 'Could not send message')
+      setContactStatus(data.message || 'Thanks for reaching out — we will get back to you shortly.')
+      setForm({ name: '', email: '', message: '' })
+    } catch (error) {
+      setContactError(error instanceof Error ? error.message : 'Could not send message')
+    } finally {
+      setContactBusy(false)
+    }
+  }
 
   return (
     <div className="font-sans bg-background text-foreground">
@@ -346,8 +377,14 @@ export default function Landing({ onNavigate }: { onNavigate: (v: AppView) => vo
                 <label className="block text-sm font-medium text-foreground mb-1.5">Message</label>
                 <textarea rows={4} value={form.message} onChange={e => setForm({ ...form, message: e.target.value })} placeholder="Tell us about your institution and requirements..." className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors resize-none" />
               </div>
-              <button className="w-full bg-primary hover:bg-blue-950 text-primary-foreground font-semibold py-3.5 rounded-xl transition-colors">
-                Send Message
+              {contactStatus && <p className="text-sm text-emerald-600 font-medium">{contactStatus}</p>}
+              {contactError && <p className="text-sm text-danger font-medium">{contactError}</p>}
+              <button
+                onClick={handleContactSubmit}
+                disabled={contactBusy}
+                className="w-full bg-primary hover:bg-blue-950 text-primary-foreground font-semibold py-3.5 rounded-xl transition-colors disabled:opacity-60"
+              >
+                {contactBusy ? <><i className="fa-solid fa-spinner fa-spin mr-2" />Sending...</> : 'Send Message'}
               </button>
             </div>
           </div>
@@ -380,8 +417,20 @@ export default function Landing({ onNavigate }: { onNavigate: (v: AppView) => vo
             <div>
               <h4 className="text-sidebar-foreground font-semibold text-sm mb-5">Support</h4>
               <ul className="space-y-3">
-                {['FAQ', 'Contact Us', 'Privacy Policy', 'Terms of Service', 'System Status'].map(item => (
-                  <li key={item}><a href="#faq" className="text-sidebar-foreground/45 hover:text-sidebar-foreground text-sm transition-colors">{item}</a></li>
+                {[
+                  { label: 'FAQ', href: '#faq' },
+                  { label: 'Contact Us', href: '#contact' },
+                  { label: 'Privacy Policy', onClick: () => setLegalModal('privacy') },
+                  { label: 'Terms of Service', onClick: () => setLegalModal('terms') },
+                  { label: 'System Status', href: '#' },
+                ].map(item => (
+                  <li key={item.label}>
+                    {item.onClick ? (
+                      <button onClick={item.onClick} className="text-sidebar-foreground/45 hover:text-sidebar-foreground text-sm transition-colors">{item.label}</button>
+                    ) : (
+                      <a href={item.href} className="text-sidebar-foreground/45 hover:text-sidebar-foreground text-sm transition-colors">{item.label}</a>
+                    )}
+                  </li>
                 ))}
               </ul>
             </div>
@@ -390,12 +439,14 @@ export default function Landing({ onNavigate }: { onNavigate: (v: AppView) => vo
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <p className="text-sidebar-foreground/35 text-sm">© 2025 TMAS. All rights reserved.</p>
             <div className="flex items-center gap-6">
-              <a href="#" className="text-sidebar-foreground/35 hover:text-sidebar-foreground text-sm transition-colors">Privacy Policy</a>
-              <a href="#" className="text-sidebar-foreground/35 hover:text-sidebar-foreground text-sm transition-colors">Terms of Service</a>
+              <button onClick={() => setLegalModal('privacy')} className="text-sidebar-foreground/35 hover:text-sidebar-foreground text-sm transition-colors">Privacy Policy</button>
+              <button onClick={() => setLegalModal('terms')} className="text-sidebar-foreground/35 hover:text-sidebar-foreground text-sm transition-colors">Terms of Service</button>
             </div>
           </div>
         </div>
       </footer>
+
+      {legalModal && <LegalModal type={legalModal} onClose={() => setLegalModal(null)} />}
 
     </div>
   )

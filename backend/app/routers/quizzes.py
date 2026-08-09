@@ -8,9 +8,10 @@ from typing import Any
 import re as _re
 from postgrest import exceptions as _postgrest_exceptions
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.core.security import get_current_claims, get_current_claims_optional, require_roles
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 from app.core.config import QROK_API_KEY, QROK_API_URL
 
@@ -19,6 +20,15 @@ UPLOAD_DIR = BASE_DIR / "uploads"
 
 # Small allowance for network/client latency when enforcing a student's per-attempt time limit.
 TIME_LIMIT_GRACE_SECONDS = 20
+
+
+def _verify_acting_as_self(claims: dict[str, Any], student_id: str) -> None:
+    """Without this, any logged-in account could start/submit/forfeit a quiz attempt on
+    behalf of an arbitrary student_id in the request body — the endpoint had no way to know
+    who was really calling it. Admins/lecturers aren't exempted: nothing about starting or
+    submitting a student's quiz attempt is a legitimate lecturer/admin action."""
+    if str(claims.get('sub') or '') != str(student_id or ''):
+        raise HTTPException(status_code=403, detail='You can only do this for your own account')
 
 
 def _clean_material_title(title: str) -> str:
@@ -933,7 +943,7 @@ def _normalize_question_types(question_types: list[str]) -> list[str]:
 
 
 @router.post('/generate')
-def generate_quiz(payload: GenerateQuizRequest) -> dict[str, Any]:
+def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
     ensure_supabase_enabled()
     try:
         if payload.material_ids:
@@ -1104,7 +1114,7 @@ def generate_quiz(payload: GenerateQuizRequest) -> dict[str, Any]:
 
 
 @router.post('/publish')
-def publish_quiz(payload: PublishQuizRequest) -> dict[str, Any]:
+def publish_quiz(payload: PublishQuizRequest, _claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
     ensure_supabase_enabled()
 
     # If multiple quiz sets are provided (tiered generation), publish each separately
@@ -1275,7 +1285,7 @@ def publish_quiz(payload: PublishQuizRequest) -> dict[str, Any]:
 
 
 @router.delete('/all')
-def delete_all_quizzes() -> dict[str, Any]:
+def delete_all_quizzes(_claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
     ensure_supabase_enabled()
 
     # Delete all quiz attempts first (foreign key dependency)
@@ -1309,10 +1319,11 @@ class QuizStartRequest(BaseModel):
 
 
 @router.post('/{quiz_id}/start')
-def start_quiz(quiz_id: int, payload: QuizStartRequest) -> dict[str, Any]:
+def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(get_current_claims)) -> dict[str, Any]:
     """Called the moment a student opens the quiz. Records an in-progress attempt
     with score=0 immediately, so that even if the student closes without submitting
     a score of 0 is persisted."""
+    _verify_acting_as_self(claims, payload.student_id)
     ensure_supabase_enabled()
     response = supabase.table('quizzes').select('*').eq('id', quiz_id).limit(1).execute()
     if supabase_failed(response):
@@ -1398,7 +1409,8 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest) -> dict[str, Any]:
 
 
 @router.post('/{quiz_id}/submit')
-def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest) -> dict[str, Any]:
+def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Depends(get_current_claims)) -> dict[str, Any]:
+    _verify_acting_as_self(claims, payload.student_id)
     ensure_supabase_enabled()
     response = supabase.table('quizzes').select('*').eq('id', quiz_id).limit(1).execute()
     if supabase_failed(response):
@@ -1548,11 +1560,18 @@ class QuizForfeitRequest(BaseModel):
 
 
 @router.post('/{quiz_id}/forfeit')
-def forfeit_quiz(quiz_id: int, payload: QuizForfeitRequest) -> dict[str, Any]:
+def forfeit_quiz(quiz_id: int, payload: QuizForfeitRequest, claims: dict | None = Depends(get_current_claims_optional)) -> dict[str, Any]:
     """Called the instant a student navigates away from / backgrounds an in-progress
     attempt (tab switch, app switch, closing the window). Leaving the assessment screen
     is how a student would copy questions out to a third-party solver, so the attempt is
-    finalized immediately as a 0-score miss rather than left open for them to resume."""
+    finalized immediately as a 0-score miss rather than left open for them to resume.
+
+    Identity is only checked when a token IS present: this is fired via
+    `navigator.sendBeacon` on the frontend, which cannot attach an Authorization header by
+    browser spec, so requiring auth here would silently break the anti-cheat forfeit itself.
+    """
+    if claims is not None:
+        _verify_acting_as_self(claims, payload.student_id)
     ensure_supabase_enabled()
     if not payload.student_id:
         raise HTTPException(status_code=400, detail='student_id is required')
@@ -1618,7 +1637,7 @@ def get_quiz_stats() -> dict[str, Any]:
 
 
 @router.get('')
-def list_all_quizzes(course: str | None = None, lecturer: str | None = None) -> dict[str, Any]:
+def list_all_quizzes(course: str | None = None, lecturer: str | None = None, _claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
     """Lecturer-facing management listing: every quiz for a course (or all of a lecturer's
     courses), with a live-computed status so a stale DB 'status' column never misleads a
     lecturer trying to figure out why a quiz is still locked/closed."""
@@ -1654,7 +1673,7 @@ def list_all_quizzes(course: str | None = None, lecturer: str | None = None) -> 
 
 
 @router.get('/{quiz_id}/full')
-def get_quiz_full(quiz_id: int) -> dict[str, Any]:
+def get_quiz_full(quiz_id: int, _claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
     """Lecturer-only view of a quiz's complete question bank (including correct answers),
     with no lock/open-date restriction — used by the Question Banks archive to preview and
     export a hardcopy of what was generated, independent of whether students can see it yet."""
@@ -1682,7 +1701,7 @@ class UpdateQuizScheduleRequest(BaseModel):
 
 
 @router.patch('/{quiz_id}/schedule')
-def update_quiz_schedule(quiz_id: int, payload: UpdateQuizScheduleRequest) -> dict[str, Any]:
+def update_quiz_schedule(quiz_id: int, payload: UpdateQuizScheduleRequest, _claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
     """Lets a lecturer fix a quiz's open/close window (or duration/pass score/attempts)
     after it has already been published — e.g. to recover a quiz that got stuck 'scheduled'
     because of a bad date, without having to delete and regenerate the whole question bank."""

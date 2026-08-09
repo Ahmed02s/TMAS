@@ -1,10 +1,75 @@
+import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field, field_validator
 
+from app.core.security import require_roles
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix='/api/courses', tags=['courses'])
+
+_VALID_COURSE_STATUSES = {'active', 'archived', 'inactive'}
+
+
+class CreateCourseRequest(BaseModel):
+    code: str
+    title: str
+    level: str | None = None
+    program: str | None = None
+    lecturer: str | None = None
+    progress: int = Field(default=0, ge=0, le=100)
+    materials: int = Field(default=0, ge=0)
+    quizzes_total: int = Field(default=0, ge=0)
+    quizzes_done: int = Field(default=0, ge=0)
+    avg_score: int = Field(default=0, ge=0, le=100)
+    color: str | None = None
+    status: str = 'active'
+
+    @field_validator('code', 'title')
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError('This field is required')
+        return v
+
+    @field_validator('status')
+    @classmethod
+    def _valid_status(cls, v: str) -> str:
+        if v not in _VALID_COURSE_STATUSES:
+            raise ValueError(f"status must be one of {sorted(_VALID_COURSE_STATUSES)}")
+        return v
+
+
+class UpdateCourseRequest(BaseModel):
+    code: str | None = None
+    title: str | None = None
+    level: str | None = None
+    program: str | None = None
+    lecturer: str | None = None
+    progress: int | None = Field(default=None, ge=0, le=100)
+    materials: int | None = Field(default=None, ge=0)
+    quizzes_total: int | None = Field(default=None, ge=0)
+    quizzes_done: int | None = Field(default=None, ge=0)
+    avg_score: int | None = Field(default=None, ge=0, le=100)
+    color: str | None = None
+    status: str | None = None
+
+    @field_validator('code', 'title')
+    @classmethod
+    def _not_blank_if_present(cls, v: str | None) -> str | None:
+        if v is not None and not v.strip():
+            raise ValueError('This field cannot be blank')
+        return v
+
+    @field_validator('status')
+    @classmethod
+    def _valid_status_if_present(cls, v: str | None) -> str | None:
+        if v is not None and v not in _VALID_COURSE_STATUSES:
+            raise ValueError(f"status must be one of {sorted(_VALID_COURSE_STATUSES)}")
+        return v
 
 
 def _course_matches_level_program(course: dict[str, Any], level: str | None, program: str | None) -> bool:
@@ -61,7 +126,7 @@ def list_courses(
                 code = m.get('course', '')
                 materials_by_course[code] = materials_by_course.get(code, 0) + 1
     except Exception:
-        pass
+        logger.exception('list_courses: materials-count enrichment failed')
 
     # 2. Quiz stats per course (total quizzes published)
     quizzes_total_by_course: dict[str, int] = {}
@@ -76,7 +141,7 @@ def list_courses(
                 if qid is not None:
                     quiz_ids_by_course.setdefault(code, []).append(qid)
     except Exception:
-        pass
+        logger.exception('list_courses: quiz-count enrichment failed')
 
     # 3. Student-specific quiz attempt stats
     quizzes_done_by_course: dict[str, int] = {}
@@ -108,7 +173,7 @@ def list_courses(
                     for code, scores in scores_by_course.items():
                         avg_score_by_course[code] = round(sum(scores) / len(scores)) if scores else 0
             except Exception:
-                pass
+                logger.exception('list_courses: per-student quiz attempt enrichment failed')
 
     # 3b. Class-wide quiz attempt stats — used for the lecturer's aggregate view (average
     # score and completion rate across ALL enrolled students, not just one). Without this,
@@ -137,7 +202,7 @@ def list_courses(
                 for code, scores in class_scores_by_course.items():
                     class_avg_score_by_course[code] = round(sum(scores) / len(scores)) if scores else 0
         except Exception:
-            pass
+            logger.exception('list_courses: class-wide quiz attempt enrichment failed')
 
     # 4. Student count per course (match by level + program, case-insensitive)
     students_by_course: dict[str, int] = {}
@@ -154,7 +219,7 @@ def list_courses(
                         code = course.get('code', '')
                         students_by_course[code] = students_by_course.get(code, 0) + 1
     except Exception:
-        pass
+        logger.exception('list_courses: student-count enrichment failed')
 
     # Apply enriched stats to each course
     for course in courses:
@@ -180,23 +245,9 @@ def list_courses(
 
 
 @router.post('', status_code=201)
-def create_course(payload: dict[str, Any]) -> dict[str, Any]:
+def create_course(payload: CreateCourseRequest, _claims: dict = Depends(require_roles('admin', 'administrator'))) -> dict[str, Any]:
     ensure_supabase_enabled()
-    # allowed fields for creation
-    record = {
-        'code': payload.get('code'),
-        'title': payload.get('title'),
-        'level': payload.get('level'),
-        'program': payload.get('program'),
-        'lecturer': payload.get('lecturer'),
-        'progress': int(payload.get('progress', 0)),
-        'materials': int(payload.get('materials', 0)),
-        'quizzes_total': int(payload.get('quizzes_total', 0)),
-        'quizzes_done': int(payload.get('quizzes_done', 0)),
-        'avg_score': int(payload.get('avg_score', 0)),
-        'color': payload.get('color'),
-        'status': payload.get('status', 'active'),
-    }
+    record = payload.model_dump()
     response = supabase.table('courses').insert(record).execute()
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase create course failed'))
@@ -206,20 +257,11 @@ def create_course(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.patch('/{course_id}')
-def update_course(course_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+def update_course(course_id: str, payload: UpdateCourseRequest, _claims: dict = Depends(require_roles('admin', 'administrator'))) -> dict[str, Any]:
     ensure_supabase_enabled()
-    # filter allowed update fields
-    allowed = {'code','title','level','program','lecturer','progress','materials','quizzes_total','quizzes_done','avg_score','color','status'}
-    record = {k: payload[k] for k in payload.keys() if k in allowed}
+    record = payload.model_dump(exclude_unset=True)
     if not record:
         raise HTTPException(status_code=400, detail='No updatable fields provided')
-    # coerce numeric fields if present
-    for num in ('progress','materials','quizzes_total','quizzes_done','avg_score'):
-        if num in record:
-            try:
-                record[num] = int(record[num])
-            except Exception:
-                record[num] = 0
 
     response = supabase.table('courses').update(record).eq('id', course_id).execute()
     if supabase_failed(response):
@@ -230,7 +272,7 @@ def update_course(course_id: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.delete('/{course_id}', status_code=204)
-def delete_course(course_id: str):
+def delete_course(course_id: str, _claims: dict = Depends(require_roles('admin', 'administrator'))):
     ensure_supabase_enabled()
     response = supabase.table('courses').delete().eq('id', course_id).execute()
     if supabase_failed(response):
@@ -322,7 +364,7 @@ def get_course_student_progress(
                     att['quiz_tier']  = q.get('tier', '—')
                     attempts_by_student[sid].append(att)
         except Exception:
-            pass
+            logger.exception('get_course_student_progress: attempts fetch failed for course=%s', course_code)
 
     # 5. Fetch materials for this course
     material_ids: list[Any] = []
