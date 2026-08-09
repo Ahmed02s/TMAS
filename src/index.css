@@ -6,22 +6,24 @@
   --font-sans: 'Outfit', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'Courier New', monospace;
 
-  --color-background: #f8f7f4;
-  --color-foreground: #1a1a2e;
+  /* Brand palette — shades of blue/navy, with success/danger/warning kept distinct
+     for readability (pass/fail, alerts). */
+  --color-background: #f5f9fc;
+  --color-foreground: #1f2937;
   --color-card: #ffffff;
-  --color-card-foreground: #1a1a2e;
-  --color-primary: #1e3a8a;
+  --color-card-foreground: #1f2937;
+  --color-primary: #3b82f6;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #eef2ff;
-  --color-secondary-foreground: #1e40af;
-  --color-muted: #f1ede8;
-  --color-muted-foreground: #6b6457;
-  --color-accent: #d97706;
+  --color-secondary: #dbeafe;
+  --color-secondary-foreground: #0f2a43;
+  --color-muted: #eaf1f8;
+  --color-muted-foreground: #6b7280;
+  --color-accent: #0f2a43;
   --color-accent-foreground: #ffffff;
-  --color-border: #e5e0d8;
-  --color-sidebar: #0f1629;
-  --color-sidebar-foreground: #e2e8f0;
-  --color-sidebar-muted: #64748b;
+  --color-border: #dce6f0;
+  --color-sidebar: #0f2a43;
+  --color-sidebar-foreground: #e5eef7;
+  --color-sidebar-muted: #93a9c2;
   --color-danger: #dc2626;
   --color-success: #16a34a;
   --color-warning: #f59e0b;

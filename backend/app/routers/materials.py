@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 import postgrest
@@ -135,20 +135,31 @@ def list_materials(course: str | None = None, lecturer: str | None = None) -> di
 
 @router.get('/reading-progress')
 def get_reading_progress(student_id: str | None = None, course: str | None = None) -> dict[str, Any]:
-    """Return which material IDs a student has read, and per-course reading progress."""
+    """Return which material IDs a student has genuinely completed (per scroll-depth +
+    time-on-page telemetry, not merely opened), and per-course reading progress."""
     if not student_id:
         return {'read_ids': [], 'course_progress': {}}
 
     ensure_supabase_enabled()
-    try:
-        query = supabase.table('material_reads').select('material_id,course,read_at').eq('student_id', student_id)
-        if course:
-            query = query.eq('course', course)
-        resp = query.execute()
-        if supabase_failed(resp):
-            return {'read_ids': [], 'course_progress': {}}
 
-        rows = resp.data or []
+    def _run(select_completed: bool):
+        query = supabase.table('material_reads').select(
+            'material_id,course,read_at,completed' if select_completed else 'material_id,course,read_at'
+        ).eq('student_id', student_id)
+        q = query.eq('course', course) if course else query
+        return q.execute()
+
+    try:
+        try:
+            resp = _run(select_completed=True)
+            rows = resp.data or [] if not supabase_failed(resp) else []
+            rows = [r for r in rows if r.get('completed')]
+        except postgrest.exceptions.APIError:
+            # `completed` column not present yet on this deployment's table — degrade to
+            # "opened at all" rather than erroring the whole endpoint.
+            resp = _run(select_completed=False)
+            rows = resp.data or [] if not supabase_failed(resp) else []
+
         read_ids = [r['material_id'] for r in rows]
 
         # Count reads grouped by course
@@ -160,6 +171,21 @@ def get_reading_progress(student_id: str | None = None, course: str | None = Non
         return {'read_ids': read_ids, 'course_progress': course_read}
     except Exception:
         return {'read_ids': [], 'course_progress': {}}
+
+
+def _safe_upsert(table: str, record: dict[str, Any], on_conflict: str) -> Any:
+    """Upsert, dropping any column PostgREST reports as missing and retrying — lets new
+    telemetry fields degrade gracefully on a deployment whose table hasn't been migrated yet."""
+    body = dict(record)
+    while True:
+        try:
+            return supabase.table(table).upsert(body, on_conflict=on_conflict).execute()
+        except postgrest.exceptions.APIError as exc:
+            msg = str(exc)
+            m = re.search(r"Could not find the '([^']+)' column", msg)
+            if not m or m.group(1) not in body:
+                raise
+            body.pop(m.group(1), None)
 
 
 class MarkReadRequest(BaseModel):
@@ -197,6 +223,91 @@ def mark_material_read(material_id: int, payload: MarkReadRequest) -> dict[str, 
         raise HTTPException(status_code=502, detail=f'Could not record read status: {e}')
 
     return {'status': 'recorded', 'material_id': material_id, 'student_id': payload.student_id}
+
+
+# Below this, the material is considered genuinely completed even if scroll depth alone
+# hasn't crossed the threshold (covers short content that fits in the viewport with no
+# scrolling at all, where scroll_percent reads 100 immediately on open).
+_PROGRESS_SCROLL_THRESHOLD = 85
+_PROGRESS_MIN_DWELL_SECONDS = 10
+_PROGRESS_TIME_ONLY_THRESHOLD = 180
+
+
+class MaterialProgressRequest(BaseModel):
+    student_id: str
+    scroll_percent: int = Field(default=0, ge=0, le=100)
+    time_spent_delta: int = Field(default=0, ge=0, le=3600)
+
+
+@router.post('/{material_id}/progress')
+def update_material_progress(material_id: int, payload: MaterialProgressRequest) -> dict[str, Any]:
+    """Scroll-depth + time-on-page telemetry, reported periodically while a student has a
+    material open. `time_spent_delta` is the active seconds since the previous report (not
+    a cumulative total) so repeated reports never double-count; scroll_percent is the
+    farthest point reached this report and only ever ratchets up server-side.
+    """
+    ensure_supabase_enabled()
+    if not payload.student_id:
+        raise HTTPException(status_code=400, detail='student_id is required')
+
+    response = supabase.table('materials').select('id,course').eq('id', material_id).limit(1).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase get material failed'))
+    if not response.data:
+        raise HTTPException(status_code=404, detail='Material not found')
+    material = response.data[0]
+
+    existing_scroll = 0
+    existing_time = 0
+    try:
+        existing_resp = supabase.table('material_reads').select('scroll_percent,time_spent_seconds') \
+            .eq('student_id', payload.student_id).eq('material_id', material_id).limit(1).execute()
+        if not supabase_failed(existing_resp) and existing_resp.data:
+            existing_scroll = existing_resp.data[0].get('scroll_percent') or 0
+            existing_time = existing_resp.data[0].get('time_spent_seconds') or 0
+    except Exception:
+        pass
+
+    new_scroll = max(existing_scroll, payload.scroll_percent)
+    new_time = existing_time + payload.time_spent_delta
+    completed = (new_scroll >= _PROGRESS_SCROLL_THRESHOLD and new_time >= _PROGRESS_MIN_DWELL_SECONDS) or new_time >= _PROGRESS_TIME_ONLY_THRESHOLD
+
+    record = {
+        'student_id': payload.student_id,
+        'material_id': material_id,
+        'course': material.get('course') or '',
+        'read_at': datetime.utcnow().isoformat(),
+        'scroll_percent': new_scroll,
+        'time_spent_seconds': new_time,
+        'completed': completed,
+    }
+    upsert_resp = _safe_upsert('material_reads', record, 'student_id,material_id')
+    if supabase_failed(upsert_resp):
+        raise HTTPException(status_code=502, detail=supabase_error_message(upsert_resp, 'Supabase update material progress failed'))
+
+    return {'scroll_percent': new_scroll, 'time_spent_seconds': new_time, 'completed': completed}
+
+
+@router.get('/{material_id}/my-progress')
+def get_material_progress(material_id: int, student_id: str) -> dict[str, Any]:
+    """Lets the reader resume showing a student's real progress on a material they've
+    already partially read, instead of restarting the telemetry display from zero."""
+    ensure_supabase_enabled()
+    if not student_id:
+        return {'scroll_percent': 0, 'time_spent_seconds': 0, 'completed': False}
+    try:
+        resp = supabase.table('material_reads').select('scroll_percent,time_spent_seconds,completed') \
+            .eq('student_id', student_id).eq('material_id', material_id).limit(1).execute()
+        if not supabase_failed(resp) and resp.data:
+            row = resp.data[0]
+            return {
+                'scroll_percent': row.get('scroll_percent') or 0,
+                'time_spent_seconds': row.get('time_spent_seconds') or 0,
+                'completed': bool(row.get('completed')),
+            }
+    except Exception:
+        pass
+    return {'scroll_percent': 0, 'time_spent_seconds': 0, 'completed': False}
 
 
 @router.post('', status_code=201)

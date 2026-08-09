@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useState, useRef, useCallback } from 'react'
+import { useEffect, useMemo, useState, useRef, useCallback, lazy, Suspense } from 'react'
 import type { AppView } from '../App'
 import { API_BASE } from '../config'
 import Icon from '../components/Icon'
 import ProfileModal from '../components/ProfileModal'
+
+// pdfjs/mammoth/jszip are heavy parsing libraries only needed once a student actually
+// opens a material — code-split so they don't bloat the initial app bundle.
+const MaterialViewer = lazy(() => import('../components/MaterialViewer'))
 
 type Tab = 'overview' | 'courses' | 'quizzes' | 'grades' | 'progress'
 
@@ -208,8 +212,6 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   const [materials, setMaterials] = useState<MaterialItem[]>([])
   const [materialsListLoading, setMaterialsListLoading] = useState(false)
   const [activeMaterialId, setActiveMaterialId] = useState<number | null>(null)
-  const [materialPreviewText, setMaterialPreviewText] = useState('')
-  const [materialPreviewLoading, setMaterialPreviewLoading] = useState(false)
   const [materialsError, setMaterialsError] = useState('')
   const [activeQuiz, setActiveQuiz] = useState<number | null>(null)
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([])
@@ -237,7 +239,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   }, [quizAnswers])
 
   const [readerSearchQuery, setReaderSearchQuery] = useState('')
-  const [readerFontSize, setReaderFontSize] = useState<'text-xs' | 'text-sm' | 'text-base' | 'text-lg'>('text-sm')
+  const [readerFontSize, setReaderFontSize] = useState<'text-sm' | 'text-base' | 'text-lg' | 'text-xl'>('text-sm')
   const [readerTheme, setReaderTheme] = useState<'default' | 'sepia' | 'dark'>('default')
   const [flippedFlashcards, setFlippedFlashcards] = useState<Record<number, boolean>>({})
   const [readMaterials, setReadMaterials] = useState<Record<string, boolean>>(() => {
@@ -271,24 +273,16 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     } catch { /* silent — localStorage copy remains */ }
   }
 
-  const markMaterialRead = (materialId: number, studentId?: string) => {
-    // Optimistic local update first
+  // Called by MaterialViewer once real scroll-depth + time-on-page telemetry crosses the
+  // "actually read it" threshold (see backend /materials/{id}/progress) — not on mere open.
+  const markMaterialCompleted = (materialId: number, studentId?: string) => {
     setReadMaterials(prev => {
       const next = { ...prev, [String(materialId)]: true }
       try { localStorage.setItem('tmas-read-materials', JSON.stringify(next)) } catch {}
       return next
     })
-    // Sync to Supabase in background
-    const sid = studentId || (typeof window !== 'undefined'
-      ? (JSON.parse(localStorage.getItem('tmas-user') || 'null') as { id?: string } | null)?.id
-      : undefined)
-    if (sid) {
-      fetch(`${API_BASE}/api/materials/${materialId}/mark-read`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: sid }),
-      }).catch(() => { /* silent — localStorage copy is source of truth */ })
-    }
+    const sid = studentId || savedUser?.id
+    if (sid) loadReadingProgress(sid)
   }
 
   useEffect(() => {
@@ -444,41 +438,6 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       clearInterval(quizInterval)
     }
   }, [studentProfile.level, studentProfile.program, savedUser])
-
-  // Single source of truth for the reader's preview pane. Every material type (pdf,
-  // ppt/pptx, doc/docx, txt/md) is served through the same server-side text-extraction
-  // endpoint, so the preview works reliably for all of them without depending on an
-  // external viewer service.
-  useEffect(() => {
-    if (!materialsReaderOpen || activeMaterialId === null) {
-      setMaterialPreviewText('')
-      return
-    }
-
-    let cancelled = false
-    async function loadPreview() {
-      setMaterialPreviewLoading(true)
-      setMaterialsError('')
-      try {
-        const res = await fetch(`${API_BASE}/api/materials/${activeMaterialId}/content`)
-        if (!res.ok) throw new Error('Unable to load this material\'s content')
-        const data = await res.json()
-        if (!cancelled) setMaterialPreviewText(data.content || data.text || '')
-      } catch (error) {
-        if (!cancelled) {
-          setMaterialPreviewText('')
-          setMaterialsError(error instanceof Error ? error.message : 'Unable to load preview')
-        }
-      } finally {
-        if (!cancelled) setMaterialPreviewLoading(false)
-      }
-    }
-
-    loadPreview()
-    return () => {
-      cancelled = true
-    }
-  }, [activeMaterialId, materialsReaderOpen])
 
   useEffect(() => {
     async function loadQuizQuestions() {
@@ -1398,7 +1357,6 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                         setMaterialsReaderOpen(true)
                         setMaterials([])
                         setActiveMaterialId(null)
-                        setMaterialPreviewText('')
                         setMaterialsError('')
                         setMaterialsListLoading(true)
 
@@ -1408,10 +1366,10 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                           const data = await res.json()
                           const mats = (data.materials || []) as MaterialItem[]
                           setMaterials(mats)
-                          // Auto-open first material and mark as read
+                          // Auto-open the first material — MaterialViewer's own scroll/time
+                          // telemetry decides when it actually counts as read.
                           if (mats[0]) {
                             setActiveMaterialId(mats[0].id)
-                            markMaterialRead(mats[0].id, savedUser?.id)
                           }
                           // Update per-course read count from local readMaterials
                           setCourseReadProgress(prev => ({
@@ -1845,7 +1803,6 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                   setMaterialsReaderCourse(null)
                   setMaterials([])
                   setActiveMaterialId(null)
-                  setMaterialPreviewText('')
                   setMaterialsError('')
                 }}
                 className="rounded-full border border-border bg-background px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-muted"
@@ -1891,7 +1848,6 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                         onClick={() => {
                           setActiveMaterialId(material.id)
                           setMaterialsError('')
-                          markMaterialRead(material.id, savedUser?.id)
                         }}
                         className={`w-full rounded-2xl border p-3 text-left transition-all ${isActive ? 'border-primary bg-primary/10 shadow-sm' : 'border-border bg-background hover:border-primary/40 hover:bg-muted/50'}`}
                       >
@@ -1960,71 +1916,39 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                             </div>
                           </div>
 
-                          <div className="flex-1 min-h-0 overflow-hidden p-0">
-                            {(() => {
-                              const ext = (activeMaterial.name.split('.').pop() || '').toLowerCase()
-                              const isPdf = ext === 'pdf'
-                              const isSlides = ['ppt', 'pptx'].includes(ext)
-                              const isDoc = ['doc', 'docx'].includes(ext)
-
-                              // Use Supabase public URL directly — avoids the "not on disk" error
-                              const directUrl = activeMaterial.file_url || downloadUrl
-
-                              if (isPdf) {
-                                return (
-                                  <iframe
-                                    key={activeMaterial.id}
-                                    src={directUrl}
-                                    title={activeMaterial.name}
-                                    className="w-full h-full border-0"
-                                    style={{ minHeight: '70vh' }}
-                                    allowFullScreen
-                                  />
-                                )
-                              }
-
-                              // PPT/PPTX/DOC/DOCX/TXT/MD (and anything else): render the
-                              // server-extracted text rather than embedding a third-party
-                              // viewer (e.g. Google Docs Viewer), which frequently fails to
-                              // render self-hosted files and left these materials effectively
-                              // unreadable in the app.
-                              return (
-                                <div className="h-full flex flex-col">
-                                  {(isSlides || isDoc) && (
-                                    <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-primary/5 text-xs text-muted-foreground shrink-0">
-                                      <i className="fa-solid fa-circle-info text-primary/70" />
-                                      Showing extracted text from this {isSlides ? 'slide deck' : 'document'}. Formatting, images, and layout aren't preserved — use Download Original for the full file.
-                                    </div>
-                                  )}
-                                  {/* Font size toolbar */}
-                                  <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-muted/30 shrink-0">
-                                    <span className="text-xs text-muted-foreground font-medium">Font size:</span>
-                                    {(['text-sm', 'text-base', 'text-lg', 'text-xl'] as const).map(size => (
-                                      <button
-                                        key={size}
-                                        onClick={() => setReaderFontSize(size as any)}
-                                        className={`px-2 py-1 rounded-lg text-xs font-semibold transition-colors ${
-                                          readerFontSize === size ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                                        }`}
-                                      >
-                                        {size === 'text-sm' ? 'S' : size === 'text-base' ? 'M' : size === 'text-lg' ? 'L' : 'XL'}
-                                      </button>
-                                    ))}
-                                  </div>
-                                  <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
-                                    {materialPreviewLoading ? (
-                                      <div className="flex items-center justify-center py-20">
-                                        <span className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-                                      </div>
-                                    ) : (
-                                      <div className={`${readerFontSize} leading-relaxed text-foreground whitespace-pre-wrap max-w-none`}>
-                                        {materialPreviewText || 'No text content available. Try downloading the original file.'}
-                                      </div>
-                                    )}
-                                  </div>
+                          <div className="flex-1 min-h-0 flex flex-col">
+                            {/* Font size toolbar — applies to text-based renders (docx/txt/md) */}
+                            <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-muted/30 shrink-0">
+                              <span className="text-xs text-muted-foreground font-medium">Font size:</span>
+                              {(['text-sm', 'text-base', 'text-lg', 'text-xl'] as const).map(size => (
+                                <button
+                                  key={size}
+                                  onClick={() => setReaderFontSize(size)}
+                                  className={`px-2 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                                    readerFontSize === size ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                                  }`}
+                                >
+                                  {size === 'text-sm' ? 'S' : size === 'text-base' ? 'M' : size === 'text-lg' ? 'L' : 'XL'}
+                                </button>
+                              ))}
+                            </div>
+                            <div className="flex-1 min-h-0">
+                              <Suspense fallback={
+                                <div className="flex items-center justify-center py-24">
+                                  <span className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
                                 </div>
-                              )
-                            })()}
+                              }>
+                                <MaterialViewer
+                                  key={activeMaterial.id}
+                                  materialId={activeMaterial.id}
+                                  materialName={activeMaterial.name}
+                                  downloadUrl={downloadUrl}
+                                  studentId={savedUser?.id}
+                                  fontSize={readerFontSize}
+                                  onCompleted={() => markMaterialCompleted(activeMaterial.id, savedUser?.id)}
+                                />
+                              </Suspense>
+                            </div>
                           </div>
                         </>
                       )

@@ -339,15 +339,25 @@ def get_course_student_progress(
             continue
     total_materials = len(material_ids)
 
-    # 5b. Fetch per-student reading counts for this course's materials
+    # 5b. Fetch per-student reading counts for this course's materials — only genuinely
+    # completed reads (real scroll-depth + time-on-page telemetry), not just "opened".
     reads_by_student: dict[str, int] = {str(sid): 0 for sid in student_ids}
     if material_ids:
         try:
-            reads_resp = supabase.table('material_reads') \
-                .select('student_id,material_id') \
-                .in_('student_id', student_ids) \
-                .in_('material_id', material_ids) \
-                .execute()
+            try:
+                reads_resp = supabase.table('material_reads') \
+                    .select('student_id,material_id') \
+                    .in_('student_id', student_ids) \
+                    .in_('material_id', material_ids) \
+                    .eq('completed', True) \
+                    .execute()
+            except Exception:
+                # `completed` column not present yet on this deployment's table.
+                reads_resp = supabase.table('material_reads') \
+                    .select('student_id,material_id') \
+                    .in_('student_id', student_ids) \
+                    .in_('material_id', material_ids) \
+                    .execute()
             if not supabase_failed(reads_resp):
                 seen: set[tuple[str, Any]] = set()
                 for row in (reads_resp.data or []):

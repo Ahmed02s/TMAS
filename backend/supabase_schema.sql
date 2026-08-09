@@ -97,8 +97,16 @@ CREATE TABLE IF NOT EXISTS material_reads (
   material_id BIGINT NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
   course TEXT,
   read_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  scroll_percent INTEGER NOT NULL DEFAULT 0,
+  time_spent_seconds INTEGER NOT NULL DEFAULT 0,
+  completed BOOLEAN NOT NULL DEFAULT FALSE,
   UNIQUE (student_id, material_id)
 );
+
+-- Safe to re-run against an existing table created before scroll/time telemetry was added.
+ALTER TABLE material_reads ADD COLUMN IF NOT EXISTS scroll_percent INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE material_reads ADD COLUMN IF NOT EXISTS time_spent_seconds INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE material_reads ADD COLUMN IF NOT EXISTS completed BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_levels_order ON levels("order");
