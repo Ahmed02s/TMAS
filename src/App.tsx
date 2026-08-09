@@ -10,11 +10,16 @@ export type AppView = 'landing' | 'login' | 'register' | 'admin' | 'lecturer' | 
 const VIEW_STORAGE_KEY = 'tmas-view'
 const VALID_VIEWS: AppView[] = ['landing', 'login', 'register', 'admin', 'lecturer', 'student']
 
+function isForgotPath(path: string) {
+  const normalized = path.toLowerCase().replace(/\/+$|^\/+/, '')
+  return normalized === 'forgot-password' || normalized === 'reset-password' || normalized.endsWith('/forgot-password') || normalized.endsWith('/reset-password')
+}
+
 function getInitialView(): AppView {
   if (typeof window === 'undefined') return 'landing'
 
   const path = window.location.pathname
-  if (path === '/forgot-password' || path === '/reset-password') {
+  if (isForgotPath(path)) {
     return 'login'
   }
 
@@ -52,7 +57,7 @@ function getInitialForgotState() {
   const params = new URLSearchParams(window.location.search)
   const token = params.get('token')?.trim() ?? ''
 
-  if (path === '/forgot-password' || path === '/reset-password') {
+  if (isForgotPath(path)) {
     return {
       open: true,
       token,
@@ -86,8 +91,17 @@ export default function App() {
 
     const path = window.location.pathname
     const params = new URLSearchParams(window.location.search)
-    if ((path === '/forgot-password' || path === '/reset-password') && params.has('token')) {
+    if (isForgotPath(path) && params.has('token')) {
       window.history.replaceState(null, '', path)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const path = window.location.pathname
+    if (isForgotPath(path)) {
+      setView('login')
     }
   }, [])
 

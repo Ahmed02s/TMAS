@@ -89,7 +89,10 @@ def register(payload: AuthRegisterRequest) -> dict[str, Any]:
     if payload.role == 'student' and (not payload.level or not payload.program or not payload.index_number):
         raise HTTPException(status_code=400, detail='Student registration requires index number, level, and program.')
 
-    if payload.role not in {'student', 'lecturer', 'admin', 'administrator'}:
+    # Public self-registration may only create student or lecturer accounts. Administrator
+    # accounts must be created directly in the database by an existing administrator —
+    # otherwise anyone could POST role="admin" here and grant themselves full system access.
+    if payload.role not in {'student', 'lecturer'}:
         raise HTTPException(status_code=400, detail='Invalid role supplied.')
 
     user_id = str(uuid.uuid4())
