@@ -19,10 +19,6 @@ def _build_email_payload(to_email: str, to_name: str, reset_token: str) -> dict[
             {
                 'to': [{'email': to_email, 'name': to_name}],
                 'subject': 'Reset your TMAS password',
-                'dynamic_template_data': {
-                    'name': to_name,
-                    'reset_url': reset_url,
-                },
             }
         ],
         'from': {'email': from_email, 'name': from_name},
