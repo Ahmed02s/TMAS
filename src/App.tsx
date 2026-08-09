@@ -13,6 +13,11 @@ const VALID_VIEWS: AppView[] = ['landing', 'login', 'register', 'admin', 'lectur
 function getInitialView(): AppView {
   if (typeof window === 'undefined') return 'landing'
 
+  const path = window.location.pathname
+  if (path === '/forgot-password' || path === '/reset-password') {
+    return 'login'
+  }
+
   const storedView = window.localStorage.getItem(VIEW_STORAGE_KEY) as AppView | null
   if (storedView && VALID_VIEWS.includes(storedView)) {
     return storedView
@@ -38,8 +43,29 @@ function getInitialView(): AppView {
   return 'landing'
 }
 
+function getInitialForgotState() {
+  if (typeof window === 'undefined') {
+    return { open: false, token: '', step: 'request' as const }
+  }
+
+  const path = window.location.pathname
+  const params = new URLSearchParams(window.location.search)
+  const token = params.get('token')?.trim() ?? ''
+
+  if (path === '/forgot-password' || path === '/reset-password') {
+    return {
+      open: true,
+      token,
+      step: token ? 'reset' as const : 'request' as const,
+    }
+  }
+
+  return { open: false, token: '', step: 'request' as const }
+}
+
 export default function App() {
   const [view, setView] = useState<AppView>(getInitialView)
+  const initialForgot = getInitialForgotState()
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -55,12 +81,18 @@ export default function App() {
     window.localStorage.setItem(VIEW_STORAGE_KEY, view)
   }, [view])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const path = window.location.pathname
+    const params = new URLSearchParams(window.location.search)
+    if ((path === '/forgot-password' || path === '/reset-password') && params.has('token')) {
+      window.history.replaceState(null, '', path)
+    }
+  }, [])
+
   // Fired by the global fetch patch (src/utils/apiAuth.ts) whenever the backend rejects
   // the stored token as missing/expired/invalid — e.g. it was issued before this session
-  // system existed, or its 7-day expiry passed. Local storage is already cleared at that
-  // point; this just makes sure the UI actually reflects "logged out" instead of staying
-  // stuck on a portal that will keep 401ing.
-  useEffect(() => {
     function handleUnauthorized() {
       setView('login')
     }
@@ -71,7 +103,15 @@ export default function App() {
   return (
     <>
       {view === 'landing' && <Landing onNavigate={setView} />}
-      {view === 'login' && <Login onNavigate={setView} initialTab="login" />}
+      {view === 'login' && (
+        <Login
+          onNavigate={setView}
+          initialTab="login"
+          initialForgotOpen={initialForgot.open}
+          initialForgotStep={initialForgot.step}
+          initialResetToken={initialForgot.token}
+        />
+      )}
       {view === 'register' && <Login onNavigate={setView} initialTab="register" />}
       {view === 'admin' && <Admin onNavigate={setView} />}
       {view === 'lecturer' && <Lecturer onNavigate={setView} />}

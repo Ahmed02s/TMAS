@@ -41,7 +41,19 @@ function inputCls(hasError: boolean) {
   }`
 }
 
-export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate: (v: AppView) => void; initialTab?: 'login' | 'register' }) {
+export default function Login({
+  onNavigate,
+  initialTab = 'login',
+  initialForgotOpen = false,
+  initialForgotStep = 'request',
+  initialResetToken = '',
+}: {
+  onNavigate: (v: AppView) => void
+  initialTab?: 'login' | 'register'
+  initialForgotOpen?: boolean
+  initialForgotStep?: 'request' | 'reset'
+  initialResetToken?: string
+}) {
   const [tab, setTab] = useState<'login' | 'register'>(initialTab)
   const [role, setRole] = useState<'student' | 'lecturer'>('student')
 
@@ -77,10 +89,10 @@ export default function Login({ onNavigate, initialTab = 'login' }: { onNavigate
   const [legalModal, setLegalModal] = useState<'terms' | 'privacy' | null>(null)
 
   // ── Forgot / reset password ──────────────────────────────────────────────
-  const [forgotOpen, setForgotOpen] = useState(false)
-  const [forgotStep, setForgotStep] = useState<'request' | 'reset'>('request')
+  const [forgotOpen, setForgotOpen] = useState(initialForgotOpen || !!initialResetToken)
+  const [forgotStep, setForgotStep] = useState<'request' | 'reset'>(initialResetToken ? 'reset' : initialForgotStep)
   const [forgotEmail, setForgotEmail] = useState('')
-  const [resetToken, setResetToken] = useState('')
+  const [resetToken, setResetToken] = useState(initialResetToken)
   const [newPassword, setNewPassword] = useState('')
   const [forgotBusy, setForgotBusy] = useState(false)
   const [forgotMessage, setForgotMessage] = useState('')
