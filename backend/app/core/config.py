@@ -9,7 +9,13 @@ if not DOTENV_PATH.exists():
     load_dotenv(dotenv_path=BASE_DIR / '.env.example')
 
 SUPABASE_URL = os.getenv('SUPABASE_URL', '')
+SUPABASE_SERVICE_ROLE_KEY = os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')
 SUPABASE_ANON_KEY = os.getenv('SUPABASE_ANON_KEY', '')
+SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY', '')
+EMAIL_FROM = os.getenv('EMAIL_FROM', '')
+EMAIL_FROM_NAME = os.getenv('EMAIL_FROM_NAME', '')
+EMAIL_REPLY_TO = os.getenv('EMAIL_REPLY_TO', EMAIL_FROM)
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
 QROK_API_KEY = os.getenv('QROK_API_KEY', os.getenv('GROQ_API_KEY', ''))
 QROK_API_URL = os.getenv('QROK_API_URL', os.getenv('GROQ_API_URL', 'https://api.groq.com/openai/v1/chat/completions'))
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')

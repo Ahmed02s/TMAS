@@ -15,6 +15,7 @@ from app.core.security import (
     verify_password,
 )
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_error_message, supabase_failed
+from app.core.email import send_password_reset_email
 
 router = APIRouter(prefix='/api/auth', tags=['auth'])
 
@@ -223,20 +224,12 @@ def forgot_password(payload: ForgotPasswordRequest) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f'Could not start password reset: {exc}')
 
-    dev_reset_info = _deliver_reset_link(user, reset_token)
-    result = dict(generic_result)
-    if dev_reset_info:
-        # Only present until real email delivery is wired up — see docstring above.
-        result.update(dev_reset_info)
-    return result
+    try:
+        send_password_reset_email(user['email'], user.get('name', user['email']), reset_token)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f'Could not send password reset email: {exc}')
 
-
-def _deliver_reset_link(user: dict[str, Any], reset_token: str) -> dict[str, Any] | None:
-    """Stub delivery: no SMTP/email provider is configured, so hand the token back directly
-    instead of silently discarding it (which would make the whole flow non-functional).
-    Replace this body with a real email send and return None once that's wired up."""
-    print(f"[password reset] token for {user.get('email')}: {reset_token} (expires in {PASSWORD_RESET_EXPIRY_MINUTES}m)")
-    return {'dev_reset_token': reset_token, 'dev_note': 'Email delivery is not configured yet — use this token to reset your password.'}
+    return generic_result
 
 
 @router.post('/reset-password')

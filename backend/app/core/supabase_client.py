@@ -2,7 +2,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from app.core.config import SUPABASE_ANON_KEY, SUPABASE_URL
+from app.core.config import SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
 
 try:
     from supabase import Client, create_client
@@ -12,8 +12,9 @@ except Exception:
 
 
 supabase: Any | None = None
-if create_client is not None and SUPABASE_URL and SUPABASE_ANON_KEY:
-    supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+supabase_key = SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY
+if create_client is not None and SUPABASE_URL and supabase_key:
+    supabase = create_client(SUPABASE_URL, supabase_key)
 
 
 def _is_supabase_enabled() -> bool:
@@ -22,7 +23,10 @@ def _is_supabase_enabled() -> bool:
 
 def ensure_supabase_enabled() -> None:
     if not _is_supabase_enabled():
-        raise HTTPException(status_code=503, detail='Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in the environment.')
+        raise HTTPException(
+            status_code=503,
+            detail='Supabase is not configured. Set SUPABASE_URL and either SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY in the environment.',
+        )
 
 
 def supabase_failed(response: Any) -> bool:
