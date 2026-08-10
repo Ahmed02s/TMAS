@@ -429,6 +429,10 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   const [savingScheduleId, setSavingScheduleId] = useState<number | null>(null)
   const [scheduleSaveError, setScheduleSaveError] = useState<Record<number, string>>({})
   const [scheduleSaveSuccess, setScheduleSaveSuccess] = useState<Record<number, string>>({})
+  // Collapsed by default — this is a secondary maintenance tool (fixing a stuck schedule),
+  // not the primary action on this page, and was previously always fully expanded with a
+  // full date-editor per quiz, crowding out the actual "generate a new bank" form above it.
+  const [publishedPanelOpen, setPublishedPanelOpen] = useState(false)
 
   // Question Banks archive: every quiz ever published for this lecturer's courses,
   // grouped by course, with the ability to preview or download a hardcopy of the
@@ -2244,15 +2248,34 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
               )}
 
               {/* ── PUBLISHED QUIZZES MANAGEMENT — fix a stuck/locked schedule without regenerating ── */}
-              {genCourse && (
-                <div className="bg-card border border-border rounded-2xl p-5 sm:p-6 max-w-3xl mx-auto space-y-4 shadow-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <h3 className="font-display text-base font-bold text-foreground">Published Quizzes — {genCourse}</h3>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Still locked past its opening time? Fix the open/close date here — no need to regenerate.
-                      </p>
+              {genCourse && (() => {
+                const lockedCount = publishedQuizzes.filter(q => (q.live_status || (q.is_locked ? 'scheduled' : q.is_closed ? 'closed' : 'available')) === 'scheduled').length
+                return (
+                <div className="bg-card border border-border rounded-2xl max-w-3xl mx-auto shadow-sm overflow-hidden">
+                  <button
+                    onClick={() => setPublishedPanelOpen(o => !o)}
+                    className="w-full flex items-center justify-between gap-3 p-5 sm:p-6 text-left"
+                  >
+                    <div className="flex items-center gap-3">
+                      <i className={`fa-solid fa-chevron-right text-xs text-muted-foreground transition-transform ${publishedPanelOpen ? 'rotate-90' : ''}`} />
+                      <div>
+                        <h3 className="font-display text-base font-bold text-foreground flex items-center gap-2">
+                          Published Quizzes — {genCourse}
+                          <span className="text-xs font-mono font-bold bg-muted px-2 py-0.5 rounded-full">{publishedQuizzes.length}</span>
+                          {lockedCount > 0 && (
+                            <span className="text-xs font-bold bg-amber-500/15 text-amber-700 px-2 py-0.5 rounded-full">{lockedCount} locked</span>
+                          )}
+                        </h3>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Still locked past its opening time? Fix the open/close date here — no need to regenerate.
+                        </p>
+                      </div>
                     </div>
+                  </button>
+
+                  {publishedPanelOpen && (
+                  <div className="px-5 sm:px-6 pb-5 sm:pb-6 space-y-4">
+                  <div className="flex items-center justify-end gap-3 -mt-1">
                     <button
                       onClick={() => loadPublishedQuizzes(genCourse)}
                       disabled={loadingPublishedQuizzes}
@@ -2343,8 +2366,11 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                       })}
                     </div>
                   )}
+                  </div>
+                  )}
                 </div>
-              )}
+                )
+              })()}
 
               {/* ── FOLD 2: TIER QUESTION REVIEW ── */}
               {wizardStep === 2 && (
