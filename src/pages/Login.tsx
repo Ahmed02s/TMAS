@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { AppView } from '../App'
 import { API_BASE } from '../config'
 import LegalModal from '../components/LegalModal'
+import { clearPasswordResetUrl, getPasswordResetIntent } from '../utils/passwordReset'
 
 const fallbackLevelOptions = ['Level 100', 'Level 200', 'Level 300', 'Level 400']
 const programOptions = ['Computer Science', 'Mathematics', 'Engineering', 'Business']
@@ -44,15 +45,9 @@ function inputCls(hasError: boolean) {
 export default function Login({
   onNavigate,
   initialTab = 'login',
-  initialForgotOpen = false,
-  initialForgotStep = 'request',
-  initialResetToken = '',
 }: {
   onNavigate: (v: AppView) => void
   initialTab?: 'login' | 'register'
-  initialForgotOpen?: boolean
-  initialForgotStep?: 'request' | 'reset'
-  initialResetToken?: string
 }) {
   const [tab, setTab] = useState<'login' | 'register'>(initialTab)
   const [role, setRole] = useState<'student' | 'lecturer'>('student')
@@ -89,27 +84,24 @@ export default function Login({
   const [legalModal, setLegalModal] = useState<'terms' | 'privacy' | null>(null)
 
   // ── Forgot / reset password ──────────────────────────────────────────────
-  const [forgotOpen, setForgotOpen] = useState(initialForgotOpen || !!initialResetToken)
-  const [forgotStep, setForgotStep] = useState<'request' | 'reset'>(initialResetToken ? 'reset' : initialForgotStep)
+  // Read directly from the URL via the same entrypoint App.tsx uses to decide whether to
+  // render this component in the first place — this makes the modal open correctly even if
+  // Login is reached some other way (e.g. the register tab), rather than depending on a
+  // parent to thread the right props through.
+  const [initialForgot] = useState(getPasswordResetIntent)
+  const [forgotOpen, setForgotOpen] = useState(initialForgot.open)
+  const [forgotStep, setForgotStep] = useState<'request' | 'reset'>(initialForgot.step)
   const [forgotEmail, setForgotEmail] = useState('')
-  const [resetToken, setResetToken] = useState(initialResetToken)
+  const [resetToken, setResetToken] = useState(initialForgot.token)
   const [newPassword, setNewPassword] = useState('')
   const [forgotBusy, setForgotBusy] = useState(false)
   const [forgotMessage, setForgotMessage] = useState('')
   const [forgotError, setForgotError] = useState('')
 
+  // A reset token in the URL has already been captured into state above — clear it from the
+  // address bar so it doesn't linger in browser history or get accidentally shared.
   useEffect(() => {
-    if (typeof window === 'undefined') return
-
-    const params = new URLSearchParams(window.location.search)
-    const token = params.get('token')?.trim() ?? ''
-    const path = window.location.pathname.toLowerCase().replace(/\/+$|^\/+/, '')
-
-    if ((path === 'forgot-password' || path === 'reset-password') && token) {
-      setForgotOpen(true)
-      setForgotStep('reset')
-      setResetToken(token)
-    }
+    if (initialForgot.token) clearPasswordResetUrl()
   }, [])
 
   function closeForgotModal() {
@@ -140,7 +132,10 @@ export default function Login({
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || data.error || 'Could not process request')
       setForgotMessage(data.message || 'If that email is registered, password reset instructions have been sent.')
-      if (data.dev_reset_token) setResetToken(data.dev_reset_token)
+      // Real email delivery only — the backend no longer echoes the token back in this
+      // response (see backend/app/routers/auth.py forgot_password), so the user pastes it
+      // in from their inbox, or the "reset" step gets pre-filled automatically if they
+      // instead click the emailed link (see src/utils/passwordReset.ts).
       setForgotStep('reset')
     } catch (error) {
       setForgotError(error instanceof Error ? error.message : 'Could not process request')

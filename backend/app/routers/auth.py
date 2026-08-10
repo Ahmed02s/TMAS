@@ -1,3 +1,4 @@
+import logging
 import re
 import secrets
 import uuid
@@ -7,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, field_validator
 
+from app.core.rate_limit import rate_limiter
 from app.core.security import (
     create_access_token,
     get_current_claims,
@@ -17,6 +19,7 @@ from app.core.security import (
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_error_message, supabase_failed
 from app.core.email import send_password_reset_email
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix='/api/auth', tags=['auth'])
 
 PASSWORD_RESET_EXPIRY_MINUTES = 30
@@ -83,7 +86,7 @@ def _build_user_payload(user: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.post('/register', status_code=201)
-def register(payload: AuthRegisterRequest) -> dict[str, Any]:
+def register(payload: AuthRegisterRequest, _rl: None = Depends(rate_limiter('register', 5, 60))) -> dict[str, Any]:
     ensure_supabase_enabled()
 
     if payload.role == 'student' and (not payload.level or not payload.program or not payload.index_number):
@@ -141,7 +144,7 @@ def register(payload: AuthRegisterRequest) -> dict[str, Any]:
 
 
 @router.post('/login')
-def login(payload: AuthLoginRequest) -> dict[str, Any]:
+def login(payload: AuthLoginRequest, _rl: None = Depends(rate_limiter('login', 10, 60))) -> dict[str, Any]:
     ensure_supabase_enabled()
     email = payload.email.strip().lower()
 
@@ -164,7 +167,10 @@ def login(payload: AuthLoginRequest) -> dict[str, Any]:
         try:
             supabase.table('users').update({'password': hash_password(payload.password)}).eq('id', user['id']).execute()
         except Exception:
-            pass  # Non-fatal — login still succeeds even if the upgrade write fails.
+            # Non-fatal — login still succeeds even if the upgrade write fails — but still
+            # worth knowing about, since a repeatedly-failing upgrade means this account
+            # stays on plaintext indefinitely.
+            logger.exception('login: failed to upgrade legacy plaintext password for user_id=%s', user['id'])
 
     role = str(user.get('role', 'student')).lower()
     status = str(user.get('status', 'active')).lower()
@@ -197,10 +203,11 @@ def me(claims: dict[str, Any] = Depends(get_current_claims)) -> dict[str, Any]:
 @router.post('/forgot-password')
 def forgot_password(payload: ForgotPasswordRequest) -> dict[str, Any]:
     """Always returns success (even for an unknown email) so this endpoint can't be used to
-    enumerate registered addresses. No email-delivery provider is configured for this app
-    yet, so the reset link is returned directly in the response — wire a real mail send in
-    `_deliver_reset_link` below once SMTP/SendGrid/etc. credentials are available; nothing
-    else about this flow needs to change.
+    enumerate registered addresses. The actual reset link is emailed via SendGrid (see
+    app.core.email.send_password_reset_email) — nothing is ever returned in this response,
+    so SENDGRID_API_KEY and EMAIL_FROM must be set for this to do anything. FRONTEND_URL
+    controls which domain the emailed link points at (see app.core.config) — get that wrong
+    and the email sends fine but the link goes nowhere useful.
     """
     ensure_supabase_enabled()
     email = payload.email.strip().lower()

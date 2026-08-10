@@ -9,6 +9,10 @@ SENDGRID_API_URL = 'https://api.sendgrid.com/v3/mail/send'
 
 
 def _build_email_payload(to_email: str, to_name: str, reset_token: str) -> dict[str, object]:
+    # The frontend treats the `token` query param as authoritative regardless of path (see
+    # src/utils/passwordReset.ts) — the `/forgot-password` segment here is just for a
+    # readable link in the email, and `vercel.json` rewrites any path back to the SPA so it
+    # resolves either way.
     reset_url = f"{FRONTEND_URL}/forgot-password?token={reset_token}"
     from_name = EMAIL_FROM_NAME.strip() or 'TMAS'
     from_email = EMAIL_FROM.strip()

@@ -4,24 +4,21 @@ import Login from './pages/Login'
 import Admin from './pages/Admin'
 import Lecturer from './pages/Lecturer'
 import Student from './pages/Student'
+import { getPasswordResetIntent } from './utils/passwordReset'
 
 export type AppView = 'landing' | 'login' | 'register' | 'admin' | 'lecturer' | 'student'
 
 const VIEW_STORAGE_KEY = 'tmas-view'
 const VALID_VIEWS: AppView[] = ['landing', 'login', 'register', 'admin', 'lecturer', 'student']
 
-function isForgotPath(path: string) {
-  const normalized = path.toLowerCase().replace(/\/+$|^\/+/, '')
-  return normalized.includes('forgot-password') || normalized.includes('reset-password')
-}
-
+// A password-reset link is URL intent that must win over whatever view was last persisted
+// (a logged-out visitor could easily have 'landing' saved from a prior session) and over
+// whatever role-based portal a stored session would otherwise resolve to. It's checked
+// first, before either of those, for exactly that reason.
 function getInitialView(): AppView {
   if (typeof window === 'undefined') return 'landing'
 
-  const path = window.location.pathname
-  if (isForgotPath(path)) {
-    return 'login'
-  }
+  if (getPasswordResetIntent().open) return 'login'
 
   const storedView = window.localStorage.getItem(VIEW_STORAGE_KEY) as AppView | null
   if (storedView && VALID_VIEWS.includes(storedView)) {
@@ -48,52 +45,20 @@ function getInitialView(): AppView {
   return 'landing'
 }
 
-function getInitialForgotState() {
-  if (typeof window === 'undefined') {
-    return { open: false, token: '', step: 'request' as const }
-  }
-
-  const path = window.location.pathname
-  const params = new URLSearchParams(window.location.search)
-  const token = params.get('token')?.trim() ?? ''
-
-  if (isForgotPath(path)) {
-    return {
-      open: true,
-      token,
-      step: token ? 'reset' as const : 'request' as const,
-    }
-  }
-
-  return { open: false, token: '', step: 'request' as const }
-}
-
 export default function App() {
   const [view, setView] = useState<AppView>(getInitialView)
-  const initialForgot = getInitialForgotState()
 
+  // Persists the current portal so a refresh lands back where the user was, but a logged-out
+  // visitor always persists as 'landing' — there's no portal to return them to without a
+  // session, and the reset flow already recovers via `initialForgot`/URL intent, not this.
   useEffect(() => {
     if (typeof window === 'undefined') return
 
     const token = localStorage.getItem('tmas-token')
     const userString = localStorage.getItem('tmas-user')
 
-    if (!token || !userString) {
-      window.localStorage.setItem(VIEW_STORAGE_KEY, 'landing')
-      return
-    }
-
-    window.localStorage.setItem(VIEW_STORAGE_KEY, view)
+    window.localStorage.setItem(VIEW_STORAGE_KEY, !token || !userString ? 'landing' : view)
   }, [view])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-
-    const path = window.location.pathname
-    if (isForgotPath(path)) {
-      setView('login')
-    }
-  }, [])
 
   // Fired by the global fetch patch (src/utils/apiAuth.ts) whenever the backend rejects
   // the stored token as missing/expired/invalid — e.g. it was issued before this session
@@ -111,15 +76,7 @@ export default function App() {
   return (
     <>
       {view === 'landing' && <Landing onNavigate={setView} />}
-      {view === 'login' && (
-        <Login
-          onNavigate={setView}
-          initialTab="login"
-          initialForgotOpen={initialForgot.open}
-          initialForgotStep={initialForgot.step}
-          initialResetToken={initialForgot.token}
-        />
-      )}
+      {view === 'login' && <Login onNavigate={setView} initialTab="login" />}
       {view === 'register' && <Login onNavigate={setView} initialTab="register" />}
       {view === 'admin' && <Admin onNavigate={setView} />}
       {view === 'lecturer' && <Lecturer onNavigate={setView} />}
