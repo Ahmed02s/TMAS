@@ -496,6 +496,11 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
     setIsSavingCourse(true)
     setCourseModalError('')
 
+    // Captured before the request so it reflects who was assigned *before* this save —
+    // used below to only alert a lecturer when they're newly assigned, not on every
+    // unrelated edit to a course they already teach.
+    const previousLecturer = course.id ? allCourses.find(c => c.id === course.id)?.lecturer ?? '' : ''
+
     try {
       const endpoint = course.id ? `${API_BASE}/api/courses/${course.id}` : `${API_BASE}/api/courses`
       const method = course.id ? 'PATCH' : 'POST'
@@ -537,6 +542,19 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
       })
       setCourseModalOpen(false)
       setSelectedCourse(null)
+
+      const assignedLecturer = String(normalizedCourse.lecturer || '').trim()
+      if (assignedLecturer && assignedLecturer !== 'Unassigned' && assignedLecturer !== previousLecturer.trim()) {
+        try {
+          const { dispatchPushNotification } = await import('../utils/notifications')
+          await dispatchPushNotification({
+            title: 'New Course Assignment',
+            message: `${assignedLecturer}, you have been assigned to teach ${normalizedCourse.code} — ${normalizedCourse.title}.`,
+            target_role: 'lecturer',
+            type: 'info',
+          })
+        } catch {}
+      }
     } catch (err) {
       setCourseModalError(err instanceof Error ? err.message : 'Could not save course')
       console.error('Save course failed', err)

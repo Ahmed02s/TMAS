@@ -1676,6 +1676,7 @@ def list_all_quizzes(course: str | None = None, lecturer: str | None = None, _cl
     lecturer trying to figure out why a quiz is still locked/closed."""
     ensure_supabase_enabled()
     query = supabase.table('quizzes').select('*')
+    lecturer_course_codes: set[str] | None = None
     if course:
         query = query.eq('course', course)
     elif lecturer:
@@ -1686,7 +1687,11 @@ def list_all_quizzes(course: str | None = None, lecturer: str | None = None, _cl
         course_codes = [c['code'] for c in (courses_resp.data or []) if c.get('code')]
         if not course_codes:
             return {'quizzes': []}
-        query = query.in_('course', course_codes)
+        # Filtered in Python below (not via `.in_('course', course_codes)`) because that
+        # requires an exact string match — a quiz's `course` value and a course's `code`
+        # frequently differ only in casing/spacing (e.g. "comp401" vs "COMP 401"), which
+        # silently hid a lecturer's own published quizzes from their Question Banks archive.
+        lecturer_course_codes = {_clean_code_str(c) for c in course_codes}
     response = query.execute()
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase list quizzes failed'))
@@ -1694,6 +1699,8 @@ def list_all_quizzes(course: str | None = None, lecturer: str | None = None, _cl
     now = datetime.now(timezone.utc)
     quizzes = []
     for quiz in response.data or []:
+        if lecturer_course_codes is not None and _clean_code_str(quiz.get('course')) not in lecturer_course_codes:
+            continue
         q = dict(quiz)
         locked = _quiz_is_locked(q, now)
         expired = _quiz_is_expired(q, now)

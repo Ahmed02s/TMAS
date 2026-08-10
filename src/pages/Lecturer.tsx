@@ -229,6 +229,8 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     }
   })
   const [profileModalOpen, setProfileModalOpen] = useState(false)
+  const [notifications, setNotifications] = useState<Array<{ id: string; title: string; message: string; type?: string; read?: boolean }>>([])
+  const [notifOpen, setNotifOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1)
   const [activeReviewTier, setActiveReviewTier] = useState<'Foundational' | 'Intermediate' | 'Mastery'>('Foundational')
@@ -413,6 +415,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
         if (notifRes.ok) {
           const data = await notifRes.json()
           const list = data.notifications || []
+          setNotifications(list)
           let hasNewNotif = false
           for (const n of list) {
             if (!seenNotifIdsRef.current.has(n.id)) {
@@ -964,6 +967,40 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     }
   }
 
+  // Per-course hard-copy results export: one row per enrolled student with their quiz
+  // attempts, so a lecturer can download/print results for a specific course rather than
+  // only the course-wide summary handleExportGradebook produces.
+  function handleDownloadCourseResults(course: { code: string; title: string }, students: any[]) {
+    const headers = ['Student Name', 'Email', 'Quizzes Completed', 'Quizzes Total', 'Reading Progress (%)', 'Average Score (%)', 'Status', 'Quiz Title', 'Tier', 'Score', 'Out Of', 'Grade', 'Passed']
+    const rows: (string | number)[][] = []
+    for (const stu of students) {
+      const attempts = stu.attempts || []
+      const base = [
+        `"${(stu.name || '').replace(/"/g, '""')}"`,
+        stu.email || '',
+        stu.quizzes_done ?? 0,
+        stu.quizzes_total ?? 0,
+        stu.reading_progress ?? 0,
+        stu.avg_score ?? 0,
+        stu.status || 'active',
+      ]
+      if (attempts.length === 0) {
+        rows.push([...base, '', '', '', '', '', ''])
+      } else {
+        for (const att of attempts) {
+          rows.push([...base, `"${(att.quiz_title || '').replace(/"/g, '""')}"`, att.quiz_tier || '', att.score ?? '', att.out_of ?? '', att.grade || '', att.passed ? 'Yes' : 'No'])
+        }
+      }
+    }
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+    const link = document.createElement('a')
+    link.setAttribute('href', encodeURI(csvContent))
+    link.setAttribute('download', `${course.code}_Results_${new Date().toISOString().slice(0, 10)}.csv`)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
   function handleExportGradebook() {
     const headers = ['Course Code', 'Course Title', 'Enrolled Students', 'Completion Rate (%)', 'Average Score (%)', 'Status']
     const rows = myCoursesState.map(c => [
@@ -1109,6 +1146,42 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
               <span>Test Push</span>
             </button>
             <span className="text-xs bg-success/10 text-success px-3 py-1 rounded-full font-semibold">Account Active</span>
+            <div className="relative">
+              <button onClick={() => setNotifOpen(!notifOpen)} className="relative p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted transition-colors" title="Notifications">
+                <i className="fa-solid fa-bell text-lg" />
+                {notifications.length > 0 && (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-accent" />
+                )}
+              </button>
+              {notifOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setNotifOpen(false)} />
+                  <div className="absolute right-0 top-10 w-80 max-w-[90vw] bg-card border border-border rounded-2xl shadow-xl z-50 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+                      <p className="font-semibold text-foreground text-sm">Notifications</p>
+                      <span className="text-xs text-muted-foreground">{notifications.length} new</span>
+                    </div>
+                    <div className="max-h-72 overflow-y-auto">
+                      {notifications.length === 0 ? (
+                        <div className="p-6 text-center text-xs text-muted-foreground">No new notifications</div>
+                      ) : (
+                        notifications.map((n, i) => (
+                          <div key={n.id || i} className="flex items-start gap-3 px-4 py-3 border-b border-border/50 last:border-0 hover:bg-muted/50 transition-colors">
+                            <span className="text-xs font-bold rounded-full px-2 py-1 bg-primary/10 text-primary shrink-0">
+                              <i className="fa-solid fa-bell" />
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-foreground text-xs font-semibold leading-snug">{n.title || 'Notification'}</p>
+                              {n.message && <p className="text-muted-foreground text-xs mt-0.5 line-clamp-2">{n.message}</p>}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
             <button
               onClick={() => setProfileModalOpen(true)}
               className="w-8 h-8 rounded-full bg-blue-600 hover:bg-blue-700 flex items-center justify-center transition-transform hover:scale-105 shadow-sm cursor-pointer"
@@ -1321,14 +1394,26 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                             {/* Panel header with refresh */}
                             <div className="flex items-center justify-between px-5 py-2.5 bg-muted/40 border-b border-border">
                               <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Student Progress — {course.code}</span>
-                              <button
-                                onClick={() => loadCourseStudentProgress(course.code, course.level, course.program)}
-                                disabled={isLoading}
-                                className="text-xs text-primary font-medium hover:underline flex items-center gap-1 disabled:opacity-50"
-                              >
-                                <i className={`fa-solid fa-rotate-right text-[10px] ${isLoading ? 'animate-spin' : ''}`} />
-                                Refresh
-                              </button>
+                              <div className="flex items-center gap-3">
+                                {progressStudents.length > 0 && (
+                                  <button
+                                    onClick={() => handleDownloadCourseResults(course, progressStudents)}
+                                    className="text-xs text-primary font-medium hover:underline flex items-center gap-1"
+                                    title="Download student results for this course as CSV"
+                                  >
+                                    <i className="fa-solid fa-download text-[10px]" />
+                                    Download Results
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => loadCourseStudentProgress(course.code, course.level, course.program)}
+                                  disabled={isLoading}
+                                  className="text-xs text-primary font-medium hover:underline flex items-center gap-1 disabled:opacity-50"
+                                >
+                                  <i className={`fa-solid fa-rotate-right text-[10px] ${isLoading ? 'animate-spin' : ''}`} />
+                                  Refresh
+                                </button>
+                              </div>
                             </div>
 
                             {isLoading ? (
@@ -1544,11 +1629,23 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                             <p className="text-sm font-semibold text-foreground">{course.code} — {course.title}</p>
                             <p className="text-xs text-muted-foreground">{course.level || '-'} <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {course.program || '-'}</p>
                           </div>
-                          <span className="inline-flex items-center gap-1.5 text-sm font-bold text-foreground">
-                            <i className="fa-solid fa-users text-primary text-xs" />
-                            {sc}
-                            <span className="text-xs font-normal text-muted-foreground">student{sc === 1 ? '' : 's'}</span>
-                          </span>
+                          <div className="flex items-center gap-3">
+                            {progressStudents && progressStudents.length > 0 && (
+                              <button
+                                onClick={() => handleDownloadCourseResults(course, progressStudents)}
+                                className="text-xs text-primary font-medium hover:underline flex items-center gap-1"
+                                title="Download student results for this course as CSV"
+                              >
+                                <i className="fa-solid fa-download text-[10px]" />
+                                Download Results
+                              </button>
+                            )}
+                            <span className="inline-flex items-center gap-1.5 text-sm font-bold text-foreground">
+                              <i className="fa-solid fa-users text-primary text-xs" />
+                              {sc}
+                              <span className="text-xs font-normal text-muted-foreground">student{sc === 1 ? '' : 's'}</span>
+                            </span>
+                          </div>
                         </div>
                         {isLoading || progressStudents === undefined ? (
                           <div className="flex items-center justify-center gap-3 py-10 text-muted-foreground text-sm">
