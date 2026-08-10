@@ -98,6 +98,20 @@ export default function Login({
   const [forgotMessage, setForgotMessage] = useState('')
   const [forgotError, setForgotError] = useState('')
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const params = new URLSearchParams(window.location.search)
+    const token = params.get('token')?.trim() ?? ''
+    const path = window.location.pathname.toLowerCase().replace(/\/+$|^\/+/, '')
+
+    if ((path === 'forgot-password' || path === 'reset-password') && token) {
+      setForgotOpen(true)
+      setForgotStep('reset')
+      setResetToken(token)
+    }
+  }, [])
+
   function closeForgotModal() {
     setForgotOpen(false)
     setForgotStep('request')
@@ -296,12 +310,18 @@ export default function Login({
       if (role === 'lecturer') {
         try {
           const { dispatchPushNotification } = await import('../utils/notifications')
-          await dispatchPushNotification({
-            title: 'New Lecturer Registration Pending',
-            message: `${name} (${trimmedEmail}) has registered and is awaiting administrator approval.`,
-            target_role: 'admin',
-            type: 'warning',
-          })
+          // Not logged in yet at this point (no token in localStorage), so the freshly
+          // issued registration token is passed explicitly — the backend now requires
+          // authentication on this endpoint.
+          await dispatchPushNotification(
+            {
+              title: 'New Lecturer Registration Pending',
+              message: `${name} (${trimmedEmail}) has registered and is awaiting administrator approval.`,
+              target_role: 'admin',
+              type: 'warning',
+            },
+            data.token,
+          )
         } catch {}
         setLecturerPendingModal(true)
       } else {

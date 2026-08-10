@@ -12,7 +12,7 @@ const VALID_VIEWS: AppView[] = ['landing', 'login', 'register', 'admin', 'lectur
 
 function isForgotPath(path: string) {
   const normalized = path.toLowerCase().replace(/\/+$|^\/+/, '')
-  return normalized === 'forgot-password' || normalized === 'reset-password' || normalized.endsWith('/forgot-password') || normalized.endsWith('/reset-password')
+  return normalized.includes('forgot-password') || normalized.includes('reset-password')
 }
 
 function getInitialView(): AppView {
@@ -85,16 +85,6 @@ export default function App() {
 
     window.localStorage.setItem(VIEW_STORAGE_KEY, view)
   }, [view])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-
-    const path = window.location.pathname
-    const params = new URLSearchParams(window.location.search)
-    if (isForgotPath(path) && params.has('token')) {
-      window.history.replaceState(null, '', path)
-    }
-  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
