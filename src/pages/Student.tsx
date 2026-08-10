@@ -4,6 +4,7 @@ import { API_BASE } from '../config'
 import Icon from '../components/Icon'
 import ProfileModal from '../components/ProfileModal'
 import { dismissNotificationIds, getDismissedNotificationIds } from '../utils/notificationDismissal'
+import { getQuestionSeconds } from '../utils/questionTiming'
 
 // pdfjs/mammoth/jszip are heavy parsing libraries only needed once a student actually
 // opens a material — code-split so they don't bloat the initial app bundle.
@@ -61,6 +62,7 @@ type CompletedQuiz = {
 type QuizQuestion = {
   question: string
   options: string[]
+  type?: string
 }
 
 // Correct answers are never present in QuizQuestion (the pre-submission payload no longer
@@ -249,6 +251,14 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   const [quizTimedOut, setQuizTimedOut] = useState(false)
   const [quizForfeited, setQuizForfeited] = useState(false)
   const quizAnswersRef = useRef<Record<number, string>>({})
+
+  // Anti-cheating: each question gets its own fixed answering window (see
+  // src/utils/questionTiming.ts) on top of the overall quiz clock, so a student can't sit
+  // on one question indefinitely. Deadlines are wall-clock timestamps set the first time a
+  // question is shown, so navigating back to an earlier question can't reset its clock.
+  const [questionDeadlines, setQuestionDeadlines] = useState<Record<number, number>>({})
+  const [questionTimeLeft, setQuestionTimeLeft] = useState<number | null>(null)
+  const questionAdvancingRef = useRef(false)
   const isAutoSubmittingRef = useRef(false)
 
   useEffect(() => {
@@ -533,6 +543,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
           ? quizData.questions.map((qq: any, idx: number) => ({
               question: String(qq?.question ?? qq?.text ?? `Question ${idx + 1}`),
               options: Array.isArray(qq?.options) ? qq.options.map((opt: any) => typeof opt === 'string' ? opt : String(opt?.text ?? opt?.value ?? JSON.stringify(opt))) : [],
+              type: String(qq?.type ?? qq?.question_type ?? 'MCQ'),
             }))
           : []
 
@@ -540,6 +551,9 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
         setQuizAnswers({})
         setQuizReview([])
         setCurrentQ(0)
+        setQuestionDeadlines({})
+        setQuestionTimeLeft(null)
+        questionAdvancingRef.current = false
         isAutoSubmittingRef.current = false
       } catch (fetchError) {
         setError(fetchError instanceof Error ? fetchError.message : 'Unable to load quiz details')
@@ -748,6 +762,46 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     return () => clearInterval(timer)
   }, [activeQuiz, quizExpiresAt, quizTimeLeft, quizSubmitted])
 
+  // Lazily stamp a deadline the first time a question becomes current. Already-visited
+  // questions keep their original deadline (which may already be in the past), so paging
+  // back to one never restarts its clock.
+  useEffect(() => {
+    if (activeQuiz === null || quizSubmitted) return
+    const q = activeQuizQuestions[currentQ]
+    if (!q) return
+    setQuestionDeadlines(prev => {
+      if (prev[currentQ] != null) return prev
+      return { ...prev, [currentQ]: Date.now() + getQuestionSeconds(q.type) * 1000 }
+    })
+  }, [activeQuiz, quizSubmitted, currentQ, activeQuizQuestions])
+
+  // Per-question countdown: once the current question's dedicated window elapses, its
+  // answer locks and the quiz automatically advances (or submits, if it was the last
+  // question) — regardless of whether the student finished it.
+  useEffect(() => {
+    if (activeQuiz === null || quizSubmitted) return
+    const deadline = questionDeadlines[currentQ]
+    if (deadline == null) return
+    questionAdvancingRef.current = false
+
+    const tick = () => {
+      const remaining = Math.max(0, Math.round((deadline - Date.now()) / 1000))
+      setQuestionTimeLeft(remaining)
+      if (remaining <= 0 && !questionAdvancingRef.current) {
+        questionAdvancingRef.current = true
+        if (currentQ < activeQuizQuestions.length - 1) {
+          setCurrentQ(q => q + 1)
+        } else {
+          handleSubmitQuiz()
+        }
+      }
+    }
+
+    tick()
+    const timer = setInterval(tick, 1000)
+    return () => clearInterval(timer)
+  }, [activeQuiz, quizSubmitted, currentQ, questionDeadlines, activeQuizQuestions.length])
+
   const visibleCompletedQuizzes = useMemo(() => {
     return completedQuizzes
   }, [completedQuizzes])
@@ -821,6 +875,8 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       )
     }
 
+    const questionLocked = questionTimeLeft !== null && questionTimeLeft <= 0
+
     return (
       <div className="min-h-screen bg-background font-sans flex flex-col">
         <div className="bg-primary text-primary-foreground px-6 py-4 flex items-center justify-between">
@@ -867,8 +923,14 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                 </div>
               </div>
 
-              <div className="mb-2">
+              <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
                 <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Question {currentQ + 1} of {activeQuizQuestions.length}</span>
+                {questionTimeLeft !== null && (
+                  <span className={`inline-flex items-center gap-1.5 text-xs font-mono font-bold px-2.5 py-1 rounded-full ${questionTimeLeft <= 10 ? 'bg-danger/15 text-danger animate-pulse' : 'bg-muted text-muted-foreground'}`}>
+                    <i className="fa-solid fa-stopwatch" />
+                    {questionTimeLeft}s for this {q.type || 'MCQ'} question
+                  </span>
+                )}
               </div>
               <h2 className="text-xl font-semibold text-foreground mb-8 leading-relaxed">{q.question}</h2>
 
@@ -877,8 +939,9 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                   q.options.map((opt, i) => (
                     <button
                       key={i}
-                      onClick={() => setQuizAnswers(a => ({ ...a, [currentQ]: opt }))}
-                      className={`w-full flex items-center gap-4 px-5 py-4 rounded-xl border-2 text-left transition-all ${quizAnswers[currentQ] === opt ? 'border-primary bg-secondary text-primary font-semibold' : 'border-border hover:border-primary/40 hover:bg-muted/50 text-foreground'}`}
+                      onClick={() => !questionLocked && setQuizAnswers(a => ({ ...a, [currentQ]: opt }))}
+                      disabled={questionLocked}
+                      className={`w-full flex items-center gap-4 px-5 py-4 rounded-xl border-2 text-left transition-all disabled:opacity-60 disabled:cursor-not-allowed ${quizAnswers[currentQ] === opt ? 'border-primary bg-secondary text-primary font-semibold' : 'border-border hover:border-primary/40 hover:bg-muted/50 text-foreground'}`}
                     >
                       <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 transition-all ${quizAnswers[currentQ] === opt ? 'border-primary bg-primary' : 'border-border'}`}>
                         {quizAnswers[currentQ] === opt && <div className="w-2.5 h-2.5 rounded-full bg-white" />}
@@ -892,11 +955,17 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                     <textarea
                       value={quizAnswers[currentQ] ?? ''}
                       onChange={e => setQuizAnswers(a => ({ ...a, [currentQ]: e.target.value }))}
+                      disabled={questionLocked}
                       rows={4}
-                      className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
                       placeholder="Type your answer here..."
                     />
                   </div>
+                )}
+                {questionLocked && (
+                  <p className="text-xs text-danger font-medium flex items-center gap-1.5">
+                    <i className="fa-solid fa-triangle-exclamation" /> Time's up for this question — moving on.
+                  </p>
                 )}
               </div>
 

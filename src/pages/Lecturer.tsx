@@ -3,6 +3,7 @@ import type { AppView } from '../App'
 import { API_BASE } from '../config'
 import ProfileModal from '../components/ProfileModal'
 import { dismissNotificationIds, getDismissedNotificationIds } from '../utils/notificationDismissal'
+import { QUESTION_TYPE_SECONDS } from '../utils/questionTiming'
 
 type Tab = 'overview' | 'courses' | 'materials' | 'students' | 'quizgen' | 'quizreview' | 'analytics'
 
@@ -15,6 +16,25 @@ const navItems: { key: Tab; label: string; iconClass: string }[] = [
   { key: 'quizreview', label: 'Question Banks',    iconClass: 'fa-folder-open' },
   { key: 'analytics',  label: 'Analytics',         iconClass: 'fa-chart-column' },
 ]
+
+const QUESTION_TYPE_OPTIONS = ['MCQ', 'True/False', 'Fill in the Blank', 'Short Answer'] as const
+type QuestionType = typeof QUESTION_TYPE_OPTIONS[number]
+
+function computeTimeLimitMinutes(questions: Array<{ type?: string }>): number {
+  if (!questions.length) return 5
+  const totalSeconds = questions.reduce((sum, q) => sum + (QUESTION_TYPE_SECONDS[q.type || 'MCQ'] ?? 60), 0)
+  return Math.max(5, Math.ceil(totalSeconds / 60))
+}
+
+function describeTimeBreakdown(questions: Array<{ type?: string }>): string {
+  if (!questions.length) return 'No approved questions yet — approve or add at least one to compute a duration.'
+  const counts: Record<string, number> = {}
+  for (const q of questions) {
+    const t = q.type || 'MCQ'
+    counts[t] = (counts[t] || 0) + 1
+  }
+  return Object.entries(counts).map(([type, count]) => `${count} × ${type} (${QUESTION_TYPE_SECONDS[type] ?? 60}s)`).join('  +  ')
+}
 
 function ProgressBar({ value }: { value: number }) {
   const color = value >= 80 ? 'bg-success' : value >= 60 ? 'bg-warning' : 'bg-primary'
@@ -236,7 +256,92 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1)
   const [activeReviewTier, setActiveReviewTier] = useState<'Foundational' | 'Intermediate' | 'Mastery'>('Foundational')
   const [publishing, setPublishing] = useState(false)
-  const [editingQuestion, setEditingQuestion] = useState<{ tier: string; index: number; question: any } | null>(null)
+
+  type QuestionDraft = {
+    tier: 'Foundational' | 'Intermediate' | 'Mastery'
+    id: number | null // null => authoring a brand-new question rather than editing one
+    question: string
+    type: QuestionType
+    options: string[]
+    answer: string
+    explanation: string
+  }
+  const [questionDraft, setQuestionDraft] = useState<QuestionDraft | null>(null)
+  const [questionDraftError, setQuestionDraftError] = useState('')
+
+  function openNewQuestionDraft(tier: 'Foundational' | 'Intermediate' | 'Mastery') {
+    setQuestionDraft({ tier, id: null, question: '', type: 'MCQ', options: ['', '', '', ''], answer: '', explanation: '' })
+    setQuestionDraftError('')
+  }
+
+  function openEditQuestionDraft(tier: 'Foundational' | 'Intermediate' | 'Mastery', q: any) {
+    const type: QuestionType = QUESTION_TYPE_OPTIONS.includes(q.type) ? q.type : 'MCQ'
+    setQuestionDraft({
+      tier,
+      id: q.id,
+      question: q.question || '',
+      type,
+      options: type === 'True/False' ? ['True', 'False'] : (Array.isArray(q.options) && q.options.length ? q.options : ['', '', '', '']),
+      answer: q.answer ?? '',
+      explanation: q.explanation || '',
+    })
+    setQuestionDraftError('')
+  }
+
+  function updateQuestionDraftType(newType: QuestionType) {
+    setQuestionDraft(prev => prev && {
+      ...prev,
+      type: newType,
+      options: newType === 'MCQ' ? (prev.options.length >= 2 ? prev.options : ['', '', '', '']) : newType === 'True/False' ? ['True', 'False'] : [],
+      answer: newType === 'True/False' && (prev.answer === 'True' || prev.answer === 'False') ? prev.answer : '',
+    })
+  }
+
+  function saveQuestionDraft() {
+    const draft = questionDraft
+    if (!draft) return
+    const text = draft.question.trim()
+    if (!text) { setQuestionDraftError('Question text is required.'); return }
+
+    let options: string[] = []
+    const answer = draft.answer.trim()
+    if (draft.type === 'MCQ') {
+      options = draft.options.map(o => o.trim()).filter(Boolean)
+      if (options.length < 2) { setQuestionDraftError('Provide at least 2 answer options.'); return }
+      if (!answer || !options.includes(answer)) { setQuestionDraftError('Select which option is the correct answer.'); return }
+    } else if (draft.type === 'True/False') {
+      options = ['True', 'False']
+      if (answer !== 'True' && answer !== 'False') { setQuestionDraftError('Select True or False as the correct answer.'); return }
+    } else {
+      options = []
+      if (!answer) { setQuestionDraftError('Provide the correct answer.'); return }
+    }
+
+    const finalQuestion = {
+      id: draft.id ?? Date.now() + Math.floor(Math.random() * 1000),
+      question: text,
+      type: draft.type,
+      options,
+      answer,
+      explanation: draft.explanation.trim(),
+      marks: 2,
+    }
+
+    setGeneratedQuestionsByTier(prev => {
+      const list = prev[draft.tier] || []
+      const exists = draft.id != null && list.some(q => q.id === draft.id)
+      return { ...prev, [draft.tier]: exists ? list.map(q => (q.id === draft.id ? { ...q, ...finalQuestion } : q)) : [...list, finalQuestion] }
+    })
+
+    if (draft.id == null) {
+      // A lecturer hand-writing a question clearly means to include it, so auto-approve it
+      // the same way freshly AI-generated questions are auto-approved.
+      setApprovedByTier(prev => ({ ...prev, [draft.tier]: [...(prev[draft.tier] || []), finalQuestion.id] }))
+    }
+
+    setQuestionDraft(null)
+    setQuestionDraftError('')
+  }
 
   const [tierScheduleConfigs, setTierScheduleConfigs] = useState<Record<'Foundational' | 'Intermediate' | 'Mastery', {
     questionCount: number
@@ -730,6 +835,17 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     })
   }, [materialsState, genCourse])
 
+  // Keeps the "Uploaded Materials" table in sync with whichever course is selected in the
+  // upload form above it, instead of always listing every material across every course.
+  const uploadedMaterialsForSelectedCourse = useMemo(() => {
+    if (!selectedCourse) return materialsState
+    const cleanSelected = selectedCourse.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
+    return materialsState.filter(m => {
+      const matCourse = (m.course || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '')
+      return !matCourse || matCourse === cleanSelected || matCourse.includes(cleanSelected) || cleanSelected.includes(matCourse)
+    })
+  }, [materialsState, selectedCourse])
+
   useEffect(() => {
     if (selectedMaterialId) {
       const exists = filteredMaterialsForCourse.some(m => String(m.id) === selectedMaterialId)
@@ -802,6 +918,26 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       setUploading(false)
     }
   }
+
+  // Duration is derived, not chosen: it's the sum of each approved question's dedicated
+  // anti-cheating answering window (see QUESTION_TYPE_SECONDS), so it must stay in sync
+  // whenever a question is approved/unapproved, added, or edited (e.g. its type changes).
+  useEffect(() => {
+    setTierScheduleConfigs(prev => {
+      let changed = false
+      const next = { ...prev }
+      for (const tier of ['Foundational', 'Intermediate', 'Mastery'] as const) {
+        const approvedIds = new Set(approvedByTier[tier] || [])
+        const approvedQuestions = (generatedQuestionsByTier[tier] || []).filter(q => approvedIds.has(q.id))
+        const computed = computeTimeLimitMinutes(approvedQuestions)
+        if (next[tier].timeLimit !== computed) {
+          next[tier] = { ...next[tier], timeLimit: computed }
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [approvedByTier, generatedQuestionsByTier])
 
   const handleGenerate3TierBank = async () => {
     setGenError('')
@@ -923,10 +1059,13 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
           tier: tier,
           questions: questions.map((q: any) => ({
             question: q.question,
+            type: q.type || 'MCQ',
             options: q.options || [],
             answer: q.answer,
             explanation: q.explanation || '',
           })),
+          // The server recomputes and overrides this from the actual question-type mix
+          // (QUESTION_TYPE_SECONDS) — sent here only so the request payload is self-describing.
           time_limit: Number(config.timeLimit) || 30,
           passing_score: Number(config.passingScore) || 60,
           attempts: Number(config.attempts) || 1,
@@ -1242,6 +1381,163 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
             onNavigate('login')
           }}
         />
+
+        {questionDraft && (
+          <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setQuestionDraft(null)}>
+            <div
+              className="bg-card border border-border rounded-2xl p-5 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto space-y-4 shadow-xl"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="font-display text-lg font-bold text-foreground">
+                  {questionDraft.id == null ? 'Add Your Own Question' : 'Edit Question'}
+                </h3>
+                <button onClick={() => setQuestionDraft(null)} className="text-muted-foreground hover:text-foreground">
+                  <i className="fa-solid fa-xmark" />
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase mb-1.5">Question Type</label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {QUESTION_TYPE_OPTIONS.map(qt => (
+                    <button
+                      key={qt}
+                      type="button"
+                      onClick={() => updateQuestionDraftType(qt)}
+                      className={`px-2.5 py-2 rounded-lg border text-xs font-semibold transition-all ${
+                        questionDraft.type === qt ? 'bg-primary/10 border-primary text-primary' : 'bg-muted border-border text-muted-foreground'
+                      }`}
+                    >
+                      {qt}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1.5">Dedicated answering time: {QUESTION_TYPE_SECONDS[questionDraft.type]}s per attempt.</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase mb-1.5">Question Text</label>
+                <textarea
+                  value={questionDraft.question}
+                  onChange={e => setQuestionDraft(prev => prev && { ...prev, question: e.target.value })}
+                  rows={3}
+                  className="w-full px-3 py-2.5 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  placeholder="Type the question..."
+                />
+              </div>
+
+              {questionDraft.type === 'MCQ' && (
+                <div>
+                  <label className="block text-xs font-semibold text-muted-foreground uppercase mb-1.5">Options (select the correct one)</label>
+                  <div className="space-y-2">
+                    {questionDraft.options.map((opt, oi) => (
+                      <div key={oi} className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setQuestionDraft(prev => prev && { ...prev, answer: opt.trim() })}
+                          disabled={!opt.trim()}
+                          className={`w-6 h-6 shrink-0 rounded-full border-2 flex items-center justify-center transition-all disabled:opacity-30 ${
+                            opt.trim() && questionDraft.answer === opt.trim() ? 'border-emerald-500 bg-emerald-500' : 'border-border'
+                          }`}
+                          title="Mark as correct answer"
+                        >
+                          {opt.trim() && questionDraft.answer === opt.trim() && <i className="fa-solid fa-check text-white text-[10px]" />}
+                        </button>
+                        <input
+                          value={opt}
+                          onChange={e => setQuestionDraft(prev => {
+                            if (!prev) return prev
+                            const options = [...prev.options]
+                            const wasAnswer = prev.answer === options[oi].trim()
+                            options[oi] = e.target.value
+                            return { ...prev, options, answer: wasAnswer ? e.target.value.trim() : prev.answer }
+                          })}
+                          placeholder={`Option ${oi + 1}`}
+                          className="flex-1 px-3 py-2 bg-muted border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        />
+                        {questionDraft.options.length > 2 && (
+                          <button
+                            type="button"
+                            onClick={() => setQuestionDraft(prev => prev && { ...prev, options: prev.options.filter((_, i) => i !== oi) })}
+                            className="text-danger/70 hover:text-danger px-1.5"
+                          >
+                            <i className="fa-solid fa-trash-can text-xs" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {questionDraft.options.length < 6 && (
+                    <button
+                      type="button"
+                      onClick={() => setQuestionDraft(prev => prev && { ...prev, options: [...prev.options, ''] })}
+                      className="mt-2 text-xs text-primary font-semibold hover:underline"
+                    >
+                      + Add option
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {questionDraft.type === 'True/False' && (
+                <div>
+                  <label className="block text-xs font-semibold text-muted-foreground uppercase mb-1.5">Correct Answer</label>
+                  <div className="flex gap-2">
+                    {['True', 'False'].map(opt => (
+                      <button
+                        key={opt}
+                        type="button"
+                        onClick={() => setQuestionDraft(prev => prev && { ...prev, answer: opt })}
+                        className={`flex-1 px-4 py-2.5 rounded-xl border text-sm font-semibold transition-all ${
+                          questionDraft.answer === opt ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-muted border-border text-muted-foreground'
+                        }`}
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(questionDraft.type === 'Fill in the Blank' || questionDraft.type === 'Short Answer') && (
+                <div>
+                  <label className="block text-xs font-semibold text-muted-foreground uppercase mb-1.5">Correct Answer</label>
+                  <input
+                    value={questionDraft.answer}
+                    onChange={e => setQuestionDraft(prev => prev && { ...prev, answer: e.target.value })}
+                    className="w-full px-3 py-2.5 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    placeholder="Expected answer"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase mb-1.5">Explanation (optional)</label>
+                <textarea
+                  value={questionDraft.explanation}
+                  onChange={e => setQuestionDraft(prev => prev && { ...prev, explanation: e.target.value })}
+                  rows={2}
+                  className="w-full px-3 py-2.5 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  placeholder="Shown to students after they submit, explaining the correct answer."
+                />
+              </div>
+
+              {questionDraftError && (
+                <p className="text-xs text-danger flex items-center gap-1.5"><i className="fa-solid fa-triangle-exclamation" />{questionDraftError}</p>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+                <button onClick={() => setQuestionDraft(null)} className="px-4 py-2.5 text-sm font-semibold text-muted-foreground hover:text-foreground">
+                  Cancel
+                </button>
+                <button onClick={saveQuestionDraft} className="px-5 py-2.5 bg-primary hover:bg-blue-950 text-white text-sm font-semibold rounded-xl transition-colors">
+                  {questionDraft.id == null ? 'Add Question' : 'Save Changes'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto p-6">
 
@@ -1583,8 +1879,11 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
 
               <div className="bg-card border border-border rounded-2xl overflow-hidden">
                 <div className="px-6 py-4 border-b border-border flex items-center justify-between">
-                  <h3 className="font-semibold text-foreground">Uploaded Materials</h3>
-                  <span className="text-xs text-muted-foreground">{materialsState.length} files</span>
+                  <div>
+                    <h3 className="font-semibold text-foreground">Uploaded Materials</h3>
+                    {selectedCourse && <p className="text-xs text-muted-foreground mt-0.5">Showing materials for <span className="font-mono font-semibold text-primary">{selectedCourse}</span></p>}
+                  </div>
+                  <span className="text-xs text-muted-foreground">{uploadedMaterialsForSelectedCourse.length} file{uploadedMaterialsForSelectedCourse.length === 1 ? '' : 's'}</span>
                 </div>
                 <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -1596,7 +1895,12 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {materialsState.map(m => (
+                    {uploadedMaterialsForSelectedCourse.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="px-5 py-8 text-center text-sm text-muted-foreground">No materials uploaded yet for {selectedCourse || 'this course'}.</td>
+                      </tr>
+                    )}
+                    {uploadedMaterialsForSelectedCourse.map(m => (
                       <tr key={m.id} className="hover:bg-muted/30 transition-colors">
                         <td className="px-5 py-3.5">
                           <div className="flex items-center gap-2.5">
@@ -2048,13 +2352,22 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                         Inspect, edit, and approve questions before publishing.
                       </p>
                     </div>
-                    <button
-                      onClick={() => setWizardStep(3)}
-                      className="bg-primary hover:bg-blue-950 text-white font-semibold text-sm px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm w-full sm:w-auto"
-                    >
-                      <span>Proceed to Schedule</span>
-                      <i className="fa-solid fa-arrow-right text-xs" />
-                    </button>
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <button
+                        onClick={() => openNewQuestionDraft(activeReviewTier)}
+                        className="bg-muted hover:bg-emerald-50 border border-border text-foreground hover:text-emerald-700 font-semibold text-sm px-4 py-2.5 sm:py-3 rounded-xl transition-all flex items-center justify-center gap-2 flex-1 sm:flex-none"
+                      >
+                        <i className="fa-solid fa-plus text-xs" />
+                        <span>Add Your Own Question</span>
+                      </button>
+                      <button
+                        onClick={() => setWizardStep(3)}
+                        className="bg-primary hover:bg-blue-950 text-white font-semibold text-sm px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm flex-1 sm:flex-none"
+                      >
+                        <span>Proceed to Schedule</span>
+                        <i className="fa-solid fa-arrow-right text-xs" />
+                      </button>
+                    </div>
                   </div>
 
                   {/* Tier Tabs — scrollable on mobile */}
@@ -2098,19 +2411,28 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                               <span className="text-xs font-semibold text-muted-foreground">{q.marks || 2} marks</span>
                             </div>
 
-                            <button
-                              onClick={() => {
-                                const currentApproved = approvedByTier[activeReviewTier] || []
-                                const updated = isApproved ? currentApproved.filter(id => id !== q.id) : [...currentApproved, q.id]
-                                setApprovedByTier(prev => ({ ...prev, [activeReviewTier]: updated }))
-                              }}
-                              className={`self-start sm:self-auto px-3 sm:px-4 py-1.5 text-xs font-bold rounded-xl border transition-all flex items-center gap-1.5 ${
-                                isApproved ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-muted hover:bg-emerald-50 text-muted-foreground hover:text-emerald-600 border-border'
-                              }`}
-                            >
-                              <i className={`fa-solid ${isApproved ? 'fa-check' : 'fa-plus'}`} />
-                              <span>{isApproved ? 'Approved' : 'Approve'}</span>
-                            </button>
+                            <div className="flex items-center gap-2 self-start sm:self-auto">
+                              <button
+                                onClick={() => openEditQuestionDraft(activeReviewTier, q)}
+                                className="px-3 py-1.5 text-xs font-bold rounded-xl border border-border bg-muted hover:bg-blue-50 text-muted-foreground hover:text-primary transition-all flex items-center gap-1.5"
+                              >
+                                <i className="fa-solid fa-pen" />
+                                <span>Edit</span>
+                              </button>
+                              <button
+                                onClick={() => {
+                                  const currentApproved = approvedByTier[activeReviewTier] || []
+                                  const updated = isApproved ? currentApproved.filter(id => id !== q.id) : [...currentApproved, q.id]
+                                  setApprovedByTier(prev => ({ ...prev, [activeReviewTier]: updated }))
+                                }}
+                                className={`px-3 sm:px-4 py-1.5 text-xs font-bold rounded-xl border transition-all flex items-center gap-1.5 ${
+                                  isApproved ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-muted hover:bg-emerald-50 text-muted-foreground hover:text-emerald-600 border-border'
+                                }`}
+                              >
+                                <i className={`fa-solid ${isApproved ? 'fa-check' : 'fa-plus'}`} />
+                                <span>{isApproved ? 'Approved' : 'Approve'}</span>
+                              </button>
+                            </div>
                           </div>
 
                           <p className="text-sm sm:text-base font-medium text-foreground mb-3 sm:mb-4">{q.question}</p>
@@ -2178,22 +2500,14 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                           </div>
 
                           <div>
-                            <label className="block text-xs font-semibold text-muted-foreground uppercase mb-1">Attempt Duration (Mins)</label>
-                            <input
-                              type="number"
-                              value={cfg.timeLimit}
-                              onChange={e => {
-                                const val = Number(e.target.value)
-                                setTierScheduleConfigs(prev => ({
-                                  ...prev,
-                                  [tier]: { ...prev[tier], timeLimit: val },
-                                }))
-                                if (scheduleErrors[`${tier}_timeLimit`]) setScheduleErrors(p => ({ ...p, [`${tier}_timeLimit`]: '' }))
-                              }}
-                              min={5}
-                              max={180}
-                              className={`w-full px-3 py-2 bg-muted border rounded-xl text-sm font-bold font-mono ${scheduleErrors[`${tier}_timeLimit`] ? 'border-danger' : 'border-border'}`}
-                            />
+                            <label className="block text-xs font-semibold text-muted-foreground uppercase mb-1">Attempt Duration (Auto-calculated)</label>
+                            <div className={`w-full px-3 py-2 bg-muted border rounded-xl text-sm font-bold font-mono flex items-center gap-2 ${scheduleErrors[`${tier}_timeLimit`] ? 'border-danger' : 'border-border'}`}>
+                              <i className="fa-solid fa-lock text-[10px] text-muted-foreground" />
+                              {cfg.timeLimit} min
+                            </div>
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                              Derived from each approved question's anti-cheating answering window: {describeTimeBreakdown((generatedQuestionsByTier[tier] || []).filter(q => (approvedByTier[tier] || []).includes(q.id)))}
+                            </p>
                             {scheduleErrors[`${tier}_timeLimit`] && <p className="text-xs text-danger mt-1 flex items-center gap-1"><i className="fa-solid fa-triangle-exclamation text-[10px]" />{scheduleErrors[`${tier}_timeLimit`]}</p>}
                             {scheduleErrors[`${tier}_questions`] && <p className="text-xs text-danger mt-1 flex items-center gap-1"><i className="fa-solid fa-triangle-exclamation text-[10px]" />{scheduleErrors[`${tier}_questions`]}</p>}
                           </div>

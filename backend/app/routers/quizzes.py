@@ -1,4 +1,5 @@
 import logging
+import math
 import random
 import re
 import json
@@ -22,6 +23,38 @@ UPLOAD_DIR = BASE_DIR / "uploads"
 
 # Small allowance for network/client latency when enforcing a student's per-attempt time limit.
 TIME_LIMIT_GRACE_SECONDS = 20
+
+# Anti-cheating: each question type gets a fixed, dedicated answering window (enforced
+# per-question client-side in the student quiz UI) so a student can't sit on one question
+# indefinitely to communicate with someone else. A quiz's overall time_limit is no longer a
+# value the lecturer picks freely — it is always derived by summing these per-question
+# budgets, so the total time on the clock always matches what the question mix actually allows.
+QUESTION_TYPE_SECONDS: dict[str, int] = {
+    'mcq': 60,
+    'true/false': 45,
+    'fill in the blank': 45,
+    'short answer': 90,
+}
+_KNOWN_QUESTION_TYPES = {'MCQ', 'True/False', 'Fill in the Blank', 'Short Answer'}
+
+
+def _normalize_single_question_type(value: str | None) -> str:
+    if isinstance(value, str) and value.strip() in _KNOWN_QUESTION_TYPES:
+        return value.strip()
+    return 'MCQ'
+
+
+def _question_type_seconds(q_type: str | None) -> int:
+    return QUESTION_TYPE_SECONDS.get(str(q_type or '').strip().lower(), 60)
+
+
+def _compute_time_limit_minutes(questions: list[dict[str, Any]]) -> int:
+    """Derives a quiz's total time limit (in minutes) from the dedicated per-question-type
+    answering windows, rather than an arbitrary lecturer-chosen number."""
+    if not questions:
+        return 5
+    total_seconds = sum(_question_type_seconds(q.get('type') or q.get('question_type')) for q in questions)
+    return max(5, math.ceil(total_seconds / 60))
 
 
 def _verify_acting_as_self(claims: dict[str, Any], student_id: str) -> None:
@@ -1071,7 +1104,7 @@ def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_
                 'title': f"AI Generated {tier} Quiz for {effective_course}",
                 'course': effective_course,
                 'questions': len(questions),
-                'time_limit': payload.time_limit,
+                'time_limit': _compute_time_limit_minutes(questions),
                 'passing_score': payload.passing_score,
                 'attempts': payload.attempts,
                 'due_date': _format_datetime(tier_close),
@@ -1134,6 +1167,7 @@ def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_
                             'question': q.get('question', ''),
                             'options': q.get('options', []),
                             'correct': q.get('answer', ''),
+                            'question_type': _normalize_single_question_type(q.get('type')),
                         } for q in tier_questions]
                         q_resp = _safe_insert('quiz_questions', question_rows)
                         if not supabase_failed(q_resp) and q_resp.data:
@@ -1167,7 +1201,7 @@ def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_
                 'title': f"AI Generated {normalized_tier} Quiz for {effective_course}",
                 'course': effective_course,
                 'questions': len(questions),
-                'time_limit': payload.time_limit,
+                'time_limit': _compute_time_limit_minutes(questions),
                 'passing_score': payload.passing_score,
                 'attempts': payload.attempts,
                 'due_date': _format_datetime(close_dt),
@@ -1227,7 +1261,10 @@ def publish_quiz(payload: PublishQuizRequest, _claims: dict = Depends(require_ro
                 'title': derived_title,
                 'course': q.get('course') or payload.course,
                 'questions': len(q.get('questions', []) or []),
-                'time_limit': q.get('time_limit') if q.get('time_limit') is not None else payload.time_limit,
+                # Always server-derived from the question-type mix (see QUESTION_TYPE_SECONDS)
+                # rather than trusting a client-supplied value — otherwise the per-question
+                # anti-cheating timers and the overall clock could be made to disagree.
+                'time_limit': _compute_time_limit_minutes(q.get('questions', []) or []),
                 'passing_score': q.get('passing_score', payload.passing_score),
                 'attempts': q.get('attempts', payload.attempts),
                 'due_date': q.get('due_date'),
@@ -1271,6 +1308,7 @@ def publish_quiz(payload: PublishQuizRequest, _claims: dict = Depends(require_ro
                     'question': question.get('question', ''),
                     'options': question.get('options', []),
                     'correct': question.get('answer', ''),
+                    'question_type': _normalize_single_question_type(question.get('type')),
                 })
             questions_response = _safe_insert('quiz_questions', question_rows)
             if supabase_failed(questions_response):
@@ -1319,7 +1357,7 @@ def publish_quiz(payload: PublishQuizRequest, _claims: dict = Depends(require_ro
         'title': derived_title,
         'course': payload.course,
         'questions': len(payload.questions),
-        'time_limit': payload.time_limit,
+        'time_limit': _compute_time_limit_minutes(payload.questions),
         'passing_score': payload.passing_score,
         'attempts': payload.attempts,
         'due_date': payload.due_date,
@@ -1345,6 +1383,7 @@ def publish_quiz(payload: PublishQuizRequest, _claims: dict = Depends(require_ro
             'question': question.get('question', ''),
             'options': question.get('options', []),
             'correct': question.get('answer', ''),
+            'question_type': _normalize_single_question_type(question.get('type')),
         })
     questions_response = _safe_insert('quiz_questions', question_rows)
     if supabase_failed(questions_response):
@@ -1550,6 +1589,10 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
     questions = []
     for q in raw_questions:
         q_copy = dict(q)
+        # `type` lived only in-memory pre-persistence; the DB column is `question_type`.
+        # Normalize back to `type` here so grading (_answers_match) sees the real type
+        # instead of silently defaulting every question to MCQ-style exact matching.
+        q_copy['type'] = q_copy.get('question_type') or q_copy.get('type') or 'MCQ'
         opts = q_copy.get('options')
         if isinstance(opts, list) and len(opts) > 1:
             opts_copy = list(opts)
@@ -1794,7 +1837,8 @@ def get_quiz_full(quiz_id: int, _claims: dict = Depends(require_roles('lecturer'
     if supabase_failed(questions_response):
         raise HTTPException(status_code=502, detail=supabase_error_message(questions_response, 'Supabase get quiz questions failed'))
 
-    return {'quiz': quiz, 'questions': questions_response.data or []}
+    questions = [{**row, 'type': row.get('question_type') or row.get('type') or 'MCQ'} for row in (questions_response.data or [])]
+    return {'quiz': quiz, 'questions': questions}
 
 
 class UpdateQuizScheduleRequest(BaseModel):
@@ -2094,6 +2138,7 @@ def get_quiz_details(
         # out of the network tab / component state before picking anything. Grading and the
         # post-submission review both happen server-side in submit_quiz instead.
         q_copy = {k: v for k, v in q.items() if k != 'correct'}
+        q_copy['type'] = q_copy.get('question_type') or q_copy.get('type') or 'MCQ'
         opts = q_copy.get('options')
         if isinstance(opts, list) and len(opts) > 1:
             opts_copy = list(opts)
