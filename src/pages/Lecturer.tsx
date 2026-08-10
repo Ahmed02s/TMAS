@@ -440,6 +440,10 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   const [expandedBankQuizId, setExpandedBankQuizId] = useState<number | null>(null)
   const [bankQuestionsById, setBankQuestionsById] = useState<Record<number, any[]>>({})
   const [loadingBankQuestionsId, setLoadingBankQuestionsId] = useState<number | null>(null)
+  // Splits "already published" from "still a draft awaiting review" instead of interleaving
+  // them in one flat list — the two categories were getting visually indistinguishable as
+  // the archive grew. Defaults to Published since that's what a lecturer browses most.
+  const [bankViewFilter, setBankViewFilter] = useState<'published' | 'pending'>('published')
   const [downloadingBankId, setDownloadingBankId] = useState<number | null>(null)
 
   const getActiveTier = () => activeReviewTier
@@ -2619,11 +2623,43 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
           {/* ── QUESTION BANKS ARCHIVE ── */}
           {tab === 'quizreview' && (
             <div className="space-y-6">
-              <div className="bg-card border border-border rounded-2xl p-5 sm:p-6">
-                <h3 className="font-display text-lg font-bold text-foreground">Question Banks</h3>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Every quiz question bank you've generated, grouped by course. Preview or download a hardcopy at any time.
-                </p>
+              <div className="bg-card border border-border rounded-2xl p-5 sm:p-6 space-y-4">
+                <div>
+                  <h3 className="font-display text-lg font-bold text-foreground">Question Banks</h3>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Every quiz question bank you've generated, grouped by course. Preview or download a hardcopy at any time.
+                  </p>
+                </div>
+
+                {(() => {
+                  const pendingCount = questionBankQuizzes.filter(q => q.status === 'draft').length
+                  const publishedCount = questionBankQuizzes.length - pendingCount
+                  return (
+                    <div className="inline-flex items-center gap-1 bg-muted rounded-xl p-1 w-full sm:w-auto">
+                      <button
+                        onClick={() => setBankViewFilter('published')}
+                        className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
+                          bankViewFilter === 'published' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        Published ({publishedCount})
+                      </button>
+                      <button
+                        onClick={() => setBankViewFilter('pending')}
+                        className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${
+                          bankViewFilter === 'pending' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        Pending Review
+                        {pendingCount > 0 && (
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${bankViewFilter === 'pending' ? 'bg-amber-500/15 text-amber-700' : 'bg-amber-500/20 text-amber-700'}`}>
+                            {pendingCount}
+                          </span>
+                        )}
+                      </button>
+                    </div>
+                  )
+                })()}
               </div>
 
               {questionBankError && (
@@ -2633,18 +2669,34 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                 </div>
               )}
 
-              {loadingQuestionBanks ? (
-                <div className="flex items-center justify-center gap-3 py-14 text-muted-foreground text-sm">
-                  <span className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-                  Loading question banks...
-                </div>
-              ) : questionBankQuizzes.length === 0 ? (
-                <div className="bg-card border border-border rounded-2xl p-8 text-center text-sm text-muted-foreground">
-                  No question banks generated yet. Use the 3-Tier Quiz Wizard to generate and publish one.
-                </div>
-              ) : (
-                Object.entries(
-                  questionBankQuizzes.reduce((groups: Record<string, any[]>, q) => {
+              {(() => {
+                const filteredBankQuizzes = questionBankQuizzes.filter(q => (bankViewFilter === 'pending' ? q.status === 'draft' : q.status !== 'draft'))
+                if (loadingQuestionBanks) {
+                  return (
+                    <div className="flex items-center justify-center gap-3 py-14 text-muted-foreground text-sm">
+                      <span className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                      Loading question banks...
+                    </div>
+                  )
+                }
+                if (questionBankQuizzes.length === 0) {
+                  return (
+                    <div className="bg-card border border-border rounded-2xl p-8 text-center text-sm text-muted-foreground">
+                      No question banks generated yet. Use the 3-Tier Quiz Wizard to generate and publish one.
+                    </div>
+                  )
+                }
+                if (filteredBankQuizzes.length === 0) {
+                  return (
+                    <div className="bg-card border border-border rounded-2xl p-8 text-center text-sm text-muted-foreground">
+                      {bankViewFilter === 'pending'
+                        ? 'Nothing awaiting review right now — every generated question bank has been published.'
+                        : "No published question banks yet — check Pending Review, or generate a new one from the 3-Tier Quiz Wizard."}
+                    </div>
+                  )
+                }
+                return Object.entries(
+                  filteredBankQuizzes.reduce((groups: Record<string, any[]>, q) => {
                     const key = q.course || 'Unassigned'
                     groups[key] = groups[key] || []
                     groups[key].push(q)
@@ -2729,7 +2781,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                     </div>
                   </div>
                 ))
-              )}
+              })()}
             </div>
           )}
 
