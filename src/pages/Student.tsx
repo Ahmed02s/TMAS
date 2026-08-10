@@ -3,6 +3,7 @@ import type { AppView } from '../App'
 import { API_BASE } from '../config'
 import Icon from '../components/Icon'
 import ProfileModal from '../components/ProfileModal'
+import { dismissNotificationIds, getDismissedNotificationIds } from '../utils/notificationDismissal'
 
 // pdfjs/mammoth/jszip are heavy parsing libraries only needed once a student actually
 // opens a material — code-split so they don't bloat the initial app bundle.
@@ -52,6 +53,9 @@ type CompletedQuiz = {
   date: string
   grade: string
   passed: boolean
+  // 'in_progress' means the student clicked Start but hasn't finished (or been
+  // forfeited/timed-out) yet — shown provisionally rather than as a real pass/fail.
+  status?: string
 }
 
 type QuizQuestion = {
@@ -170,6 +174,7 @@ function mapCompletedQuiz(quiz: Record<string, any>): CompletedQuiz {
     date: quiz.date,
     grade: quiz.grade,
     passed: quiz.passed,
+    status: quiz.status,
   }
 }
 
@@ -368,6 +373,31 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
 
   const [notifications, setNotifications] = useState<Array<{ id: string; title: string; message: string; type?: string; read?: boolean }>>([])
   const [notifOpen, setNotifOpen] = useState(false)
+  const [dismissedNotifIds, setDismissedNotifIds] = useState<Set<string>>(() => getDismissedNotificationIds(savedUser?.id))
+  // `savedUser` loads asynchronously (from localStorage, after mount), so the lazy
+  // initializer above runs before it's available — re-sync once the real id shows up.
+  useEffect(() => {
+    if (savedUser?.id) setDismissedNotifIds(getDismissedNotificationIds(savedUser.id))
+  }, [savedUser?.id])
+  const visibleNotifications = useMemo(
+    () => notifications.filter(n => !dismissedNotifIds.has(n.id)),
+    [notifications, dismissedNotifIds],
+  )
+  function dismissNotification(id: string) {
+    setDismissedNotifIds(dismissNotificationIds(savedUser?.id, [id]))
+  }
+  function clearAllNotifications() {
+    setDismissedNotifIds(dismissNotificationIds(savedUser?.id, notifications.map(n => n.id)))
+  }
+  // Routes to the tab that's actually relevant to the notification's content, instead of
+  // just displaying inert text the student then has to go find on their own.
+  function handleNotificationClick(n: { id: string; title: string }) {
+    const title = n.title.toLowerCase()
+    if (title.includes('quiz')) setTab('quizzes')
+    else if (title.includes('material') || title.includes('course')) setTab('courses')
+    dismissNotification(n.id)
+    setNotifOpen(false)
+  }
   const [profileModalOpen, setProfileModalOpen] = useState(false)
   const [mobileReaderTab, setMobileReaderTab] = useState<'list' | 'doc'>('list')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
@@ -722,12 +752,19 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     return completedQuizzes
   }, [completedQuizzes])
 
-  const avgScore = useMemo(() => {
-    return visibleCompletedQuizzes.length ? Math.round(visibleCompletedQuizzes.reduce((s, q) => s + q.score, 0) / visibleCompletedQuizzes.length) : 0
+  // Score-based stats (average, highest, pass count, GPA) must ignore still-in-progress
+  // attempts — they're provisional 0s, not real results, and would otherwise drag down a
+  // student's stats simply for having started a quiz they haven't finished yet.
+  const finalizedCompletedQuizzes = useMemo(() => {
+    return visibleCompletedQuizzes.filter(q => q.status !== 'in_progress')
   }, [visibleCompletedQuizzes])
 
-  const highestScore = visibleCompletedQuizzes.length ? Math.max(...visibleCompletedQuizzes.map(q => q.score)) : 0
-  const passedQuizCount = visibleCompletedQuizzes.filter(q => q.passed).length
+  const avgScore = useMemo(() => {
+    return finalizedCompletedQuizzes.length ? Math.round(finalizedCompletedQuizzes.reduce((s, q) => s + q.score, 0) / finalizedCompletedQuizzes.length) : 0
+  }, [finalizedCompletedQuizzes])
+
+  const highestScore = finalizedCompletedQuizzes.length ? Math.max(...finalizedCompletedQuizzes.map(q => q.score)) : 0
+  const passedQuizCount = finalizedCompletedQuizzes.filter(q => q.passed).length
   const quizProgress = visibleCourses.length ? Math.round((visibleCourses.reduce((sum, course) => sum + course.progress, 0) / visibleCourses.length)) : 0
   const gpaEquivalent = avgScore ? Number(Math.min(4, Math.max(0, (avgScore / 25))).toFixed(1)) : 0
 
@@ -1102,7 +1139,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
             <div className="relative">
               <button onClick={() => setNotifOpen(!notifOpen)} className="relative p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted transition-colors" title="Notifications">
                 <i className="fa-solid fa-bell text-lg" />
-                {notifications.length > 0 && (
+                {visibleNotifications.length > 0 && (
                   <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-accent" />
                 )}
               </button>
@@ -1112,21 +1149,34 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                   <div className="absolute right-0 top-10 w-80 max-w-[90vw] bg-card border border-border rounded-2xl shadow-xl z-50 overflow-hidden">
                     <div className="px-4 py-3 border-b border-border flex items-center justify-between">
                       <p className="font-semibold text-foreground text-sm">Notifications</p>
-                      <span className="text-xs text-muted-foreground">{notifications.length} new</span>
+                      {visibleNotifications.length > 0 ? (
+                        <button onClick={clearAllNotifications} className="text-xs text-primary font-medium hover:underline">Clear all</button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Up to date</span>
+                      )}
                     </div>
                     <div className="max-h-72 overflow-y-auto">
-                      {notifications.length === 0 ? (
+                      {visibleNotifications.length === 0 ? (
                         <div className="p-6 text-center text-xs text-muted-foreground">No new notifications</div>
                       ) : (
-                        notifications.map((n, i) => (
-                          <div key={n.id || i} className="flex items-start gap-3 px-4 py-3 border-b border-border/50 last:border-0 hover:bg-muted/50 transition-colors">
-                            <span className="text-xs font-bold rounded-full px-2 py-1 bg-primary/10 text-primary shrink-0">
-                              <i className="fa-solid fa-bell" />
-                            </span>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-foreground text-xs font-semibold leading-snug">{n.title || 'Notification'}</p>
-                              {n.message && <p className="text-muted-foreground text-xs mt-0.5 line-clamp-2">{n.message}</p>}
-                            </div>
+                        visibleNotifications.map((n, i) => (
+                          <div key={n.id || i} className="flex items-start gap-3 px-4 py-3 border-b border-border/50 last:border-0 hover:bg-muted/50 transition-colors group">
+                            <button onClick={() => handleNotificationClick(n)} className="flex items-start gap-3 flex-1 min-w-0 text-left">
+                              <span className="text-xs font-bold rounded-full px-2 py-1 bg-primary/10 text-primary shrink-0">
+                                <i className="fa-solid fa-bell" />
+                              </span>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-foreground text-xs font-semibold leading-snug">{n.title || 'Notification'}</p>
+                                {n.message && <p className="text-muted-foreground text-xs mt-0.5 line-clamp-2">{n.message}</p>}
+                              </div>
+                            </button>
+                            <button
+                              onClick={() => dismissNotification(n.id)}
+                              className="shrink-0 text-muted-foreground hover:text-foreground p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Dismiss"
+                            >
+                              <i className="fa-solid fa-xmark text-xs" />
+                            </button>
                           </div>
                         ))
                       )}
@@ -1675,21 +1725,30 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {visibleCompletedQuizzes.map((q, i) => (
-                        <tr key={i} className="hover:bg-muted/30 transition-colors">
-                          <td className="px-5 py-3.5 text-foreground font-medium text-sm">{q.title}</td>
-                          <td className="px-5 py-3.5"><span className="font-mono text-xs font-bold text-primary">{q.course}</span></td>
-                          <td className="px-5 py-3.5">
-                            <span className="font-mono font-bold text-foreground">{q.score}%</span>
-                          </td>
-                          <td className="px-5 py-3.5">
-                            <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${q.grade.startsWith('A') ? 'bg-green-100 text-green-700' : q.grade.startsWith('B') ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
-                              {q.grade}
-                            </span>
-                          </td>
-                          <td className="px-5 py-3.5 text-muted-foreground text-xs">{q.date}</td>
-                        </tr>
-                      ))}
+                      {visibleCompletedQuizzes.map((q, i) => {
+                        const inProgress = q.status === 'in_progress'
+                        return (
+                          <tr key={i} className="hover:bg-muted/30 transition-colors">
+                            <td className="px-5 py-3.5 text-foreground font-medium text-sm">{q.title}</td>
+                            <td className="px-5 py-3.5"><span className="font-mono text-xs font-bold text-primary">{q.course}</span></td>
+                            <td className="px-5 py-3.5">
+                              <span className="font-mono font-bold text-foreground">{inProgress ? '—' : `${q.score}%`}</span>
+                            </td>
+                            <td className="px-5 py-3.5">
+                              {inProgress ? (
+                                <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-amber-100 text-amber-700">
+                                  <i className="fa-solid fa-hourglass-half mr-1" />In Progress
+                                </span>
+                              ) : (
+                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${q.grade.startsWith('A') ? 'bg-green-100 text-green-700' : q.grade.startsWith('B') ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                                  {q.grade}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-5 py-3.5 text-muted-foreground text-xs">{q.date}</td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                   </div>
@@ -1704,8 +1763,8 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {[
                   { label: 'GPA Equivalent', val: `${gpaEquivalent}`, sub: 'Approx. 4.0 scale', color: 'text-blue-600' },
-                  { label: 'Highest Score', val: `${highestScore}%`, sub: visibleCompletedQuizzes.length ? `${visibleCompletedQuizzes[0]?.course ?? 'Course'} top result` : 'No quizzes yet', color: 'text-success' },
-                  { label: 'Quizzes Passed', val: `${passedQuizCount}/${visibleCompletedQuizzes.length}`, sub: visibleCompletedQuizzes.length ? `${Math.round((passedQuizCount / visibleCompletedQuizzes.length) * 100) || 0}% pass rate` : 'No completed quizzes', color: 'text-purple-600' },
+                  { label: 'Highest Score', val: `${highestScore}%`, sub: finalizedCompletedQuizzes.length ? `${finalizedCompletedQuizzes[0]?.course ?? 'Course'} top result` : 'No quizzes yet', color: 'text-success' },
+                  { label: 'Quizzes Passed', val: `${passedQuizCount}/${finalizedCompletedQuizzes.length}`, sub: finalizedCompletedQuizzes.length ? `${Math.round((passedQuizCount / finalizedCompletedQuizzes.length) * 100) || 0}% pass rate` : 'No completed quizzes', color: 'text-purple-600' },
                   { label: 'Average Score', val: `${avgScore}%`, sub: 'All completed quizzes', color: 'text-accent' },
                 ].map((s, i) => (
                   <div key={i} className="bg-card border border-border rounded-2xl p-5">

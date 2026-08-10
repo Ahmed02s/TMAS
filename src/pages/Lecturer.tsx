@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback, type ChangeEvent } f
 import type { AppView } from '../App'
 import { API_BASE } from '../config'
 import ProfileModal from '../components/ProfileModal'
+import { dismissNotificationIds, getDismissedNotificationIds } from '../utils/notificationDismissal'
 
 type Tab = 'overview' | 'courses' | 'materials' | 'students' | 'quizgen' | 'quizreview' | 'analytics'
 
@@ -295,6 +296,25 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   const [savedUser, setSavedUser] = useState<Record<string, any> | null>(() =>
     typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('tmas-user') || 'null') : null,
   )
+  const [dismissedNotifIds, setDismissedNotifIds] = useState<Set<string>>(() => getDismissedNotificationIds(savedUser?.id))
+  const visibleNotifications = useMemo(
+    () => notifications.filter(n => !dismissedNotifIds.has(n.id)),
+    [notifications, dismissedNotifIds],
+  )
+  function dismissNotification(id: string) {
+    setDismissedNotifIds(dismissNotificationIds(savedUser?.id, [id]))
+  }
+  function clearAllNotifications() {
+    setDismissedNotifIds(dismissNotificationIds(savedUser?.id, notifications.map(n => n.id)))
+  }
+  function handleNotificationClick(n: { id: string; title: string }) {
+    const title = n.title.toLowerCase()
+    if (title.includes('assignment') || title.includes('course')) setTab('courses')
+    else if (title.includes('quiz')) setTab('quizreview')
+    else if (title.includes('student') || title.includes('submi')) setTab('students')
+    dismissNotification(n.id)
+    setNotifOpen(false)
+  }
 
   // Management view for already-published quizzes, so a lecturer can see (and fix) a
   // quiz that got stuck locked/scheduled instead of having to delete and regenerate it.
@@ -1149,7 +1169,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
             <div className="relative">
               <button onClick={() => setNotifOpen(!notifOpen)} className="relative p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted transition-colors" title="Notifications">
                 <i className="fa-solid fa-bell text-lg" />
-                {notifications.length > 0 && (
+                {visibleNotifications.length > 0 && (
                   <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-accent" />
                 )}
               </button>
@@ -1159,21 +1179,34 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                   <div className="absolute right-0 top-10 w-80 max-w-[90vw] bg-card border border-border rounded-2xl shadow-xl z-50 overflow-hidden">
                     <div className="px-4 py-3 border-b border-border flex items-center justify-between">
                       <p className="font-semibold text-foreground text-sm">Notifications</p>
-                      <span className="text-xs text-muted-foreground">{notifications.length} new</span>
+                      {visibleNotifications.length > 0 ? (
+                        <button onClick={clearAllNotifications} className="text-xs text-primary font-medium hover:underline">Clear all</button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Up to date</span>
+                      )}
                     </div>
                     <div className="max-h-72 overflow-y-auto">
-                      {notifications.length === 0 ? (
+                      {visibleNotifications.length === 0 ? (
                         <div className="p-6 text-center text-xs text-muted-foreground">No new notifications</div>
                       ) : (
-                        notifications.map((n, i) => (
-                          <div key={n.id || i} className="flex items-start gap-3 px-4 py-3 border-b border-border/50 last:border-0 hover:bg-muted/50 transition-colors">
-                            <span className="text-xs font-bold rounded-full px-2 py-1 bg-primary/10 text-primary shrink-0">
-                              <i className="fa-solid fa-bell" />
-                            </span>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-foreground text-xs font-semibold leading-snug">{n.title || 'Notification'}</p>
-                              {n.message && <p className="text-muted-foreground text-xs mt-0.5 line-clamp-2">{n.message}</p>}
-                            </div>
+                        visibleNotifications.map((n, i) => (
+                          <div key={n.id || i} className="flex items-start gap-3 px-4 py-3 border-b border-border/50 last:border-0 hover:bg-muted/50 transition-colors group">
+                            <button onClick={() => handleNotificationClick(n)} className="flex items-start gap-3 flex-1 min-w-0 text-left">
+                              <span className="text-xs font-bold rounded-full px-2 py-1 bg-primary/10 text-primary shrink-0">
+                                <i className="fa-solid fa-bell" />
+                              </span>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-foreground text-xs font-semibold leading-snug">{n.title || 'Notification'}</p>
+                                {n.message && <p className="text-muted-foreground text-xs mt-0.5 line-clamp-2">{n.message}</p>}
+                              </div>
+                            </button>
+                            <button
+                              onClick={() => dismissNotification(n.id)}
+                              className="shrink-0 text-muted-foreground hover:text-foreground p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Dismiss"
+                            >
+                              <i className="fa-solid fa-xmark text-xs" />
+                            </button>
                           </div>
                         ))
                       )}

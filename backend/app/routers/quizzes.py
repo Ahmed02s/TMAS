@@ -867,9 +867,14 @@ def _get_student_attempts(quiz_id: int, student_id: str) -> list[dict[str, Any]]
 
 
 def _fetch_student_attempt_counts(student_id: str) -> dict[int, int]:
-    """Returns count of *completed or missed* attempts per quiz for the given student.
-    In-progress attempts (score=0, not yet submitted) are intentionally excluded so
-    that students who opened a quiz can still submit without being blocked.
+    """Returns count of attempts per quiz for the given student, used solely by
+    list_available_quizzes to decide whether a quiz has already been used up.
+    Counts *any* attempt status, including in_progress: once a student has clicked
+    "Start" on a quiz, it must disappear from the available list immediately — leaving
+    the assessment screen (or simply not finishing before the close date) must not let
+    it reappear as available again. (start_quiz's own resumability check, which lets a
+    genuine same-session page refresh continue the SAME in-progress attempt, is separate
+    and unaffected by this — it looks up attempts directly, not through this function.)
     """
     try:
         response = supabase.table('quiz_attempts').select('quiz_id,status').eq('student_id', student_id).execute()
@@ -882,11 +887,9 @@ def _fetch_student_attempt_counts(student_id: str) -> dict[int, int]:
 
     counts: dict[int, int] = {}
     for attempt in response.data or []:
-        # Only count finalized attempts; ignore in_progress records
-        if attempt.get('status') in ('completed', 'missed'):
-            quiz_id = attempt.get('quiz_id')
-            if quiz_id is not None:
-                counts[quiz_id] = counts.get(quiz_id, 0) + 1
+        quiz_id = attempt.get('quiz_id')
+        if quiz_id is not None:
+            counts[quiz_id] = counts.get(quiz_id, 0) + 1
     return counts
 
 
@@ -1926,9 +1929,10 @@ def list_completed_quizzes(
 
     attempts_by_quiz: dict[int, dict[str, Any]] = {}
     for attempt in attempts:
-        # Only include finalized attempts in the history view
-        if attempt.get('status') == 'in_progress':
-            continue
+        # In-progress attempts are included (not just completed/missed) — once a student
+        # has started a quiz it must show up somewhere, and list_available_quizzes now
+        # hides it the instant it's started, so this is the only place left to see it
+        # (as a provisional 0% until they finish or the time limit finalizes it).
         quiz_id = attempt.get('quiz_id')
         if quiz_id is None:
             continue
@@ -1975,6 +1979,7 @@ def list_completed_quizzes(
             'date': attempt.get('attempted_at'),
             'grade': attempt.get('grade', ''),
             'passed': attempt.get('passed', False),
+            'status': attempt.get('status', 'completed'),
         })
 
     return {'quizzes': completed}

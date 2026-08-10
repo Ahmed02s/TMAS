@@ -4,6 +4,7 @@ import type { AppView } from '../App'
 import CourseModal, { type CourseFormValues } from '../components/CourseModal'
 import ProfileModal from '../components/ProfileModal'
 import { API_BASE } from '../config'
+import { dismissNotificationIds, getDismissedNotificationIds } from '../utils/notificationDismissal'
 
 type Tab = 'overview' | 'levels' | 'courses' | 'lecturers' | 'students' | 'analytics'
 
@@ -186,6 +187,17 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
   }
 
   const [notifications, setNotifications] = useState<Array<{ id: string; title: string; message: string; type?: string; read?: boolean; created_at?: string }>>([])
+  const [dismissedNotifIds, setDismissedNotifIds] = useState<Set<string>>(() => getDismissedNotificationIds(savedUser?.id))
+  const visibleNotifications = useMemo(
+    () => notifications.filter(n => !dismissedNotifIds.has(n.id)),
+    [notifications, dismissedNotifIds],
+  )
+  function dismissNotification(id: string) {
+    setDismissedNotifIds(dismissNotificationIds(savedUser?.id, [id]))
+  }
+  function clearAllNotifications() {
+    setDismissedNotifIds(dismissNotificationIds(savedUser?.id, notifications.map(n => n.id)))
+  }
   const seenNotifIdsRef = useRef<Set<string>>(new Set())
   const isInitialNotifLoadRef = useRef(true)
 
@@ -693,7 +705,9 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
                 </svg>
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-accent"></span>
+                {visibleNotifications.length > 0 && (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-accent"></span>
+                )}
               </button>
               {notifOpen && (
                 <>
@@ -702,42 +716,63 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
                   <div className="absolute right-0 top-10 w-80 bg-card border border-border rounded-2xl shadow-xl z-50 overflow-hidden">
                     <div className="px-4 py-3 border-b border-border flex items-center justify-between">
                       <p className="font-semibold text-foreground text-sm">Notifications</p>
-                      <span className="text-xs text-muted-foreground">{notifications.length} new</span>
+                      {visibleNotifications.length > 0 ? (
+                        <button onClick={clearAllNotifications} className="text-xs text-primary font-medium hover:underline">Clear all</button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Up to date</span>
+                      )}
                     </div>
                     <div className="max-h-72 overflow-y-auto">
-                      {notifications.length === 0 ? (
+                      {visibleNotifications.length === 0 ? (
                         <div className="p-6 text-center text-xs text-muted-foreground">No new notifications</div>
                       ) : (
-                        notifications.map((a: any, i) => {
+                        visibleNotifications.map((a: any, i) => {
                           // Some notification types have a clear, direct follow-up action for
                           // an admin — surface that instead of just displaying inert text.
                           const title = String(a.title || a.text || '')
                           const isLecturerRegistration = /lecturer registration/i.test(title)
+                          const isCourseAssignment = /course assignment/i.test(title)
                           const action = isLecturerRegistration
                             ? () => {
                                 setTab('lecturers')
                                 setLecturerSubTab('pending')
-                                setNotifOpen(false)
                               }
+                            : isCourseAssignment
+                            ? () => setTab('courses')
                             : null
 
                           return (
                             <div
-                              key={i}
-                              onClick={action ?? undefined}
-                              className={`flex items-start gap-3 px-4 py-3 border-b border-border/50 last:border-0 transition-colors ${action ? 'cursor-pointer hover:bg-primary/5' : 'hover:bg-muted/50'}`}
+                              key={a.id || i}
+                              className={`flex items-start gap-3 px-4 py-3 border-b border-border/50 last:border-0 transition-colors group ${action ? 'hover:bg-primary/5' : 'hover:bg-muted/50'}`}
                             >
-                              <span className={`text-xs font-bold rounded-full px-2 py-1 ${a.color || 'bg-primary/10 text-primary'}`}>
-                                <Icon name={a.icon || 'bell'} size={14} />
-                              </span>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-foreground text-xs font-semibold leading-snug">{title || 'Notification'}</p>
-                                {a.message && <p className="text-muted-foreground text-xs mt-0.5 line-clamp-2">{a.message}</p>}
-                                <div className="flex items-center justify-between mt-1">
-                                  <p className="text-[10px] text-muted-foreground/70">{a.created_at ? new Date(a.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (a.time || 'Recently')}</p>
-                                  {action && <span className="text-[10px] font-semibold text-primary">Review →</span>}
+                              <button
+                                onClick={() => {
+                                  action?.()
+                                  dismissNotification(a.id)
+                                  setNotifOpen(false)
+                                }}
+                                className={`flex items-start gap-3 flex-1 min-w-0 text-left ${action ? 'cursor-pointer' : ''}`}
+                              >
+                                <span className={`text-xs font-bold rounded-full px-2 py-1 ${a.color || 'bg-primary/10 text-primary'}`}>
+                                  <Icon name={a.icon || 'bell'} size={14} />
+                                </span>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-foreground text-xs font-semibold leading-snug">{title || 'Notification'}</p>
+                                  {a.message && <p className="text-muted-foreground text-xs mt-0.5 line-clamp-2">{a.message}</p>}
+                                  <div className="flex items-center justify-between mt-1">
+                                    <p className="text-[10px] text-muted-foreground/70">{a.created_at ? new Date(a.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (a.time || 'Recently')}</p>
+                                    {action && <span className="text-[10px] font-semibold text-primary">Review →</span>}
+                                  </div>
                                 </div>
-                              </div>
+                              </button>
+                              <button
+                                onClick={() => dismissNotification(a.id)}
+                                className="shrink-0 text-muted-foreground hover:text-foreground p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="Dismiss"
+                              >
+                                <i className="fa-solid fa-xmark text-xs" />
+                              </button>
                             </div>
                           )
                         })
