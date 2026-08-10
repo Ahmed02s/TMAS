@@ -1049,6 +1049,20 @@ def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_
             }
 
         if payload.generate_all_tiers:
+            # Every generate call inserts a fresh set of draft rows (see below) — if a
+            # lecturer generates more than once for the same course without publishing in
+            # between (didn't like the questions, navigated away mid-wizard, page refresh),
+            # the previous attempt's drafts were never cleaned up. They'd sit in the DB
+            # forever with status='draft' and no open/close date, and since Question Banks
+            # and "Manage Published Quizzes" both read from the same endpoint, an abandoned
+            # draft could show up looking exactly like a published quiz with a blank
+            # schedule. Clear out this course's old, never-published drafts before creating
+            # new ones — quiz_questions cascades on delete, so no separate cleanup needed.
+            try:
+                supabase.table('quizzes').delete().eq('course', effective_course).eq('status', 'draft').execute()
+            except Exception:
+                logger.exception('generate_quiz: failed to clear old draft quizzes for course=%s', effective_course)
+
             quiz_sets = []
             questions_by_tier: dict[str, list[dict[str, Any]]] = {}
             draft_quiz_ids: dict[str, int] = {}

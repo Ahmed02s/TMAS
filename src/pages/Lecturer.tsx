@@ -530,7 +530,14 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       const res = await fetch(`${API_BASE}/api/quizzes?course=${encodeURIComponent(course)}`)
       if (!res.ok) throw new Error('Failed to load published quizzes')
       const data = await res.json()
-      const list = data.quizzes || []
+      // This endpoint is shared with Question Banks, which intentionally needs draft rows
+      // (a bank surfaces there the instant it's generated, before scheduling/publishing) —
+      // but "Manage Published Quizzes" must not show them. Left unfiltered, an abandoned
+      // draft from an earlier generate attempt that was never published (page refresh,
+      // navigating away mid-wizard, generating again before finishing) sits here forever
+      // with no schedule, right alongside the real published quiz for the same tier —
+      // which is exactly what looks like "the dates never saved."
+      const list = (data.quizzes || []).filter((q: any) => q.status !== 'draft')
       setPublishedQuizzes(list)
       setScheduleDrafts(prev => {
         const next = { ...prev }
