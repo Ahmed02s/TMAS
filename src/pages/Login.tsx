@@ -403,6 +403,22 @@ export default function Login({
                 <p className="text-muted-foreground text-sm mb-8">Sign in to your TMAS account to continue.</p>
 
                 <div className="space-y-4">
+                  {/* Prevent browser autofill persistence on refresh */}
+                  <input
+                    type="text"
+                    autoComplete="username"
+                    defaultValue=""
+                    readOnly
+                    style={{ position: 'absolute', opacity: 0, height: 0, width: 0, pointerEvents: 'none', zIndex: -1 }}
+                  />
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    defaultValue=""
+                    readOnly
+                    style={{ position: 'absolute', opacity: 0, height: 0, width: 0, pointerEvents: 'none', zIndex: -1 }}
+                  />
+
                   {/* Email */}
                   <div>
                     <label className="block text-sm font-medium text-foreground mb-1.5">
@@ -410,6 +426,7 @@ export default function Login({
                     </label>
                     <input
                       type="email"
+                      autoComplete="username"
                       value={email}
                       onChange={e => { setEmail(e.target.value); setEmailErr('') }}
                       onBlur={() => setEmailErr(validateEmail(email))}
@@ -434,6 +451,7 @@ export default function Login({
                     <div className="relative">
                       <input
                         type={showLoginPassword ? 'text' : 'password'}
+                        autoComplete="current-password"
                         value={password}
                         onChange={e => { setPassword(e.target.value); setPasswordErr('') }}
                         onBlur={() => setPasswordErr(!password ? 'Password is required.' : '')}
