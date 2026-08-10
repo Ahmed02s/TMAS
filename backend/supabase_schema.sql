@@ -69,6 +69,12 @@ CREATE TABLE IF NOT EXISTS materials (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- NOTE: the actual deployed table (created before this file existed, so `CREATE TABLE IF
+-- NOT EXISTS` below is a no-op against it) uses `available_from`/`available_until` instead
+-- of `open_date`/`close_date`. backend/app/routers/quizzes.py's _prepare_quiz_write /
+-- _normalize_quiz_row translate between the two at the read/write boundary, so this file is
+-- written to match the REAL column names — keep it that way, since a fresh database created
+-- from this script needs to match what the code actually writes to.
 CREATE TABLE IF NOT EXISTS quizzes (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   title TEXT NOT NULL,
@@ -78,8 +84,8 @@ CREATE TABLE IF NOT EXISTS quizzes (
   passing_score INTEGER,
   attempts INTEGER,
   due_date TEXT,
-  open_date TEXT,
-  close_date TEXT,
+  available_from TEXT,
+  available_until TEXT,
   status TEXT,
   difficulty TEXT,
   tier TEXT NOT NULL DEFAULT 'Foundational',
