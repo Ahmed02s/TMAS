@@ -87,6 +87,11 @@ type MaterialItem = {
   status: string
   path?: string
   file_url?: string
+  // Set for a PPTX/PPT that was converted to PDF at upload time (see office_convert.py) —
+  // when present, the reader shows the converted PDF via PdfReader instead of the
+  // client-side JSZip approximation. Absent for PDFs themselves and for materials
+  // uploaded/converted before this feature existed.
+  pdf_url?: string | null
 }
 
 function mapCourse(course: Record<string, any>): Course {
@@ -2077,6 +2082,9 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                       const activeMaterial = materials.find(item => item.id === activeMaterialId)
                       if (!activeMaterial) return null
                       const downloadUrl = `${API_BASE}/api/materials/${activeMaterial.id}/download`
+                      // "Download Original" always links to the true source file above —
+                      // this is only used to make the reader treat a converted PPTX as a PDF.
+                      const pdfViewUrl = activeMaterial.pdf_url ? `${API_BASE}/api/materials/${activeMaterial.id}/pdf` : undefined
 
                       return (
                         <>
@@ -2132,6 +2140,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                                   materialId={activeMaterial.id}
                                   materialName={activeMaterial.name}
                                   downloadUrl={downloadUrl}
+                                  pdfViewUrl={pdfViewUrl}
                                   studentId={savedUser?.id}
                                   fontSize={readerFontSize}
                                   onCompleted={() => markMaterialCompleted(activeMaterial.id, savedUser?.id)}

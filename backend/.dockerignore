@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.env.*
+data/uploads/
+tests/
+.pytest_cache_local/
+.pytest_tmp/

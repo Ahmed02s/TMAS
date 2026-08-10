@@ -12,6 +12,11 @@ type MaterialViewerProps = {
   materialId: number
   materialName: string
   downloadUrl: string
+  // Set when materialName is a .pptx/.ppt that was converted to PDF at upload time (see
+  // backend/app/services/office_convert.py). When present, this material is read as a PDF
+  // via PdfReader instead of the client-side JSZip approximation — downloadUrl still points
+  // at the true original file for the "Download Original" link, unaffected.
+  pdfViewUrl?: string
   studentId?: string
   fontSize: FontSize
   onCompleted?: () => void
@@ -208,7 +213,7 @@ function PptxSlides({ slides }: { slides: PptxSlide[] }) {
 // extract anything meaningful either, in which case it returns this fixed placeholder.
 const SERVER_EXTRACTION_PLACEHOLDER_PREFIX = 'Material: '
 
-export default function MaterialViewer({ materialId, materialName, downloadUrl, studentId, fontSize, onCompleted }: MaterialViewerProps) {
+export default function MaterialViewer({ materialId, materialName, downloadUrl, pdfViewUrl, studentId, fontSize, onCompleted }: MaterialViewerProps) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'legacy-unsupported'>('loading')
   const [downloadPct, setDownloadPct] = useState<number | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
@@ -219,7 +224,9 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
   const [pdfResumePage, setPdfResumePage] = useState<number | undefined>(undefined)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const ext = getExtension(materialName)
-  const isPdf = ext === 'pdf'
+  // A converted PPTX (pdfViewUrl set) is read as a PDF even though its real extension isn't.
+  const isPdf = ext === 'pdf' || Boolean(pdfViewUrl)
+  const fetchUrl = pdfViewUrl || downloadUrl
 
   // ── Load + parse the raw file client-side ──
   useEffect(() => {
@@ -251,13 +258,13 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
 
     async function load() {
       try {
-        const buf = await fetchWithProgress(downloadUrl, pct => {
+        const buf = await fetchWithProgress(fetchUrl, pct => {
           if (!cancelled) setDownloadPct(pct)
         })
         if (cancelled) return
         setDownloadPct(null)
 
-        if (ext === 'pdf') {
+        if (isPdf) {
           // Best-effort resume lookup — a failure here just means the reader opens at
           // page 1, same as before this feature existed, rather than blocking the PDF.
           if (studentId) {
@@ -316,7 +323,7 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
     return () => {
       cancelled = true
     }
-  }, [materialId, downloadUrl, ext])
+  }, [materialId, fetchUrl, ext, isPdf])
 
   // ── Scroll-depth + time-on-page telemetry (non-PDF formats only — PdfReader owns its own
   // page-based equivalent of this, since a page position is a more meaningful progress
@@ -434,7 +441,7 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
         </div>
       )}
 
-      {status === 'ready' && ext === 'pdf' && pdfBuffer && (
+      {status === 'ready' && isPdf && pdfBuffer && (
         <PdfReader
           materialId={materialId}
           arrayBuffer={pdfBuffer}

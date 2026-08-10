@@ -1,5 +1,6 @@
 import logging
 import re
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Any
@@ -10,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from app.core.security import get_current_claims_optional, require_roles
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
+from app.services import office_convert
 import postgrest
 
 logger = logging.getLogger(__name__)
@@ -205,6 +207,23 @@ def get_reading_progress(student_id: str | None = None, course: str | None = Non
     except Exception:
         logger.exception('get_reading_progress failed for student_id=%s course=%s', student_id, course)
         return {'read_ids': [], 'course_progress': {}}
+
+
+def _safe_insert(table: str, record: dict[str, Any]) -> Any:
+    """Insert, dropping any column PostgREST reports as missing and retrying — generalizes
+    what upload_materials used to do as a hand-written check for just the 'path' column, so
+    new optional fields (e.g. pdf_url) also degrade gracefully on a deployment whose table
+    hasn't been migrated yet, without a fresh hardcoded check for each one."""
+    body = dict(record)
+    while True:
+        try:
+            return supabase.table(table).insert(body).execute()
+        except postgrest.exceptions.APIError as exc:
+            msg = str(exc)
+            m = re.search(r"Could not find the '([^']+)' column", msg)
+            if not m or m.group(1) not in body:
+                raise
+            body.pop(m.group(1), None)
 
 
 def _safe_upsert(table: str, record: dict[str, Any], on_conflict: str) -> Any:
@@ -504,6 +523,28 @@ async def upload_materials(
             print(f"Supabase storage bucket upload fallback to local disk: {err}")
             storage_warnings.append(filename)
 
+        # PPTX/PPT -> PDF: lets the reader show the same paginated PdfReader used for real
+        # PDFs instead of the client-side JSZip text+image approximation. Only runs where
+        # LibreOffice is actually installed (see backend/Dockerfile) — silently skipped
+        # everywhere else (local dev, or Render before it's switched to the Docker deploy
+        # that installs it), leaving the original upload unaffected either way.
+        pdf_url = None
+        if file_ext in {'.pptx', '.ppt'} and office_convert.is_conversion_available():
+            converted_path = office_convert.convert_to_pdf(file_path)
+            if converted_path:
+                try:
+                    pdf_storage_path = f"{re.sub(r'[^a-zA-Z0-9._-]', '_', course)}/{file_path.stem}.pdf"
+                    supabase.storage.from_('materials').upload(
+                        path=pdf_storage_path,
+                        file=converted_path.read_bytes(),
+                        file_options={'content-type': 'application/pdf', 'upsert': 'true'},
+                    )
+                    pdf_url = supabase.storage.from_('materials').get_public_url(pdf_storage_path)
+                except Exception:
+                    logger.exception('upload_materials: failed to upload converted PDF for %s', filename)
+                finally:
+                    shutil.rmtree(converted_path.parent, ignore_errors=True)
+
         record = {
             'name': filename,
             'course': course,
@@ -514,31 +555,16 @@ async def upload_materials(
             'quiz_generated': False,
             'path': str(file_path),
             'file_url': file_url,
+            'pdf_url': pdf_url,
             'file_name': filename,
             'file_type': file_ext,
             'file_size': len(contents),
         }
 
-        try:
-            response = supabase.table('materials').insert(record).execute()
-        except postgrest.exceptions.APIError as e:
-            err_msg = str(e)
-            if "Could not find the 'path' column" in err_msg or "Could not find the \"path\" column" in err_msg:
-                minimal = dict(record)
-                minimal.pop('path', None)
-                try:
-                    retry_resp = supabase.table('materials').insert(minimal).execute()
-                except postgrest.exceptions.APIError as e2:
-                    raise HTTPException(status_code=502, detail=f'Supabase insert material failed for {filename} (retry without path): {e2}')
-                if supabase_failed(retry_resp):
-                    raise HTTPException(status_code=502, detail=supabase_error_message(retry_resp, f'Supabase insert material failed for {filename} (retry without path)'))
-                created_materials.extend(retry_resp.data or [])
-            else:
-                raise HTTPException(status_code=502, detail=f'Supabase insert material failed for {filename}: {err_msg}')
-        else:
-            if supabase_failed(response):
-                raise HTTPException(status_code=502, detail=supabase_error_message(response, f'Supabase insert material failed for {filename}'))
-            created_materials.extend(response.data or [])
+        insert_resp = _safe_insert('materials', record)
+        if supabase_failed(insert_resp):
+            raise HTTPException(status_code=502, detail=supabase_error_message(insert_resp, f'Supabase insert material failed for {filename}'))
+        created_materials.extend(insert_resp.data or [])
 
     result: dict[str, Any] = {'materials': created_materials}
     if storage_warnings:
@@ -634,6 +660,34 @@ def download_material(material_id: int):
         raise HTTPException(status_code=404, detail='Material file not found on disk')
 
     return FileResponse(resolved_path, filename=material.get('name') or resolved_path.name)
+
+
+@router.api_route('/{material_id}/pdf', methods=['GET', 'HEAD'])
+def download_material_pdf(material_id: int):
+    """Serves a PPTX/PPT's converted PDF (see office_convert.py) so the frontend can read it
+    through PdfReader instead of the client-side PPTX approximation. 404s if this material
+    was never converted (uploaded before the feature existed, not a PPTX, or converted on a
+    deployment without LibreOffice) — the frontend falls back to the original PPTX flow
+    unchanged when this 404s, so it's a safe, additive endpoint."""
+    ensure_supabase_enabled()
+    try:
+        # Named column select (not '*') fails outright if `pdf_url` doesn't exist yet on
+        # this deployment — treated the same as "not converted" rather than a 502, since
+        # either way there's no converted PDF to serve.
+        response = supabase.table('materials').select('pdf_url').eq('id', material_id).limit(1).execute()
+    except postgrest.exceptions.APIError:
+        raise HTTPException(status_code=404, detail='No converted PDF available for this material')
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase get material failed'))
+    if not response.data:
+        raise HTTPException(status_code=404, detail='Material not found')
+
+    pdf_url = response.data[0].get('pdf_url')
+    if not pdf_url:
+        raise HTTPException(status_code=404, detail='No converted PDF available for this material')
+
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url=pdf_url, status_code=302)
 
 
 @router.get('/{material_id}/content')

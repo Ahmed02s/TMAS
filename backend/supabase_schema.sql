@@ -66,6 +66,11 @@ CREATE TABLE IF NOT EXISTS materials (
   uploaded TEXT,
   status TEXT,
   quiz_generated BOOLEAN DEFAULT FALSE,
+  -- Public Storage URL of a PPTX/PPT's converted PDF (see backend/app/services/office_convert.py
+  -- + the LibreOffice-based backend/Dockerfile). NULL for PDFs themselves and for any PPTX
+  -- uploaded before this feature existed, or converted on a deployment without LibreOffice —
+  -- both cases fall back to the existing client-side JSZip PPTX reader unchanged.
+  pdf_url TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
