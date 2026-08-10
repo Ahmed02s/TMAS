@@ -25,6 +25,20 @@ function getExtension(name: string): string {
   return (name.split('.').pop() || '').toLowerCase()
 }
 
+// mammoth (.docx) and JSZip (.pptx) only understand the modern zip/XML-based Office formats.
+// A genuine legacy .doc/.ppt (pre-2007 OLE binary format) isn't a zip file at all, so handing
+// one to either library throws immediately — the student just saw a broken/error state with
+// no useful explanation. Detecting the real format from its magic bytes (rather than trusting
+// the extension, since a modern .docx is sometimes saved with a .doc extension by mistake and
+// should still render normally) lets legacy files fall back to a server-extracted plain-text
+// preview instead of failing outright.
+const OLE_MAGIC = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]
+
+function isLegacyOleFormat(buf: ArrayBuffer): boolean {
+  const bytes = new Uint8Array(buf.slice(0, 8))
+  return OLE_MAGIC.every((b, i) => bytes[i] === b)
+}
+
 // ── PPTX: parse the raw zip/XML structure (no rendering library exists that both
 // handles real PPTX layout AND runs fully client-side) — extract each slide's title
 // and body text via the DOM's own XML parser, then render as styled slide cards. ──
@@ -118,8 +132,14 @@ async function renderPdfIntoContainer(arrayBuffer: ArrayBuffer, container: HTMLD
   }
 }
 
+// A legacy-format file the browser truly can't render — server-side extraction (which uses
+// the same Python libraries as quiz generation) is tried first since it sometimes succeeds
+// where mammoth/JSZip can't, but for a genuine old binary .doc/.ppt it typically can't
+// extract anything meaningful either, in which case it returns this fixed placeholder.
+const SERVER_EXTRACTION_PLACEHOLDER_PREFIX = 'Material: '
+
 export default function MaterialViewer({ materialId, materialName, downloadUrl, studentId, fontSize, onCompleted }: MaterialViewerProps) {
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'legacy-unsupported'>('loading')
   const [errorMsg, setErrorMsg] = useState('')
   const [docxHtml, setDocxHtml] = useState('')
   const [pptxSlides, setPptxSlides] = useState<PptxSlide[] | null>(null)
@@ -136,6 +156,22 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
     setDocxHtml('')
     setPptxSlides(null)
     setTextContent(null)
+
+    async function tryServerExtractedText(): Promise<boolean> {
+      try {
+        const res = await fetch(`${API_BASE}/api/materials/${materialId}/content`)
+        if (!res.ok) return false
+        const data = await res.json()
+        const content = String(data?.content || '')
+        if (!content || content.startsWith(SERVER_EXTRACTION_PLACEHOLDER_PREFIX)) return false
+        if (cancelled) return true
+        setTextContent(content)
+        setStatus('ready')
+        return true
+      } catch {
+        return false
+      }
+    }
 
     async function load() {
       try {
@@ -155,11 +191,24 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
             }
           })
         } else if (ext === 'docx' || ext === 'doc') {
+          if (isLegacyOleFormat(buf)) {
+            // Genuine legacy binary .doc — mammoth can only parse the modern zip/XML .docx
+            // format and would just throw. Try the server's plain-text extraction instead of
+            // failing outright; if that also comes up empty, say so plainly rather than
+            // showing a raw/confusing error.
+            if (!(await tryServerExtractedText()) && !cancelled) setStatus('legacy-unsupported')
+            return
+          }
           const result = await mammoth.convertToHtml({ arrayBuffer: buf })
           if (cancelled) return
           setDocxHtml(DOMPurify.sanitize(result.value))
           setStatus('ready')
         } else if (ext === 'pptx' || ext === 'ppt') {
+          if (isLegacyOleFormat(buf)) {
+            // Genuine legacy binary .ppt — JSZip can't unzip a non-zip OLE file.
+            if (!(await tryServerExtractedText()) && !cancelled) setStatus('legacy-unsupported')
+            return
+          }
           const slides = await parsePptx(buf)
           if (cancelled) return
           setPptxSlides(slides)
@@ -274,6 +323,15 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
         <div className="p-8 text-center text-sm text-danger">
           <i className="fa-solid fa-triangle-exclamation mb-2 block text-xl" />
           {errorMsg || 'Unable to render this material. Try downloading the original file.'}
+        </div>
+      )}
+
+      {status === 'legacy-unsupported' && (
+        <div className="p-8 text-center text-sm text-muted-foreground">
+          <i className="fa-solid fa-file-circle-exclamation mb-2 block text-xl text-amber-500" />
+          This file is an older {ext === 'doc' ? 'Word (.doc)' : 'PowerPoint (.ppt)'} format that can't be
+          previewed in the browser. Use the Download button to view it in{' '}
+          {ext === 'doc' ? 'Word' : 'PowerPoint'}.
         </div>
       )}
 
