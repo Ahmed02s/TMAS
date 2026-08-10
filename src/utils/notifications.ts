@@ -129,21 +129,30 @@ export function playNotificationChime() {
 /**
  * Dispatch a new notification to the backend and trigger native push notification
  */
-export async function dispatchPushNotification(payload: {
-  title: string
-  message: string
-  target_role?: 'all' | 'student' | 'lecturer' | 'admin'
-  user_id?: string
-  type?: 'info' | 'success' | 'warning' | 'danger'
-}) {
+export async function dispatchPushNotification(
+  payload: {
+    title: string
+    message: string
+    target_role?: 'all' | 'student' | 'lecturer' | 'admin'
+    user_id?: string
+    type?: 'info' | 'success' | 'warning' | 'danger'
+  },
+  /** Explicit bearer token for the one call site (lecturer registration) that fires before
+   * any session is stored in localStorage, so the global fetch-auth patch has nothing to
+   * attach automatically. Every other caller is already inside an authenticated portal and
+   * can omit this — the patch covers it. */
+  authToken?: string,
+) {
   // Trigger web push on current device if matching role
   triggerWebPushNotification(payload.title, { body: payload.message })
   playNotificationChime()
 
   try {
+    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`
     await fetch(`${API_BASE}/api/notifications`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers,
       body: JSON.stringify(payload),
     })
   } catch (err) {

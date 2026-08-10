@@ -1,3 +1,4 @@
+import logging
 import random
 import re
 import json
@@ -15,6 +16,7 @@ from app.core.security import get_current_claims, get_current_claims_optional, r
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 from app.core.config import QROK_API_KEY, QROK_API_URL
 
+logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 
@@ -28,6 +30,16 @@ def _verify_acting_as_self(claims: dict[str, Any], student_id: str) -> None:
     who was really calling it. Admins/lecturers aren't exempted: nothing about starting or
     submitting a student's quiz attempt is a legitimate lecturer/admin action."""
     if str(claims.get('sub') or '') != str(student_id or ''):
+        raise HTTPException(status_code=403, detail='You can only do this for your own account')
+
+
+def _verify_acting_as_self_if_authenticated(claims: dict[str, Any] | None, student_id: str) -> None:
+    """Soft version of _verify_acting_as_self for read-only GETs (available/completed quiz
+    lists, quiz detail) that currently take student_id as a plain query param with no
+    required auth. Only enforced when a token IS present, so it doesn't newly break any
+    existing caller — it just stops one logged-in student's token from being used to pull
+    another student's quiz history/results by passing a different student_id."""
+    if claims is not None and str(claims.get('sub') or '') != str(student_id or ''):
         raise HTTPException(status_code=403, detail='You can only do this for your own account')
 
 
@@ -440,7 +452,11 @@ def _call_llm_for_questions(course: str, material_titles: list[str], question_ty
                 if resp.status_code == 200:
                     raw_text = resp.json()['choices'][0]['message']['content']
         except Exception:
-            pass
+            # Falls through to Gemini/OpenAI/the deterministic fallback generator below, so
+            # this must never surface as a request failure — but still worth knowing about,
+            # since a lecturer whose questions are always template-generated has no other way
+            # to find out AI generation is silently failing (bad key, quota, etc).
+            logger.exception('_call_llm_for_questions: Groq request failed')
 
     # Step 2: Try Secondary (Google Gemini 1.5 Flash)
     if not raw_text and GEMINI_API_KEY:
@@ -455,7 +471,7 @@ def _call_llm_for_questions(course: str, material_titles: list[str], question_ty
                 if g_resp.status_code == 200:
                     raw_text = g_resp.json()['candidates'][0]['content']['parts'][0]['text']
         except Exception:
-            pass
+            logger.exception('_call_llm_for_questions: Gemini request failed')
 
     # Step 3: Try Tertiary (OpenAI gpt-4o-mini)
     if not raw_text and OPENAI_API_KEY:
@@ -472,7 +488,7 @@ def _call_llm_for_questions(course: str, material_titles: list[str], question_ty
                 if o_resp.status_code == 200:
                     raw_text = o_resp.json()['choices'][0]['message']['content']
         except Exception:
-            pass
+            logger.exception('_call_llm_for_questions: OpenAI request failed')
 
     if not raw_text:
         return None
@@ -610,10 +626,11 @@ def _finalize_in_progress_attempts(student_id: str, now: datetime) -> None:
     try:
         response = supabase.table('quiz_attempts').select('*').eq('student_id', student_id).eq('status', 'in_progress').execute()
     except _postgrest_exceptions.APIError as exc:
-        if _is_missing_table_error(exc):
-            return
+        if not _is_missing_table_error(exc):
+            logger.exception('_finalize_in_progress_attempts: quiz_attempts fetch failed for student_id=%s', student_id)
         return
     except Exception:
+        logger.exception('_finalize_in_progress_attempts: quiz_attempts fetch failed for student_id=%s', student_id)
         return
 
     if supabase_failed(response) or not response.data:
@@ -627,6 +644,7 @@ def _finalize_in_progress_attempts(student_id: str, now: datetime) -> None:
     try:
         quizzes_resp = supabase.table('quizzes').select('*').in_('id', quiz_ids).execute()
     except Exception:
+        logger.exception('_finalize_in_progress_attempts: quizzes fetch failed for quiz_ids=%s', quiz_ids)
         return
     if supabase_failed(quizzes_resp):
         return
@@ -653,6 +671,7 @@ def _finalize_in_progress_attempts(student_id: str, now: datetime) -> None:
                     'attempted_at': now.isoformat(),
                 }).eq('id', attempt['id']).execute()
             except Exception:
+                logger.exception('_finalize_in_progress_attempts: failed to mark attempt id=%s as missed', attempt.get('id'))
                 continue
 
 
@@ -665,11 +684,13 @@ def _finalize_never_attempted_expired_quizzes(student_id: str, now: datetime) ->
     try:
         student_level, student_program = _student_level_program(student_id)
     except Exception:
+        logger.exception('_finalize_never_attempted_expired_quizzes: failed to resolve level/program for student_id=%s', student_id)
         return
 
     try:
         all_quizzes_resp = supabase.table('quizzes').select('*').execute()
     except Exception:
+        logger.exception('_finalize_never_attempted_expired_quizzes: quizzes fetch failed')
         return
     if supabase_failed(all_quizzes_resp):
         return
@@ -677,6 +698,7 @@ def _finalize_never_attempted_expired_quizzes(student_id: str, now: datetime) ->
     try:
         allowed_codes = set(_fetch_allowed_course_codes(student_level, student_program)) if student_level else set()
     except Exception:
+        logger.exception('_finalize_never_attempted_expired_quizzes: failed to resolve allowed course codes for student_id=%s', student_id)
         return
     target_digit = _extract_level_digit(student_level) if student_level else None
 
@@ -711,6 +733,7 @@ def _finalize_never_attempted_expired_quizzes(student_id: str, now: datetime) ->
     try:
         existing_resp = supabase.table('quiz_attempts').select('quiz_id').eq('student_id', student_id).in_('quiz_id', list(expired_eligible.keys())).execute()
     except Exception:
+        logger.exception('_finalize_never_attempted_expired_quizzes: existing attempts fetch failed for student_id=%s', student_id)
         return
     if supabase_failed(existing_resp):
         return
@@ -1511,12 +1534,22 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
                 return True
         return False
 
+    # Built after grading (attempt is already locked in) so the post-submission review
+    # screen can show correct answers without ever exposing them beforehand.
+    review: list[dict[str, Any]] = []
     for idx, question in enumerate(questions):
         answer = payload.answers.get(str(idx), '')
         q_type = question.get('type', 'MCQ')
-        if _answers_match(question.get('correct', ''), answer, q_type):
+        is_correct = _answers_match(question.get('correct', ''), answer, q_type)
+        if is_correct:
             correct += 1
-
+        review.append({
+            'question': question.get('question', ''),
+            'options': question.get('options', []),
+            'correct': question.get('correct', ''),
+            'student_answer': answer,
+            'is_correct': is_correct,
+        })
 
     total_questions = len(questions)
     score = round((correct / total_questions) * 100) if total_questions else 0
@@ -1552,7 +1585,7 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
         if supabase_failed(insert_response):
             raise HTTPException(status_code=502, detail=supabase_error_message(insert_response, 'Supabase insert quiz attempt failed'))
 
-    return {'attempt': attempt_record, 'quiz': quiz}
+    return {'attempt': attempt_record, 'quiz': quiz, 'review': review}
 
 
 class QuizForfeitRequest(BaseModel):
@@ -1631,7 +1664,7 @@ def get_quiz_stats() -> dict[str, Any]:
         if not supabase_failed(attempts_resp):
             quizzes_with_completions = len({a['quiz_id'] for a in (attempts_resp.data or []) if a.get('quiz_id') is not None})
     except Exception:
-        pass
+        logger.exception('get_quiz_stats: quiz_attempts fetch failed')
 
     return {'total_quizzes': total_quizzes, 'quizzes_with_completions': quizzes_with_completions}
 
@@ -1757,7 +1790,18 @@ def update_quiz_schedule(quiz_id: int, payload: UpdateQuizScheduleRequest, _clai
 
 
 @router.get('/available')
-def list_available_quizzes(level: str | None = None, program: str | None = None, student_id: str | None = None) -> dict[str, Any]:
+def list_available_quizzes(
+    level: str | None = None,
+    program: str | None = None,
+    student_id: str | None = None,
+    claims: dict | None = Depends(get_current_claims_optional),
+) -> dict[str, Any]:
+    # No student_id at all is a legitimate admin-dashboard aggregate call (see Admin.tsx),
+    # and admins/lecturers already have broader student-visibility elsewhere (dashboard.py,
+    # course student-progress) — only enforce identity for a student-role caller who passed
+    # a specific student_id, so one student's token can't pull another's quiz history.
+    if student_id and claims is not None and str(claims.get('role') or '') not in ('admin', 'administrator', 'lecturer'):
+        _verify_acting_as_self_if_authenticated(claims, student_id)
     ensure_supabase_enabled()
     if student_id:
         _finalize_expired_in_progress_for_student(student_id)
@@ -1848,16 +1892,24 @@ def list_available_quizzes(level: str | None = None, program: str | None = None,
 
 
 @router.get('/completed')
-def list_completed_quizzes(student_id: str | None = None, level: str | None = None, program: str | None = None) -> dict[str, Any]:
+def list_completed_quizzes(
+    student_id: str | None = None,
+    level: str | None = None,
+    program: str | None = None,
+    claims: dict | None = Depends(get_current_claims_optional),
+) -> dict[str, Any]:
     ensure_supabase_enabled()
     if not student_id:
         return {'quizzes': []}
+    if claims is not None and str(claims.get('role') or '') not in ('admin', 'administrator', 'lecturer'):
+        _verify_acting_as_self_if_authenticated(claims, student_id)
 
     _finalize_expired_in_progress_for_student(student_id)
 
     try:
         attempts_response = supabase.table('quiz_attempts').select('*').eq('student_id', student_id).execute()
     except Exception:
+        logger.exception('list_completed_quizzes: quiz_attempts fetch failed for student_id=%s', student_id)
         return {'quizzes': []}
     if supabase_failed(attempts_response):
         return {'quizzes': []}
@@ -1922,7 +1974,15 @@ def list_completed_quizzes(student_id: str | None = None, level: str | None = No
 
 
 @router.get('/{quiz_id}')
-def get_quiz_details(quiz_id: int, level: str | None = None, program: str | None = None, student_id: str | None = None) -> dict[str, Any]:
+def get_quiz_details(
+    quiz_id: int,
+    level: str | None = None,
+    program: str | None = None,
+    student_id: str | None = None,
+    claims: dict | None = Depends(get_current_claims_optional),
+) -> dict[str, Any]:
+    if student_id and claims is not None and str(claims.get('role') or '') not in ('admin', 'administrator', 'lecturer'):
+        _verify_acting_as_self_if_authenticated(claims, student_id)
     ensure_supabase_enabled()
     response = supabase.table('quizzes').select('*').eq('id', quiz_id).limit(1).execute()
     if supabase_failed(response):
@@ -1954,7 +2014,12 @@ def get_quiz_details(quiz_id: int, level: str | None = None, program: str | None
 
     questions = []
     for q in raw_questions:
-        q_copy = dict(q)
+        # SECURITY: never send the answer key to the client before the quiz is submitted —
+        # this response is fetched and held in the browser for the entire time the student
+        # is answering, so including `correct` here let anyone read every answer straight
+        # out of the network tab / component state before picking anything. Grading and the
+        # post-submission review both happen server-side in submit_quiz instead.
+        q_copy = {k: v for k, v in q.items() if k != 'correct'}
         opts = q_copy.get('options')
         if isinstance(opts, list) and len(opts) > 1:
             opts_copy = list(opts)

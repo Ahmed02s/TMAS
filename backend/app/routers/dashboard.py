@@ -8,6 +8,13 @@ from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase
 
 router = APIRouter(prefix='/api/dashboard', tags=['dashboard'])
 
+
+def _strip_password(row: dict[str, Any]) -> dict[str, Any]:
+    """`users` rows carry a `password` column (bcrypt hash, or plaintext for accounts not
+    yet migrated) that must never reach the browser, even for an admin's own dashboard."""
+    return {k: v for k, v in row.items() if k != 'password'}
+
+
 _VALID_LECTURER_STATUSES = {'active', 'rejected', 'suspended'}
 _VALID_STUDENT_STATUSES = {'active', 'suspended', 'revoked'}
 
@@ -47,7 +54,12 @@ class UpdateStudentRequest(BaseModel):
 
 
 @router.get('/students')
-def list_students(level: str | None = None, program: str | None = None, lecturer: str | None = None) -> dict[str, Any]:
+def list_students(
+    level: str | None = None,
+    program: str | None = None,
+    lecturer: str | None = None,
+    _claims: dict = Depends(require_roles('admin', 'administrator', 'lecturer')),
+) -> dict[str, Any]:
     ensure_supabase_enabled()
     query = supabase.table('users').select('*').eq('role', 'student')
     if level:
@@ -71,16 +83,16 @@ def list_students(level: str | None = None, program: str | None = None, lecturer
             course_pairs = {(course.get('level'), course.get('program')) for course in (course_resp.data or [])}
             students = [student for student in students if (student.get('level'), student.get('program')) in course_pairs]
 
-    return {'students': students}
+    return {'students': [_strip_password(s) for s in students]}
 
 
 @router.get('/lecturers')
-def list_lecturers() -> dict[str, Any]:
+def list_lecturers(_claims: dict = Depends(require_roles('admin', 'administrator'))) -> dict[str, Any]:
     ensure_supabase_enabled()
     response = supabase.table('users').select('*').eq('role', 'lecturer').execute()
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase list lecturers failed'))
-    return {'lecturers': response.data or []}
+    return {'lecturers': [_strip_password(l) for l in (response.data or [])]}
 
 
 @router.patch('/lecturers/{lecturer_id}/status')
@@ -90,12 +102,12 @@ def update_lecturer_status(lecturer_id: str, payload: UpdateLecturerStatusReques
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase update lecturer status failed'))
     if response.data:
-        return {'lecturer': response.data[0]}
+        return {'lecturer': _strip_password(response.data[0])}
     raise HTTPException(status_code=404, detail='Lecturer not found')
 
 
 @router.get('/lecturer-analytics')
-def lecturer_analytics(lecturer: str) -> dict[str, Any]:
+def lecturer_analytics(lecturer: str, _claims: dict = Depends(require_roles('admin', 'administrator', 'lecturer'))) -> dict[str, Any]:
     """Real analytics for a lecturer's own courses: average score, pass rate, at-risk
     student count, highest-completion course, and per-course score distribution. Reuses
     the same per-course/per-student aggregation as the course monitor drill-down so the
@@ -188,5 +200,5 @@ def update_student(student_id: str, payload: UpdateStudentRequest, _claims: dict
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase update student failed'))
     if response.data:
-        return {'student': response.data[0]}
+        return {'student': _strip_password(response.data[0])}
     raise HTTPException(status_code=404, detail='Student not found')

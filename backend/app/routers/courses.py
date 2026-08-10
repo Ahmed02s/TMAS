@@ -285,6 +285,7 @@ def get_course_student_progress(
     course_code: str,
     level: str | None = None,
     program: str | None = None,
+    _claims: dict = Depends(require_roles('admin', 'administrator', 'lecturer')),
 ) -> dict[str, Any]:
     """Return each enrolled student with their quiz attempts and material count for this course."""
     ensure_supabase_enabled()
@@ -410,7 +411,7 @@ def get_course_student_progress(
                         seen.add(key)
                         reads_by_student[sid] += 1
         except Exception:
-            pass
+            logger.exception('get_course_student_progress: material reads fetch failed for course=%s', course_code)
 
     # 6. Build per-student summary
     result = []

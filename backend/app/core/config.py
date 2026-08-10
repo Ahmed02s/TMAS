@@ -19,7 +19,12 @@ SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY', '')
 EMAIL_FROM = os.getenv('EMAIL_FROM', '')
 EMAIL_FROM_NAME = os.getenv('EMAIL_FROM_NAME', '')
 EMAIL_REPLY_TO = os.getenv('EMAIL_REPLY_TO', EMAIL_FROM)
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+# Used to build the link inside password-reset emails (see app.core.email). This backend
+# runs on Render, not on whatever machine sends the email, so defaulting to localhost meant
+# every reset email sent from a deployment without an explicit FRONTEND_URL env var contained
+# a link back to the sender's own machine instead of the live site — set FRONTEND_URL on
+# Render to the real deployed frontend origin (no trailing slash) to override this default.
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://tmas-dusky.vercel.app')
 QROK_API_KEY = os.getenv('QROK_API_KEY', os.getenv('GROQ_API_KEY', ''))
 QROK_API_URL = os.getenv('QROK_API_URL', os.getenv('GROQ_API_URL', 'https://api.groq.com/openai/v1/chat/completions'))
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')

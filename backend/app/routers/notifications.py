@@ -1,10 +1,13 @@
 import datetime
+import logging
 from typing import Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.core.security import get_current_claims
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix='/api/notifications', tags=['notifications'])
 
 # In-memory notifications cache for instant real-time dispatch and offline fallback
@@ -55,7 +58,15 @@ class MarkReadRequest(BaseModel):
 
 
 @router.get('')
-def get_notifications(role: str = 'all', user_id: str | None = None) -> dict[str, Any]:
+def get_notifications(role: str = 'all', user_id: str | None = None, claims: dict = Depends(get_current_claims)) -> dict[str, Any]:
+    # A user may only read their own notification feed: their own user_id, and either
+    # their own role or the 'all' broadcast bucket (admins can additionally check any role).
+    if user_id and str(claims.get('sub') or '') != str(user_id):
+        raise HTTPException(status_code=403, detail='You can only view your own notifications')
+    caller_role = str(claims.get('role') or '')
+    if role not in ('all', caller_role) and caller_role not in ('admin', 'administrator'):
+        raise HTTPException(status_code=403, detail='You can only view notifications for your own role')
+
     ensure_supabase_enabled()
 
     # Try fetching from Supabase table 'notifications' if present
@@ -69,7 +80,7 @@ def get_notifications(role: str = 'all', user_id: str | None = None) -> dict[str
         if not supabase_failed(resp) and resp.data:
             return {'notifications': resp.data}
     except Exception:
-        pass
+        logger.exception('get_notifications: Supabase fetch failed, falling back to in-memory store')
 
     # In-memory fallback
     filtered = []
@@ -81,7 +92,7 @@ def get_notifications(role: str = 'all', user_id: str | None = None) -> dict[str
 
 
 @router.post('')
-def send_notification(payload: CreateNotificationRequest) -> dict[str, Any]:
+def send_notification(payload: CreateNotificationRequest, _claims: dict = Depends(get_current_claims)) -> dict[str, Any]:
     ensure_supabase_enabled()
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     record = {
@@ -108,13 +119,13 @@ def send_notification(payload: CreateNotificationRequest) -> dict[str, Any]:
 
 
 @router.post('/read')
-def mark_notifications_read(payload: MarkReadRequest) -> dict[str, Any]:
+def mark_notifications_read(payload: MarkReadRequest, _claims: dict = Depends(get_current_claims)) -> dict[str, Any]:
     ensure_supabase_enabled()
     if not payload.notification_ids:
-        # Mark all in-memory as read
-        for n in _NOTIFICATIONS_DB:
-            n['read'] = True
-        return {'status': 'success'}
+        # Previously this defaulted to marking every notification in the system read for
+        # every user (there's no per-user read-state, only one shared `read` flag per
+        # notification row) — an empty list must never trigger that blast radius.
+        raise HTTPException(status_code=400, detail='notification_ids is required')
 
     for n in _NOTIFICATIONS_DB:
         if n['id'] in payload.notification_ids:
@@ -123,6 +134,6 @@ def mark_notifications_read(payload: MarkReadRequest) -> dict[str, Any]:
     try:
         supabase.table('notifications').update({'read': True}).in_('id', payload.notification_ids).execute()
     except Exception:
-        pass
+        logger.exception('mark_notifications_read: Supabase update failed, in-memory store already updated')
 
     return {'status': 'success'}

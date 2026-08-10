@@ -45,6 +45,26 @@ def _sanitize_filename(filename: str) -> str:
     return re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
 
 
+# Magic-byte signatures for the extensions we accept. The extension allowlist alone only
+# checks the filename a client claims — nothing stops a renamed executable from being
+# uploaded as "notes.pdf" and later served back to students via /download. This is a light
+# sanity check (not a full antivirus/content scan), so .txt/.md are skipped: arbitrary bytes
+# are "valid" plain text, there's no signature to check against.
+_PDF_MAGIC = b'%PDF-'
+_ZIP_MAGIC = (b'PK\x03\x04', b'PK\x05\x06', b'PK\x07\x08')  # .docx / .pptx (OOXML = zip)
+_OLE_MAGIC = b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'  # legacy .doc / .ppt (OLE compound file)
+
+
+def _looks_like_declared_type(contents: bytes, file_ext: str) -> bool:
+    if file_ext == '.pdf':
+        return contents.startswith(_PDF_MAGIC)
+    if file_ext in {'.docx', '.pptx'}:
+        return contents.startswith(_ZIP_MAGIC)
+    if file_ext in {'.doc', '.ppt'}:
+        return contents.startswith(_OLE_MAGIC) or contents.startswith(_ZIP_MAGIC)
+    return True  # .txt / .md — no reliable signature to check
+
+
 def _clean_course_code(value: str) -> str:
     return re.sub(r'[^a-zA-Z0-9]', '', value or '').lower()
 
@@ -101,6 +121,7 @@ def _fetch_remote_material_copy(material: dict) -> Path | None:
         cache_path.write_bytes(resp.content)
         return cache_path
     except Exception:
+        logger.exception('_fetch_remote_material_copy: failed to fetch/cache file_url=%s', file_url)
         return None
 
 
@@ -293,7 +314,7 @@ def update_material_progress(
             existing_scroll = existing_resp.data[0].get('scroll_percent') or 0
             existing_time = existing_resp.data[0].get('time_spent_seconds') or 0
     except Exception:
-        pass
+        logger.exception('update_material_progress: failed to fetch existing progress for material_id=%s', material_id)
 
     new_scroll = max(existing_scroll, payload.scroll_percent)
     new_time = existing_time + payload.time_spent_delta
@@ -338,7 +359,7 @@ def get_material_progress(
                 'completed': bool(row.get('completed')),
             }
     except Exception:
-        pass
+        logger.exception('get_material_progress: failed to fetch progress for material_id=%s', material_id)
     return {'scroll_percent': 0, 'time_spent_seconds': 0, 'completed': False}
 
 
@@ -376,6 +397,8 @@ async def upload_materials(
         contents = await upload.read()
         if len(contents) > MAX_FILE_SIZE:
             raise HTTPException(status_code=413, detail='File exceeds maximum size of 50MB')
+        if not _looks_like_declared_type(contents, file_ext):
+            raise HTTPException(status_code=400, detail=f"{filename} does not look like a valid {file_ext} file")
 
         file_path = course_dir / f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{filename}"
         file_path.write_bytes(contents)
@@ -459,7 +482,7 @@ def delete_material(
         if local_path and local_path.exists():
             local_path.unlink()
     except Exception:
-        pass
+        logger.exception('delete_material: failed to remove local file for material_id=%s', material_id)
 
     if material.get('file_url') and material.get('path'):
         try:
@@ -468,12 +491,12 @@ def delete_material(
             basename = Path(material['path']).name
             supabase.storage.from_('materials').remove([f"{safe_course}/{basename}"])
         except Exception:
-            pass
+            logger.exception('delete_material: failed to remove Supabase Storage object for material_id=%s', material_id)
 
     try:
         supabase.table('material_reads').delete().eq('material_id', material_id).execute()
     except Exception:
-        pass
+        logger.exception('delete_material: failed to delete material_reads rows for material_id=%s', material_id)
 
     delete_resp = supabase.table('materials').delete().eq('id', material_id).execute()
     if supabase_failed(delete_resp):

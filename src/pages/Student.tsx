@@ -57,7 +57,18 @@ type CompletedQuiz = {
 type QuizQuestion = {
   question: string
   options: string[]
+}
+
+// Correct answers are never present in QuizQuestion (the pre-submission payload no longer
+// includes them — see backend/app/routers/quizzes.py get_quiz_details). This is the
+// server-graded, per-question breakdown returned by POST /submit, used for the
+// post-submission review/flashcards screen instead.
+type QuizReviewItem = {
+  question: string
+  options: string[]
   correct: string
+  student_answer: string
+  is_correct: boolean
 }
 
 type MaterialItem = {
@@ -218,6 +229,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   const [quizAnswers, setQuizAnswers] = useState<Record<number, string>>({})
   const [quizSubmitted, setQuizSubmitted] = useState(false)
   const [lastAttempt, setLastAttempt] = useState<CompletedQuiz | null>(null)
+  const [quizReview, setQuizReview] = useState<QuizReviewItem[]>([])
   const [currentQ, setCurrentQ] = useState(0)
   const [selectedTierFilter, setSelectedTierFilter] = useState<string>('All Tiers')
   const [quizLoading, setQuizLoading] = useState(false)
@@ -491,12 +503,12 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
           ? quizData.questions.map((qq: any, idx: number) => ({
               question: String(qq?.question ?? qq?.text ?? `Question ${idx + 1}`),
               options: Array.isArray(qq?.options) ? qq.options.map((opt: any) => typeof opt === 'string' ? opt : String(opt?.text ?? opt?.value ?? JSON.stringify(opt))) : [],
-              correct: String(qq?.answer ?? qq?.correct ?? '').trim(),
             }))
           : []
 
         setQuizQuestions(safeQuestions)
         setQuizAnswers({})
+        setQuizReview([])
         setCurrentQ(0)
         isAutoSubmittingRef.current = false
       } catch (fetchError) {
@@ -561,6 +573,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
         }
         attempt = attemptRecord
         setLastAttempt(attemptRecord)
+        setQuizReview(Array.isArray(data.review) ? data.review : [])
         setCompletedQuizzes(prev => {
           const filtered = prev.filter(q => q.quizId !== activeQuiz)
           return [attemptRecord, ...filtered]
@@ -888,31 +901,17 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   }
 
   if (quizSubmitted) {
-    // Normalize answers for comparison: lowercase + trim, so 'Halt' matches 'halt'
-    const normalizeAns = (s: string) => (s || '').toLowerCase().trim()
-    const correct = Object.values(quizAnswers).filter((ans, i) => {
-      const expected = normalizeAns(activeQuizQuestions[i]?.correct)
-      const given = normalizeAns(ans)
-      if (!given) return false
-      // Exact normalized match
-      if (expected === given) return true
-      // Partial / contains match for fill-in-blank and short-answer
-      if (expected.includes(given) || given.includes(expected)) return true
-      return false
-    }).length
-    const score = lastAttempt?.score ?? Math.round((correct / activeQuizQuestions.length) * 100)
-    const outOf = lastAttempt?.outOf ?? activeQuizQuestions.length
+    // The server grades in submit_quiz and returns a per-question breakdown (quizReview) —
+    // correct answers are never sent to the client before submission, so this review is the
+    // only source of truth for which answers were right. It's empty for a timed-out/forfeited
+    // attempt (submit was rejected before grading), where there's nothing to review anyway.
+    const correct = quizReview.filter(r => r.is_correct).length
+    const score = lastAttempt?.score ?? (quizReview.length ? Math.round((correct / quizReview.length) * 100) : 0)
+    const outOf = lastAttempt?.outOf ?? quizReview.length ?? activeQuizQuestions.length
     const passed = lastAttempt?.passed ?? score >= (selectedQuiz?.passingScore ?? 60)
-    const missedQuestions = activeQuizQuestions
-      .map((q, idx) => ({ ...q, studentAns: quizAnswers[idx], idx }))
-      .filter(q => {
-        const expected = normalizeAns(q.correct)
-        const given = normalizeAns(q.studentAns)
-        if (!given) return true
-        if (expected === given) return false
-        if (expected.includes(given) || given.includes(expected)) return false
-        return true
-      })
+    const missedQuestions = quizReview
+      .map((q, idx) => ({ ...q, studentAns: q.student_answer, idx }))
+      .filter(q => !q.is_correct)
 
     return (
       <div className="min-h-screen bg-background font-sans flex items-center justify-center p-4 sm:p-8">
@@ -936,7 +935,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
             </div>
             <div className="grid grid-cols-3 gap-3 mb-6">
               {[
-                { label: 'Correct', val: `${correct}/${activeQuizQuestions.length}` },
+                { label: 'Correct', val: `${correct}/${outOf}` },
                 { label: 'Score', val: `${score}%` },
                 { label: 'Result', val: score >= 60 ? 'PASS' : 'FAIL' },
               ].map((s, i) => (
