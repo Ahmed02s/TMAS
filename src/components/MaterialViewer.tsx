@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import * as pdfjsLib from 'pdfjs-dist'
-import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import mammoth from 'mammoth'
 import JSZip from 'jszip'
 import DOMPurify from 'dompurify'
 import { API_BASE } from '../config'
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl
+import { fetchWithProgress } from '../utils/materialDownload'
+import PdfReader from './PdfReader'
 
 type FontSize = 'text-sm' | 'text-base' | 'text-lg' | 'text-xl'
 
@@ -204,63 +202,11 @@ function PptxSlides({ slides }: { slides: PptxSlide[] }) {
   )
 }
 
-async function renderPdfIntoContainer(arrayBuffer: ArrayBuffer, container: HTMLDivElement) {
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise
-  container.innerHTML = ''
-  const scale = Math.min(2, Math.max(1, (container.clientWidth || 800) / 800))
-  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-    const page = await pdf.getPage(pageNum)
-    const viewport = page.getViewport({ scale })
-    const canvas = document.createElement('canvas')
-    canvas.width = viewport.width
-    canvas.height = viewport.height
-    canvas.style.display = 'block'
-    canvas.style.margin = '0 auto 16px auto'
-    canvas.style.maxWidth = '100%'
-    canvas.style.height = 'auto'
-    canvas.style.boxShadow = '0 1px 8px rgba(15, 23, 42, 0.15)'
-    canvas.style.borderRadius = '8px'
-    const ctx = canvas.getContext('2d')
-    if (!ctx) continue
-    container.appendChild(canvas)
-    await page.render({ canvas, canvasContext: ctx, viewport }).promise
-  }
-}
-
 // A legacy-format file the browser truly can't render — server-side extraction (which uses
 // the same Python libraries as quiz generation) is tried first since it sometimes succeeds
 // where mammoth/JSZip can't, but for a genuine old binary .doc/.ppt it typically can't
 // extract anything meaningful either, in which case it returns this fixed placeholder.
 const SERVER_EXTRACTION_PLACEHOLDER_PREFIX = 'Material: '
-
-// A large PDF/slide deck on a slow connection previously just showed an indeterminate
-// spinner for however long the download took — indistinguishable from "broken." Reading the
-// body as a stream (when the server reports Content-Length) gives real percentage feedback.
-async function fetchWithProgress(url: string, onProgress: (pct: number) => void): Promise<ArrayBuffer> {
-  const res = await fetch(url)
-  if (!res.ok) throw new Error('Unable to download this material')
-
-  const total = Number(res.headers.get('content-length') || 0)
-  if (!total || !res.body) return res.arrayBuffer()
-
-  const reader = res.body.getReader()
-  const chunks: Uint8Array[] = []
-  let received = 0
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    chunks.push(value)
-    received += value.length
-    onProgress(Math.min(100, Math.round((received / total) * 100)))
-  }
-  const combined = new Uint8Array(received)
-  let offset = 0
-  for (const chunk of chunks) {
-    combined.set(chunk, offset)
-    offset += chunk.length
-  }
-  return combined.buffer
-}
 
 export default function MaterialViewer({ materialId, materialName, downloadUrl, studentId, fontSize, onCompleted }: MaterialViewerProps) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'legacy-unsupported'>('loading')
@@ -269,9 +215,11 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
   const [docxHtml, setDocxHtml] = useState('')
   const [pptxSlides, setPptxSlides] = useState<PptxSlide[] | null>(null)
   const [textContent, setTextContent] = useState<string | null>(null)
-  const pdfContainerRef = useRef<HTMLDivElement | null>(null)
+  const [pdfBuffer, setPdfBuffer] = useState<ArrayBuffer | null>(null)
+  const [pdfResumePage, setPdfResumePage] = useState<number | undefined>(undefined)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const ext = getExtension(materialName)
+  const isPdf = ext === 'pdf'
 
   // ── Load + parse the raw file client-side ──
   useEffect(() => {
@@ -282,6 +230,8 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
     setDocxHtml('')
     setPptxSlides(null)
     setTextContent(null)
+    setPdfBuffer(null)
+    setPdfResumePage(undefined)
 
     async function tryServerExtractedText(): Promise<boolean> {
       try {
@@ -308,15 +258,22 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
         setDownloadPct(null)
 
         if (ext === 'pdf') {
-          setStatus('ready')
-          // Container must be mounted first; render on next tick.
-          requestAnimationFrame(() => {
-            if (pdfContainerRef.current && !cancelled) {
-              renderPdfIntoContainer(buf, pdfContainerRef.current).catch(err => {
-                if (!cancelled) setErrorMsg(err instanceof Error ? err.message : 'Failed to render PDF')
-              })
+          // Best-effort resume lookup — a failure here just means the reader opens at
+          // page 1, same as before this feature existed, rather than blocking the PDF.
+          if (studentId) {
+            try {
+              const res = await fetch(`${API_BASE}/api/materials/${materialId}/last-page?student_id=${encodeURIComponent(studentId)}`)
+              if (res.ok) {
+                const data = await res.json()
+                if (!cancelled && data?.last_page > 1) setPdfResumePage(data.last_page)
+              }
+            } catch {
+              /* resume is a nicety, not a requirement */
             }
-          })
+          }
+          if (cancelled) return
+          setPdfBuffer(buf)
+          setStatus('ready')
         } else if (ext === 'docx' || ext === 'doc') {
           if (isLegacyOleFormat(buf)) {
             // Genuine legacy binary .doc — mammoth can only parse the modern zip/XML .docx
@@ -361,13 +318,15 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
     }
   }, [materialId, downloadUrl, ext])
 
-  // ── Scroll-depth + time-on-page telemetry ──
+  // ── Scroll-depth + time-on-page telemetry (non-PDF formats only — PdfReader owns its own
+  // page-based equivalent of this, since a page position is a more meaningful progress
+  // signal than DOM scroll depth for a paginated document) ──
   const scrollPercentRef = useRef(0)
   const activeSecondsRef = useRef(0)
   const completedRef = useRef(false)
 
   const syncProgress = useCallback((final: boolean) => {
-    if (!studentId) return
+    if (!studentId || isPdf) return
     const delta = activeSecondsRef.current
     if (delta <= 0 && !final) return
     activeSecondsRef.current = 0
@@ -403,7 +362,7 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
   }, [materialId])
 
   useEffect(() => {
-    if (!studentId) return
+    if (!studentId || isPdf) return
     const activeTick = setInterval(() => {
       if (document.visibilityState === 'visible') {
         activeSecondsRef.current += 1
@@ -415,20 +374,21 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
       clearInterval(syncTick)
       syncProgress(true)
     }
-  }, [materialId, studentId, syncProgress])
+  }, [materialId, studentId, syncProgress, isPdf])
 
   const handleScroll = useCallback(() => {
+    if (isPdf) return
     const el = scrollContainerRef.current
     if (!el) return
     const pct = el.scrollHeight > el.clientHeight
       ? Math.min(100, Math.round(((el.scrollTop + el.clientHeight) / el.scrollHeight) * 100))
       : 100
     if (pct > scrollPercentRef.current) scrollPercentRef.current = pct
-  }, [])
+  }, [isPdf])
 
   // Content shorter than the viewport (no scrollbar at all) still counts as fully seen.
   useEffect(() => {
-    if (status !== 'ready') return
+    if (status !== 'ready' || isPdf) return
     const id = requestAnimationFrame(() => {
       const el = scrollContainerRef.current
       if (el && el.scrollHeight <= el.clientHeight + 4) {
@@ -436,10 +396,14 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
       }
     })
     return () => cancelAnimationFrame(id)
-  }, [status, docxHtml, pptxSlides, textContent])
+  }, [status, docxHtml, pptxSlides, textContent, isPdf])
+
+  // PdfReader manages its own internal scroll container and telemetry, so it can't sit
+  // inside another `overflow-y-auto` region without nested/competing scrollbars.
+  const wrapperClassName = isPdf && status === 'ready' ? 'h-full' : 'h-full overflow-y-auto'
 
   return (
-    <div ref={scrollContainerRef} onScroll={handleScroll} className="h-full overflow-y-auto">
+    <div ref={scrollContainerRef} onScroll={handleScroll} className={wrapperClassName}>
       {status === 'loading' && (
         <div className="flex flex-col items-center justify-center gap-3 py-24">
           <span className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
@@ -470,8 +434,14 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
         </div>
       )}
 
-      {status === 'ready' && ext === 'pdf' && (
-        <div ref={pdfContainerRef} className="p-4 sm:p-6" />
+      {status === 'ready' && ext === 'pdf' && pdfBuffer && (
+        <PdfReader
+          materialId={materialId}
+          arrayBuffer={pdfBuffer}
+          studentId={studentId}
+          initialPage={pdfResumePage}
+          onCompleted={onCompleted}
+        />
       )}
 
       {status === 'ready' && (ext === 'docx' || ext === 'doc') && (

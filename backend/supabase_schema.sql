@@ -115,6 +115,13 @@ CREATE TABLE IF NOT EXISTS quiz_attempts (
   attempted_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- NOTE: the actual deployed table (created before this file existed) has NEVER had
+-- scroll_percent/time_spent_seconds/completed — its real columns are id, student_id,
+-- material_id, course, material_name, read_at, read_count. The ALTER statements below were
+-- always no-ops against it, so every scroll/time telemetry write from materials.py has been
+-- silently degrading to just recording `read_at` since this table's telemetry feature was
+-- first written. Run the ALTER statements further down (not yet applied) to fix this for
+-- real — see the migration proposed alongside the material_page_reads table below.
 CREATE TABLE IF NOT EXISTS material_reads (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   student_id TEXT NOT NULL,
@@ -132,6 +139,28 @@ ALTER TABLE material_reads ADD COLUMN IF NOT EXISTS scroll_percent INTEGER NOT N
 ALTER TABLE material_reads ADD COLUMN IF NOT EXISTS time_spent_seconds INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE material_reads ADD COLUMN IF NOT EXISTS completed BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- Added for the paginated PDF reader (PdfReader.tsx) and resume-reading: `last_page`/
+-- `total_pages` let GET /api/materials/{id}/last-page tell the reader where to reopen.
+-- Backend code already degrades gracefully if these aren't present yet (see
+-- backend/app/routers/materials.py: record_page_read / get_material_last_page), so applying
+-- this is optional for the app to keep working, but required for resume-reading to persist.
+ALTER TABLE material_reads ADD COLUMN IF NOT EXISTS last_page INTEGER;
+ALTER TABLE material_reads ADD COLUMN IF NOT EXISTS total_pages INTEGER;
+
+-- New: granular per-page read tracking for PDFs, separate from the single-row-per-material
+-- summary in material_reads above. Lets a lecturer eventually see exactly which pages a
+-- student reached, not just an overall scroll percentage.
+CREATE TABLE IF NOT EXISTS material_page_reads (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  student_id TEXT NOT NULL,
+  material_id BIGINT NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+  page_number INTEGER NOT NULL,
+  first_viewed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_viewed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  view_count INTEGER NOT NULL DEFAULT 1,
+  UNIQUE (student_id, material_id, page_number)
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_levels_order ON levels("order");
 CREATE INDEX IF NOT EXISTS idx_courses_level_program ON courses(level, program);
@@ -140,3 +169,4 @@ CREATE INDEX IF NOT EXISTS idx_quizzes_status ON quizzes(status);
 CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz_id ON quiz_questions(quiz_id);
 CREATE INDEX IF NOT EXISTS idx_material_reads_student ON material_reads(student_id);
 CREATE INDEX IF NOT EXISTS idx_material_reads_material ON material_reads(material_id);
+CREATE INDEX IF NOT EXISTS idx_material_page_reads_student_material ON material_page_reads(student_id, material_id);

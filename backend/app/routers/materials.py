@@ -363,6 +363,94 @@ def get_material_progress(
     return {'scroll_percent': 0, 'time_spent_seconds': 0, 'completed': False}
 
 
+class PageReadRequest(BaseModel):
+    student_id: str
+    page_number: int = Field(ge=1)
+    total_pages: int | None = Field(default=None, ge=1)
+
+
+@router.post('/{material_id}/page-read')
+def record_page_read(
+    material_id: int,
+    payload: PageReadRequest,
+    claims: dict[str, Any] | None = Depends(get_current_claims_optional),
+) -> dict[str, Any]:
+    """Granular per-page telemetry for the paginated PDF reader (PdfReader.tsx), on top of
+    the existing scroll/time model in update_material_progress — lets a lecturer eventually
+    see exactly which pages a student actually reached, and lets the reader resume at the
+    student's last-viewed page (see get_material_last_page below).
+
+    Degrades gracefully if `material_page_reads` doesn't exist yet on this deployment (the
+    migration hasn't been run) — this granular record is a bonus on top of `material_reads`,
+    not something the reader depends on to function.
+    """
+    ensure_supabase_enabled()
+    if not payload.student_id:
+        raise HTTPException(status_code=400, detail='student_id is required')
+    _verify_acting_as_self_if_authenticated(claims, payload.student_id)
+
+    response = supabase.table('materials').select('id,course').eq('id', material_id).limit(1).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase get material failed'))
+    if not response.data:
+        raise HTTPException(status_code=404, detail='Material not found')
+
+    from app.routers.quizzes import _is_missing_table_error
+
+    try:
+        existing = supabase.table('material_page_reads').select('view_count') \
+            .eq('student_id', payload.student_id).eq('material_id', material_id).eq('page_number', payload.page_number) \
+            .limit(1).execute()
+        view_count = ((existing.data or [{}])[0].get('view_count') or 0) + 1 if not supabase_failed(existing) and existing.data else 1
+        supabase.table('material_page_reads').upsert({
+            'student_id': payload.student_id,
+            'material_id': material_id,
+            'page_number': payload.page_number,
+            'view_count': view_count,
+            'last_viewed_at': datetime.utcnow().isoformat(),
+        }, on_conflict='student_id,material_id,page_number').execute()
+    except postgrest.exceptions.APIError as exc:
+        if not _is_missing_table_error(exc):
+            logger.exception('record_page_read: material_page_reads upsert failed for material_id=%s page=%s', material_id, payload.page_number)
+
+    # Keep material_reads.last_page in sync too, so resume works even before/without the
+    # per-page table (e.g. mid-rollout, or a deployment that skipped that part of the migration).
+    last_page_record: dict[str, Any] = {
+        'student_id': payload.student_id,
+        'material_id': material_id,
+        'last_page': payload.page_number,
+    }
+    if payload.total_pages:
+        last_page_record['total_pages'] = payload.total_pages
+    _safe_upsert('material_reads', last_page_record, 'student_id,material_id')
+
+    return {'status': 'recorded', 'material_id': material_id, 'page_number': payload.page_number}
+
+
+@router.get('/{material_id}/last-page')
+def get_material_last_page(
+    material_id: int,
+    student_id: str,
+    claims: dict[str, Any] | None = Depends(get_current_claims_optional),
+) -> dict[str, Any]:
+    """Lets the PDF reader resume at the student's last-viewed page instead of always
+    reopening at page 1. Returns nulls (never errors) if there's nothing to resume from yet,
+    or if this deployment hasn't run the migration adding `last_page`/`total_pages`."""
+    ensure_supabase_enabled()
+    _verify_acting_as_self_if_authenticated(claims, student_id)
+    if not student_id:
+        return {'last_page': None, 'total_pages': None}
+    try:
+        resp = supabase.table('material_reads').select('last_page,total_pages') \
+            .eq('student_id', student_id).eq('material_id', material_id).limit(1).execute()
+        if not supabase_failed(resp) and resp.data:
+            row = resp.data[0]
+            return {'last_page': row.get('last_page'), 'total_pages': row.get('total_pages')}
+    except Exception:
+        logger.exception('get_material_last_page: failed to fetch last page for material_id=%s', material_id)
+    return {'last_page': None, 'total_pages': None}
+
+
 @router.post('', status_code=201)
 async def upload_materials(
     course: str = Form(...),

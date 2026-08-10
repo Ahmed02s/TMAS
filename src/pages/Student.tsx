@@ -231,6 +231,18 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   const [materialsListLoading, setMaterialsListLoading] = useState(false)
   const [activeMaterialId, setActiveMaterialId] = useState<number | null>(null)
   const [materialsError, setMaterialsError] = useState('')
+  // Expands the reading pane to fill the whole viewport (hiding the materials sidebar and
+  // course header) instead of the ~90vh modal — a plain CSS overlay rather than the native
+  // Fullscreen API, since that can be blocked or behave inconsistently in embedded contexts.
+  const [readerFocusMode, setReaderFocusMode] = useState(false)
+  useEffect(() => {
+    if (!readerFocusMode) return
+    function handleEscape(e: KeyboardEvent) {
+      if (e.key === 'Escape') setReaderFocusMode(false)
+    }
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [readerFocusMode])
   const [activeQuiz, setActiveQuiz] = useState<number | null>(null)
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([])
   const [quizAnswers, setQuizAnswers] = useState<Record<number, string>>({})
@@ -1969,6 +1981,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                   setMaterials([])
                   setActiveMaterialId(null)
                   setMaterialsError('')
+                  setReaderFocusMode(false)
                 }}
                 className="rounded-full border border-border bg-background px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-muted"
               >
@@ -2056,7 +2069,10 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                     Select a material from the list to start reading.
                   </div>
                 ) : (
-                  <div className="flex flex-1 min-h-0 flex-col rounded-3xl border border-border bg-card/70 overflow-hidden">
+                  <div className={readerFocusMode
+                    ? 'fixed inset-0 z-[60] flex flex-col bg-background'
+                    : 'flex flex-1 min-h-0 flex-col rounded-3xl border border-border bg-card/70 overflow-hidden'
+                  }>
                     {(() => {
                       const activeMaterial = materials.find(item => item.id === activeMaterialId)
                       if (!activeMaterial) return null
@@ -2065,11 +2081,11 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                       return (
                         <>
                           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 shrink-0">
-                            <div>
-                              <p className="text-sm font-semibold text-foreground">{activeMaterial.name}</p>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-foreground">{activeMaterial.name}</p>
                               <p className="mt-1 text-xs text-muted-foreground">{activeMaterial.size} • Uploaded by {activeMaterial.lecturer}</p>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 shrink-0">
                               <a
                                 href={downloadUrl}
                                 target="_blank"
@@ -2078,6 +2094,14 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                               >
                                 Download Original
                               </a>
+                              <button
+                                onClick={() => setReaderFocusMode(f => !f)}
+                                title={readerFocusMode ? 'Exit focus mode' : 'Expand to full screen'}
+                                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-3.5 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted"
+                              >
+                                <i className={`fa-solid ${readerFocusMode ? 'fa-compress' : 'fa-expand'}`} />
+                                <span className="hidden sm:inline">{readerFocusMode ? 'Exit Focus' : 'Focus Mode'}</span>
+                              </button>
                             </div>
                           </div>
 
