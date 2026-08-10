@@ -1646,15 +1646,22 @@ def forfeit_quiz(quiz_id: int, payload: QuizForfeitRequest, claims: dict | None 
     return {'status': 'forfeited', 'quiz_id': quiz_id}
 
 
+def _quiz_open_close_dates(quiz: dict[str, Any]) -> tuple[datetime | None, datetime | None]:
+    open_dt = _parse_datetime(quiz.get('open_date') or quiz.get('available_from'))
+    close_dt = _parse_datetime(quiz.get('close_date') or quiz.get('available_until'))
+    return open_dt, close_dt
+
+
 def _quiz_is_expired(quiz: dict[str, Any], now: datetime) -> bool:
-    close_dt = _parse_datetime(quiz.get('close_date')) or _parse_datetime(quiz.get('due_date'))
+    _, close_dt = _quiz_open_close_dates(quiz)
+    close_dt = close_dt or _parse_datetime(quiz.get('due_date'))
     if close_dt and now > close_dt:
         return True
     return False
 
 
 def _quiz_is_locked(quiz: dict[str, Any], now: datetime) -> bool:
-    open_dt = _parse_datetime(quiz.get('open_date'))
+    open_dt, _ = _quiz_open_close_dates(quiz)
     if open_dt and now < open_dt:
         return True
     # Also lock if quiz has no open_date AND was explicitly scheduled/still a draft
@@ -1899,8 +1906,8 @@ def list_available_quizzes(
                 'tier':           q.get('tier'),
                 'status':         q.get('status'),
                 'is_locked':      True,
-                'open_date':      q.get('open_date'),
-                'close_date':     q.get('close_date'),
+                'open_date':      q.get('open_date') or q.get('available_from'),
+                'close_date':     q.get('close_date') or q.get('available_until'),
                 'due_date':       q.get('due_date'),
                 'questions':      q.get('questions'),
                 'time_limit':     q.get('time_limit'),
