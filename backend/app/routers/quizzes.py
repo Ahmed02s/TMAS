@@ -1740,7 +1740,13 @@ def list_all_quizzes(course: str | None = None, lecturer: str | None = None, _cl
         query = query.eq('course', course)
     elif lecturer:
         lecturer = lecturer.strip()
-        courses_resp = supabase.table('courses').select('code').ilike('lecturer', lecturer).execute()
+        # `courses.lecturer` can hold multiple comma-separated names for co-assigned courses
+        # (e.g. "SAAKA AHMED, Med Saaka") — an exact ilike (no wildcards) only matches a
+        # course taught by exactly one lecturer whose name matches verbatim, so any co-taught
+        # course's quizzes never showed up in that lecturer's Question Banks at all. This is
+        # the actual root cause of "published quizzes not showing in the question bank" —
+        # the earlier tolerant-course-code fix here helped a different case but not this one.
+        courses_resp = supabase.table('courses').select('code').ilike('lecturer', f'%{lecturer}%').execute()
         if supabase_failed(courses_resp):
             raise HTTPException(status_code=502, detail=supabase_error_message(courses_resp, 'Supabase list lecturer courses failed'))
         course_codes = [c['code'] for c in (courses_resp.data or []) if c.get('code')]

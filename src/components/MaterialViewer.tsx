@@ -19,7 +19,19 @@ type MaterialViewerProps = {
   onCompleted?: () => void
 }
 
-type PptxSlide = { title?: string; bullets: string[] }
+type PptxSlide = { title?: string; bullets: string[]; images: string[] }
+
+const IMAGE_EXT_TO_MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  bmp: 'image/bmp',
+  emf: 'image/x-emf',
+  wmf: 'image/x-wmf',
+}
+// Skip anything absurd (a single corrupt/huge embedded asset shouldn't stall the whole deck).
+const MAX_SLIDE_IMAGE_BYTES = 8 * 1024 * 1024
 
 function getExtension(name: string): string {
   return (name.split('.').pop() || '').toLowerCase()
@@ -39,9 +51,75 @@ function isLegacyOleFormat(buf: ArrayBuffer): boolean {
   return OLE_MAGIC.every((b, i) => bytes[i] === b)
 }
 
+// Resolves a zip-relative path like "../media/image1.png" against "ppt/slides" without
+// relying on the URL API's relative-resolution (some browsers reject constructing a URL
+// with a fake/custom base scheme, which is more trouble than just doing this by hand).
+function resolveZipRelativePath(baseDir: string, relativeTarget: string): string {
+  const stack = baseDir.split('/').filter(Boolean)
+  for (const part of relativeTarget.split('/').filter(Boolean)) {
+    if (part === '..') stack.pop()
+    else if (part !== '.') stack.push(part)
+  }
+  return stack.join('/')
+}
+
+// A slide's images are referenced indirectly: the slide XML has <a:blip r:embed="rIdN"/>
+// inside each picture shape, and that rId only resolves to an actual file (ppt/media/imageX.*)
+// via the slide's own relationship file. Two lookups per slide, not one.
+async function extractSlideImages(
+  zip: JSZip,
+  slideFilename: string,
+  slideDoc: Document,
+): Promise<string[]> {
+  const slideBase = slideFilename.split('/').pop() || ''
+  const relsPath = `ppt/slides/_rels/${slideBase}.rels`
+  const relsEntry = zip.files[relsPath]
+  if (!relsEntry) return []
+
+  const relsXml = await relsEntry.async('text')
+  const relsDoc = new DOMParser().parseFromString(relsXml, 'application/xml')
+  const relMap = new Map<string, string>()
+  for (const rel of Array.from(relsDoc.getElementsByTagName('Relationship'))) {
+    const id = rel.getAttribute('Id')
+    const target = rel.getAttribute('Target')
+    if (id && target) {
+      // Targets are relative to ppt/slides/ (e.g. "../media/image1.png").
+      relMap.set(id, resolveZipRelativePath('ppt/slides', target))
+    }
+  }
+
+  const blips = Array.from(slideDoc.getElementsByTagNameNS('*', 'blip'))
+  const images: string[] = []
+  for (const blip of blips) {
+    const embedId =
+      blip.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed') ||
+      blip.getAttribute('r:embed')
+    if (!embedId) continue
+    const mediaPath = relMap.get(embedId)
+    if (!mediaPath) continue
+    const mediaEntry = zip.files[mediaPath]
+    if (!mediaEntry) continue
+
+    const ext = (mediaPath.split('.').pop() || '').toLowerCase()
+    const mime = IMAGE_EXT_TO_MIME[ext]
+    if (!mime) continue // unsupported (e.g. .emf/.wmf without a browser-native decoder)
+
+    try {
+      const base64 = await mediaEntry.async('base64')
+      if (base64.length * 0.75 > MAX_SLIDE_IMAGE_BYTES) continue
+      images.push(`data:${mime};base64,${base64}`)
+    } catch {
+      // Skip a corrupt individual image rather than failing the whole slide deck.
+    }
+  }
+  return images
+}
+
 // ── PPTX: parse the raw zip/XML structure (no rendering library exists that both
-// handles real PPTX layout AND runs fully client-side) — extract each slide's title
-// and body text via the DOM's own XML parser, then render as styled slide cards. ──
+// handles real PPTX layout AND runs fully client-side) — extract each slide's title,
+// body text, and embedded images via the DOM's own XML parser, then render as styled
+// slide cards. This doesn't reproduce exact PowerPoint layout/positioning, but nothing
+// is silently dropped anymore — text AND images both show up. ──
 async function parsePptx(arrayBuffer: ArrayBuffer): Promise<PptxSlide[]> {
   const zip = await JSZip.loadAsync(arrayBuffer)
   const slideFiles = Object.keys(zip.files)
@@ -80,7 +158,8 @@ async function parsePptx(arrayBuffer: ArrayBuffer): Promise<PptxSlide[]> {
       }
     }
 
-    slides.push({ title: title || undefined, bullets })
+    const images = await extractSlideImages(zip, filename, doc)
+    slides.push({ title: title || undefined, bullets, images })
   }
 
   return slides
@@ -93,15 +172,31 @@ function PptxSlides({ slides }: { slides: PptxSlide[] }) {
   return (
     <div className="space-y-4 p-4 sm:p-6">
       {slides.map((slide, i) => (
-        <div key={i} className="rounded-2xl border border-border bg-card shadow-sm p-5 sm:p-6" style={{ aspectRatio: '16 / 9', minHeight: '180px' }}>
+        <div key={i} className="rounded-2xl border border-border bg-card shadow-sm p-5 sm:p-6" style={{ minHeight: '180px' }}>
           <div className="flex items-center gap-2 mb-3">
             <span className="text-xs font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">Slide {i + 1}</span>
           </div>
           {slide.title && <h3 className="text-lg sm:text-xl font-bold text-foreground mb-3">{slide.title}</h3>}
           {slide.bullets.length > 0 && (
-            <ul className="space-y-1.5 list-disc list-inside text-sm text-foreground/90">
+            <ul className="space-y-1.5 list-disc list-inside text-sm text-foreground/90 mb-4">
               {slide.bullets.map((b, bi) => <li key={bi}>{b}</li>)}
             </ul>
+          )}
+          {slide.images.length > 0 && (
+            <div className="flex flex-wrap gap-3">
+              {slide.images.map((src, ii) => (
+                <img
+                  key={ii}
+                  src={src}
+                  alt={`Slide ${i + 1} image ${ii + 1}`}
+                  className="max-w-full sm:max-w-xs rounded-lg border border-border shadow-sm"
+                  loading="lazy"
+                />
+              ))}
+            </div>
+          )}
+          {slide.bullets.length === 0 && slide.images.length === 0 && !slide.title && (
+            <p className="text-xs text-muted-foreground italic">No readable content on this slide.</p>
           )}
         </div>
       ))}
@@ -138,8 +233,38 @@ async function renderPdfIntoContainer(arrayBuffer: ArrayBuffer, container: HTMLD
 // extract anything meaningful either, in which case it returns this fixed placeholder.
 const SERVER_EXTRACTION_PLACEHOLDER_PREFIX = 'Material: '
 
+// A large PDF/slide deck on a slow connection previously just showed an indeterminate
+// spinner for however long the download took — indistinguishable from "broken." Reading the
+// body as a stream (when the server reports Content-Length) gives real percentage feedback.
+async function fetchWithProgress(url: string, onProgress: (pct: number) => void): Promise<ArrayBuffer> {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error('Unable to download this material')
+
+  const total = Number(res.headers.get('content-length') || 0)
+  if (!total || !res.body) return res.arrayBuffer()
+
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+    received += value.length
+    onProgress(Math.min(100, Math.round((received / total) * 100)))
+  }
+  const combined = new Uint8Array(received)
+  let offset = 0
+  for (const chunk of chunks) {
+    combined.set(chunk, offset)
+    offset += chunk.length
+  }
+  return combined.buffer
+}
+
 export default function MaterialViewer({ materialId, materialName, downloadUrl, studentId, fontSize, onCompleted }: MaterialViewerProps) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'legacy-unsupported'>('loading')
+  const [downloadPct, setDownloadPct] = useState<number | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
   const [docxHtml, setDocxHtml] = useState('')
   const [pptxSlides, setPptxSlides] = useState<PptxSlide[] | null>(null)
@@ -152,6 +277,7 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
   useEffect(() => {
     let cancelled = false
     setStatus('loading')
+    setDownloadPct(null)
     setErrorMsg('')
     setDocxHtml('')
     setPptxSlides(null)
@@ -175,10 +301,11 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
 
     async function load() {
       try {
-        const res = await fetch(downloadUrl)
-        if (!res.ok) throw new Error('Unable to download this material')
-        const buf = await res.arrayBuffer()
+        const buf = await fetchWithProgress(downloadUrl, pct => {
+          if (!cancelled) setDownloadPct(pct)
+        })
         if (cancelled) return
+        setDownloadPct(null)
 
         if (ext === 'pdf') {
           setStatus('ready')
@@ -314,8 +441,16 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
   return (
     <div ref={scrollContainerRef} onScroll={handleScroll} className="h-full overflow-y-auto">
       {status === 'loading' && (
-        <div className="flex items-center justify-center py-24">
+        <div className="flex flex-col items-center justify-center gap-3 py-24">
           <span className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+          {downloadPct !== null && (
+            <div className="flex flex-col items-center gap-1.5 w-40">
+              <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${downloadPct}%` }} />
+              </div>
+              <span className="text-xs text-muted-foreground font-mono">{downloadPct}%</span>
+            </div>
+          )}
         </div>
       )}
 

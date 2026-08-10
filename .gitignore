@@ -15,3 +15,10 @@ logs/
 __pycache__/
 *.py[cod]
 
+# Runtime-uploaded course materials — these were accidentally committed at some point, which
+# masked a real bug: they only kept "working" across Render redeploys because they got
+# recreated fresh from git on every deploy, while genuinely runtime-uploaded files (never
+# committed) were silently lost. The real fix is Supabase Storage (see materials.py); this
+# directory should never hold the only copy of anything.
+backend/data/uploads/
+

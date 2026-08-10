@@ -76,7 +76,11 @@ def list_students(
     if lecturer:
         lecturer = lecturer.strip()
         if lecturer:
-            course_resp = supabase.table('courses').select('level,program').ilike('lecturer', lecturer).execute()
+            # `courses.lecturer` can hold multiple comma-separated names for co-assigned
+            # courses (e.g. "SAAKA AHMED, Med Saaka") — an exact ilike (no wildcards) only
+            # matches when a course has exactly one lecturer and it matches verbatim, so any
+            # co-taught course was silently excluded. The wildcard makes this a substring match.
+            course_resp = supabase.table('courses').select('level,program').ilike('lecturer', f'%{lecturer}%').execute()
             if supabase_failed(course_resp):
                 raise HTTPException(status_code=502, detail=supabase_error_message(course_resp, 'Supabase list lecturer courses failed'))
 
@@ -125,7 +129,7 @@ def lecturer_analytics(lecturer: str, _claims: dict = Depends(require_roles('adm
     if not lecturer:
         return empty
 
-    courses_resp = supabase.table('courses').select('*').ilike('lecturer', lecturer).execute()
+    courses_resp = supabase.table('courses').select('*').ilike('lecturer', f'%{lecturer}%').execute()
     if supabase_failed(courses_resp):
         raise HTTPException(status_code=502, detail=supabase_error_message(courses_resp, 'Supabase list lecturer courses failed'))
     courses = courses_resp.data or []
