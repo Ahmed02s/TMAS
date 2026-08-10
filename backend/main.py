@@ -1,5 +1,10 @@
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 from app.core.config import EXTRA_CORS_ORIGINS
 from app.routers.auth import router as auth_router
@@ -34,6 +39,21 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+# An unhandled exception anywhere in a route (a missing DB table, a bad query, anything not
+# already wrapped in its own try/except) crashes hard enough to bypass CORSMiddleware —
+# Starlette's outer ServerErrorMiddleware catches it and returns a plain-text response with
+# no CORS headers at all, which every browser reports as "blocked by CORS policy" regardless
+# of how correctly CORS itself is configured. That's cost real debugging time more than once
+# (see git history for /api/contact) because the real error — a 500 — never showed up as a
+# 500 to whoever was looking at the browser console. Catching it here instead means it goes
+# through FastAPI's normal JSONResponse path, which CORSMiddleware still wraps, so the
+# browser sees an honest 500 instead of a misleading CORS failure.
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception('Unhandled exception on %s %s', request.method, request.url.path)
+    return JSONResponse(status_code=500, content={'detail': 'Internal server error'})
+
 
 app.include_router(auth_router)
 app.include_router(contact_router)
