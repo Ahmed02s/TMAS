@@ -342,6 +342,23 @@ def _extract_text_from_pdf(path: str) -> str:
         return ''
 
 
+def _extract_pdf_pages(source: str | Any) -> list[str]:
+    """Per-page text for a PDF, preserving page boundaries — unlike _extract_text_from_pdf
+    above (which flattens the whole document into one string for quiz generation), the AI
+    Tutor needs to ground a response in exactly the page the student is looking at.
+    `source` may be a file path (str) or a file-like object (e.g. io.BytesIO), since pypdf
+    accepts either — the latter lets a PPTX-converted PDF fetched from Supabase Storage be
+    read directly from memory without touching disk.
+    """
+    try:
+        import pypdf
+        reader = pypdf.PdfReader(source)
+        return [(page.extract_text() or '').strip() for page in reader.pages]
+    except Exception:
+        logger.exception('_extract_pdf_pages: failed to extract pages')
+        return []
+
+
 def _extract_text_from_file(path: str) -> str:
     if not path:
         return ''
@@ -523,67 +540,16 @@ def _call_llm_for_questions(course: str, material_titles: list[str], question_ty
         "Do not output markdown codeblocks or extra text."
     )
 
-    from app.core.config import GEMINI_API_KEY, OPENAI_API_KEY
+    from app.services.llm import call_llm
 
-    raw_text = None
-
-    # Step 1: Try Primary (Groq / Qrok)
-    if QROK_API_KEY:
-        try:
-            api_url = QROK_API_URL or 'https://api.groq.com/openai/v1/chat/completions'
-            headers = {"Authorization": f"Bearer {QROK_API_KEY}", "Content-Type": "application/json"}
-            body = {
-                "model": "llama-3.3-70b-versatile",
-                "messages": [
-                    {"role": "system", "content": "You are a professional university professor creating high quality exam questions. Output strictly valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.3,
-                "max_tokens": 512,
-                "response_format": {"type": "json_object"}
-            }
-            with httpx.Client(timeout=12.0) as client:
-                resp = client.post(api_url, headers=headers, json=body)
-                if resp.status_code == 200:
-                    raw_text = resp.json()['choices'][0]['message']['content']
-        except Exception:
-            # Falls through to Gemini/OpenAI/the deterministic fallback generator below, so
-            # this must never surface as a request failure — but still worth knowing about,
-            # since a lecturer whose questions are always template-generated has no other way
-            # to find out AI generation is silently failing (bad key, quota, etc).
-            logger.exception('_call_llm_for_questions: Groq request failed')
-
-    # Step 2: Try Secondary (Google Gemini 1.5 Flash)
-    if not raw_text and GEMINI_API_KEY:
-        try:
-            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-            g_body = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"response_mime_type": "application/json"}
-            }
-            with httpx.Client(timeout=12.0) as client:
-                g_resp = client.post(gemini_url, json=g_body)
-                if g_resp.status_code == 200:
-                    raw_text = g_resp.json()['candidates'][0]['content']['parts'][0]['text']
-        except Exception:
-            logger.exception('_call_llm_for_questions: Gemini request failed')
-
-    # Step 3: Try Tertiary (OpenAI gpt-4o-mini)
-    if not raw_text and OPENAI_API_KEY:
-        try:
-            o_url = "https://api.openai.com/v1/chat/completions"
-            o_headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-            o_body = {
-                "model": "gpt-4o-mini",
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": {"type": "json_object"}
-            }
-            with httpx.Client(timeout=12.0) as client:
-                o_resp = client.post(o_url, headers=o_headers, json=o_body)
-                if o_resp.status_code == 200:
-                    raw_text = o_resp.json()['choices'][0]['message']['content']
-        except Exception:
-            logger.exception('_call_llm_for_questions: OpenAI request failed')
+    raw_text = call_llm(
+        'You are a professional university professor creating high quality exam questions. Output strictly valid JSON.',
+        prompt,
+        max_tokens=512,
+        temperature=0.3,
+        json_mode=True,
+        timeout=12.0,
+    )
 
     if not raw_text:
         return None

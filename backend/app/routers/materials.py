@@ -9,9 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from app.core.security import get_current_claims_optional, require_roles
+from app.core.security import get_current_claims, get_current_claims_optional, require_roles
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
+from app.core.rate_limit import rate_limiter
 from app.services import office_convert
+from app.services.llm import call_llm
 import postgrest
 
 logger = logging.getLogger(__name__)
@@ -718,6 +720,269 @@ def get_material_content(material_id: int):
         'material_id': material_id,
         'name': material_name,
         'content': text_content,
+    }
+
+
+# ─────────────────────────────────────────────
+# AI TUTOR — material-grounded, direct context injection (Option C + light
+# personalization). No RAG/embeddings/vector search — see docs/ai-tutor.md for what's
+# deliberately deferred to future work and why.
+# ─────────────────────────────────────────────
+
+_TUTOR_ACTIONS = {'ask', 'explain_page', 'summarize', 'practice'}
+
+# Per-process cache of extracted material text, keyed by material_id. Extraction (PDF/PPTX
+# parsing) is the expensive part of a tutor request and a material's content never changes
+# after upload, so it must not be redone on every question a student asks. Intentionally
+# just an in-memory dict — the smallest cache that satisfies that, no new table/file needed.
+_TUTOR_TEXT_CACHE: dict[int, dict[str, Any]] = {}
+
+_MAX_PAGE_CONTEXT_CHARS = 6000
+_MAX_FULL_TEXT_CONTEXT_CHARS = 12000
+
+
+def _fetch_bytes(url: str) -> bytes | None:
+    try:
+        import httpx
+        with httpx.Client(timeout=20.0, follow_redirects=True) as client:
+            resp = client.get(url)
+            if resp.status_code == 200 and resp.content:
+                return resp.content
+    except Exception:
+        logger.exception('_fetch_bytes: failed to fetch %s', url)
+    return None
+
+
+def _get_material_tutor_context(material: dict[str, Any]) -> dict[str, Any]:
+    """Resolves and extracts (with caching) the text content for a material, reusing the
+    same extraction functions quiz generation uses (app.routers.quizzes). Returns
+    {'pages': list[str] | None, 'full_text': str, 'is_paginated': bool} — `pages` is None
+    for materials with no page concept (docx/txt/pptx-not-converted), and callers fall back
+    to `full_text` for those.
+    """
+    material_id = material.get('id')
+    if material_id in _TUTOR_TEXT_CACHE:
+        return _TUTOR_TEXT_CACHE[material_id]
+
+    from io import BytesIO
+    from app.routers.quizzes import _extract_pdf_pages, _extract_text_from_file
+
+    material_name = str(material.get('name') or '')
+    ext = Path(material_name).suffix.lower()
+    result: dict[str, Any] = {'pages': None, 'full_text': '', 'is_paginated': False}
+
+    if ext == '.pdf':
+        resolved_path = _resolve_material_file(material)
+        if resolved_path:
+            pages = _extract_pdf_pages(str(resolved_path))
+            if pages:
+                result = {'pages': pages, 'full_text': '\n'.join(pages), 'is_paginated': True}
+    elif ext in {'.pptx', '.ppt'} and material.get('pdf_url'):
+        # Read the converted PDF (the durable Supabase Storage copy — the local temp file
+        # made during upload-time conversion is deleted right after upload) so page numbers
+        # line up exactly with what PdfReader.tsx shows the student.
+        pdf_bytes = _fetch_bytes(material['pdf_url'])
+        if pdf_bytes:
+            pages = _extract_pdf_pages(BytesIO(pdf_bytes))
+            if pages:
+                result = {'pages': pages, 'full_text': '\n'.join(pages), 'is_paginated': True}
+
+    if not result['full_text']:
+        resolved_path = _resolve_material_file(material)
+        text = _extract_text_from_file(str(resolved_path)) if resolved_path else ''
+        result = {'pages': None, 'full_text': text, 'is_paginated': False}
+
+    _TUTOR_TEXT_CACHE[material_id] = result
+    return result
+
+
+def _build_tutor_context_block(context: dict[str, Any], current_page: int | None) -> tuple[str, int | None]:
+    """Context-priority: current page -> nearby pages (if the current page has no
+    extractable text, e.g. an image-only slide) -> whole material as a last resort."""
+    pages = context.get('pages')
+    if pages and current_page and 1 <= current_page <= len(pages):
+        page_text = (pages[current_page - 1] or '').strip()
+        if not page_text:
+            neighbors = [p for p in pages[max(0, current_page - 2):current_page + 1] if p and p.strip()]
+            page_text = '\n\n'.join(neighbors)
+        if page_text:
+            return page_text[:_MAX_PAGE_CONTEXT_CHARS], current_page
+    full_text = (context.get('full_text') or '').strip()
+    return full_text[:_MAX_FULL_TEXT_CONTEXT_CHARS], None
+
+
+def _get_student_course_performance_summary(student_id: str, course: str) -> str:
+    """One-line, best-effort summary of the student's quiz performance in this course — the
+    'light personalization' input to the tutor's prompt (deliberately not a learning-gap /
+    topic-level analysis — TMAS doesn't store per-topic question tagging, so claiming that
+    would mean inventing data). Never raises: this is a nicety for the prompt, not something
+    the tutor should fail over if it can't be computed.
+    """
+    try:
+        quizzes_resp = supabase.table('quizzes').select('id').eq('course', course).execute()
+        if supabase_failed(quizzes_resp) or not quizzes_resp.data:
+            return ''
+        quiz_ids = [q['id'] for q in quizzes_resp.data if q.get('id') is not None]
+        if not quiz_ids:
+            return ''
+        attempts_resp = supabase.table('quiz_attempts').select('score,passed,status') \
+            .eq('student_id', student_id).in_('quiz_id', quiz_ids).eq('status', 'completed').execute()
+        if supabase_failed(attempts_resp) or not attempts_resp.data:
+            return ''
+        attempts = attempts_resp.data
+        avg_score = round(sum(a.get('score') or 0 for a in attempts) / len(attempts))
+        pass_count = sum(1 for a in attempts if a.get('passed'))
+        if avg_score >= 80:
+            tone = 'is performing well'
+        elif avg_score >= 60:
+            tone = 'has a moderate grasp of the material'
+        else:
+            tone = 'has been finding this course challenging'
+        plural = 'zes' if len(attempts) != 1 else ''
+        return (
+            f"This student {tone} (average quiz score {avg_score}% across {len(attempts)} "
+            f"completed quiz{plural} in this course, {pass_count} passed). You may adjust tone "
+            f"and depth accordingly, but do not claim specific topic-level weaknesses beyond this summary."
+        )
+    except Exception:
+        logger.exception('_get_student_course_performance_summary failed for student_id=%s course=%s', student_id, course)
+        return ''
+
+
+def _generate_practice_questions(course: str, material_title: str, count: int = 3) -> list[dict[str, Any]]:
+    """Reuses the existing AI quiz-generation question logic (app.routers.quizzes) to
+    produce a small number of ungraded practice questions. Deliberately NOT persisted to
+    the `quizzes`/`quiz_questions` tables, so these never enter the official quiz bank,
+    lecturer-published assessments, or a student's grades."""
+    from app.routers.quizzes import _generate_question
+    types = ['MCQ', 'True/False', 'Fill in the Blank']
+    difficulties = ['Easy', 'Medium', 'Medium']
+    questions = []
+    for i in range(count):
+        q = _generate_question(course, [material_title], difficulties[i % len(difficulties)], types[i % len(types)], i)
+        q['source'] = 'AI Practice'
+        questions.append(q)
+    return questions
+
+
+class TutorRequest(BaseModel):
+    student_id: str
+    action: str
+    question: str | None = None
+    current_page: int | None = Field(default=None, ge=1)
+
+
+@router.post('/{material_id}/tutor')
+def ai_tutor(
+    material_id: int,
+    payload: TutorRequest,
+    _rate_limit: None = Depends(rate_limiter('ai-tutor', 12, 60)),
+    claims: dict[str, Any] = Depends(get_current_claims),
+) -> dict[str, Any]:
+    """Material-grounded AI Tutor integrated with the Material Reader. Direct context
+    injection (current page from PdfReader.tsx, or the whole material as a fallback) — see
+    docs/ai-tutor.md for why RAG/embeddings are not used here."""
+    ensure_supabase_enabled()
+    from app.routers.quizzes import (
+        _clean_material_title,
+        _is_course_allowed_for_student,
+        _student_level_program,
+        _verify_acting_as_self,
+    )
+
+    _verify_acting_as_self(claims, payload.student_id)
+
+    action = (payload.action or '').strip().lower()
+    if action not in _TUTOR_ACTIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid action. Must be one of: {', '.join(sorted(_TUTOR_ACTIONS))}")
+    if action == 'ask' and not (payload.question or '').strip():
+        raise HTTPException(status_code=400, detail='question is required for the ask action')
+
+    response = supabase.table('materials').select('*').eq('id', material_id).limit(1).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase get material failed'))
+    if not response.data:
+        raise HTTPException(status_code=404, detail='Material not found')
+    material = response.data[0]
+    course = str(material.get('course') or '')
+
+    # Course-access check — mirrors the level/program eligibility check quizzes.py already
+    # enforces for a student's own course-restricted content; materials has no separate
+    # enrollments table to check against, so this is the closest existing authorization
+    # pattern rather than a new one invented for the tutor.
+    try:
+        level, program = _student_level_program(payload.student_id)
+        if level and course and not _is_course_allowed_for_student(course, level, program):
+            raise HTTPException(status_code=403, detail='You do not have access to this course material')
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception('ai_tutor: course-access check failed for student_id=%s material_id=%s', payload.student_id, material_id)
+
+    material_title = _clean_material_title(str(material.get('name') or ''))
+
+    if action == 'practice':
+        try:
+            questions = _generate_practice_questions(course, material_title)
+        except Exception:
+            logger.exception('ai_tutor: practice question generation failed for material_id=%s', material_id)
+            raise HTTPException(status_code=502, detail='Could not generate practice questions right now — please try again shortly.')
+        return {
+            'success': True,
+            'action': 'practice',
+            'answer': f"Here are {len(questions)} AI-generated practice questions based on this material. These are for practice only and are not graded.",
+            'practice_questions': questions,
+            'source': {'material_id': material_id, 'page': payload.current_page},
+        }
+
+    context = _get_material_tutor_context(material)
+    context_text, page_used = _build_tutor_context_block(context, payload.current_page)
+    performance_summary = _get_student_course_performance_summary(payload.student_id, course)
+    material_type = 'PDF' if context.get('is_paginated') else (Path(str(material.get('name') or '')).suffix.lstrip('.').upper() or 'document')
+
+    action_instruction = {
+        'ask': f"Answer the student's question: {(payload.question or '').strip()}",
+        'explain_page': 'Explain the content above in clear, simple, student-friendly language. Focus on the key concept(s).',
+        'summarize': 'Summarize the content above — key concepts, definitions, main ideas, and important relationships.',
+    }[action]
+
+    if not context_text:
+        context_text = '(No extracted content is available for this material.)'
+
+    system_prompt = (
+        "You are the AI Tutor inside TMAS (Tracking, Monitoring and Assessing Students), a university LMS. "
+        "You help a specific student understand a specific lecturer-uploaded course material. Rules:\n"
+        "- Prioritize the RELEVANT MATERIAL CONTENT below as your primary source.\n"
+        "- Never fabricate lecturer content or invent page numbers.\n"
+        "- If the material content doesn't contain what's being asked, say so plainly, e.g. "
+        "\"I couldn't find this in the uploaded material. I can still provide a general explanation if you'd like.\" "
+        "then you may answer from general knowledge — but never present general knowledge as if it came from the lecturer's material.\n"
+        "- Keep answers focused and student-friendly, not an unrestricted open-domain chatbot."
+    )
+    user_prompt = (
+        f"COURSE:\n{course}\n\n"
+        f"MATERIAL:\n{material_title}\n\n"
+        f"MATERIAL TYPE:\n{material_type}\n\n"
+        f"CURRENT PAGE:\n{page_used if page_used else 'N/A (using whole material)'}\n\n"
+        f"RELEVANT MATERIAL CONTENT:\n{context_text}\n\n"
+        + (f"STUDENT PERFORMANCE CONTEXT:\n{performance_summary}\n\n" if performance_summary else '')
+        + f"REQUEST:\n{action_instruction}"
+    )
+
+    try:
+        answer = call_llm(system_prompt, user_prompt, max_tokens=700, temperature=0.4, timeout=20.0)
+    except Exception:
+        logger.exception('ai_tutor: LLM call raised for material_id=%s action=%s', material_id, action)
+        answer = None
+
+    if not answer:
+        raise HTTPException(status_code=502, detail='The AI Tutor is temporarily unavailable — please try again shortly.')
+
+    return {
+        'success': True,
+        'action': action,
+        'answer': answer.strip(),
+        'source': {'material_id': material_id, 'page': page_used} if page_used else None,
     }
 
 

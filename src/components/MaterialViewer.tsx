@@ -20,6 +20,9 @@ type MaterialViewerProps = {
   studentId?: string
   fontSize: FontSize
   onCompleted?: () => void
+  // Forwarded straight through to PdfReader — see its own prop for rationale. Only ever
+  // fires for PDF/converted-PPTX materials, since non-paginated formats have no page concept.
+  onPageChange?: (page: number, numPages: number) => void
 }
 
 type PptxSlide = { title?: string; bullets: string[]; images: string[] }
@@ -213,7 +216,7 @@ function PptxSlides({ slides }: { slides: PptxSlide[] }) {
 // extract anything meaningful either, in which case it returns this fixed placeholder.
 const SERVER_EXTRACTION_PLACEHOLDER_PREFIX = 'Material: '
 
-export default function MaterialViewer({ materialId, materialName, downloadUrl, pdfViewUrl, studentId, fontSize, onCompleted }: MaterialViewerProps) {
+export default function MaterialViewer({ materialId, materialName, downloadUrl, pdfViewUrl, studentId, fontSize, onCompleted, onPageChange }: MaterialViewerProps) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'legacy-unsupported'>('loading')
   const [downloadPct, setDownloadPct] = useState<number | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
@@ -448,6 +451,7 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
           studentId={studentId}
           initialPage={pdfResumePage}
           onCompleted={onCompleted}
+          onPageChange={onPageChange}
         />
       )}
 

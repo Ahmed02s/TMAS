@@ -10,6 +10,7 @@ import { extractErrorMessage } from '../utils/apiError'
 // pdfjs/mammoth/jszip are heavy parsing libraries only needed once a student actually
 // opens a material — code-split so they don't bloat the initial app bundle.
 const MaterialViewer = lazy(() => import('../components/MaterialViewer'))
+const AiTutorPanel = lazy(() => import('../components/AiTutorPanel'))
 
 type Tab = 'overview' | 'courses' | 'quizzes' | 'grades' | 'progress'
 
@@ -249,6 +250,11 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     window.addEventListener('keydown', handleEscape)
     return () => window.removeEventListener('keydown', handleEscape)
   }, [readerFocusMode])
+  const [tutorOpen, setTutorOpen] = useState(false)
+  // Read-only mirror of PdfReader's own currentPage/numPages state, passed down purely so
+  // the AI Tutor panel knows what page to ground its response in — PdfReader remains the
+  // single source of truth for reading position; this just receives its onPageChange signal.
+  const [readerPage, setReaderPage] = useState<{ page: number; numPages: number }>({ page: 1, numPages: 0 })
   const [activeQuiz, setActiveQuiz] = useState<number | null>(null)
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([])
   const [quizAnswers, setQuizAnswers] = useState<Record<number, string>>({})
@@ -2085,8 +2091,8 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                   </div>
                 ) : (
                   <div className={readerFocusMode
-                    ? 'fixed inset-0 z-[60] flex flex-col bg-background'
-                    : 'flex flex-1 min-h-0 flex-col rounded-3xl border border-border bg-card/70 overflow-hidden'
+                    ? 'fixed inset-0 z-[60] flex bg-background'
+                    : 'flex flex-1 min-h-0 gap-3'
                   }>
                     {(() => {
                       const activeMaterial = materials.find(item => item.id === activeMaterialId)
@@ -2095,69 +2101,102 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                       // "Download Original" always links to the true source file above —
                       // this is only used to make the reader treat a converted PPTX as a PDF.
                       const pdfViewUrl = activeMaterial.pdf_url ? `${API_BASE}/api/materials/${activeMaterial.id}/pdf` : undefined
+                      // Same "is this read as a paginated PDF" check MaterialViewer makes internally —
+                      // duplicated here only as a presentation flag (whether to show page context to
+                      // the AI Tutor), not a second telemetry/identity system.
+                      const isPdfMaterial = activeMaterial.name.toLowerCase().endsWith('.pdf') || Boolean(activeMaterial.pdf_url)
 
                       return (
                         <>
-                          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 shrink-0">
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-foreground">{activeMaterial.name}</p>
-                              <p className="mt-1 text-xs text-muted-foreground">{activeMaterial.size} • Uploaded by {activeMaterial.lecturer}</p>
+                          <div className={`flex min-h-0 flex-col overflow-hidden ${
+                            readerFocusMode ? 'flex-1' : 'flex-1 min-w-0 rounded-3xl border border-border bg-card/70'
+                          }`}>
+                            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 shrink-0">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-foreground">{activeMaterial.name}</p>
+                                <p className="mt-1 text-xs text-muted-foreground">{activeMaterial.size} • Uploaded by {activeMaterial.lecturer}</p>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <a
+                                  href={downloadUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-center rounded-full bg-primary px-3.5 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+                                >
+                                  Download Original
+                                </a>
+                                <button
+                                  onClick={() => setTutorOpen(o => !o)}
+                                  title={tutorOpen ? 'Close AI Tutor' : 'Open AI Tutor'}
+                                  className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+                                    tutorOpen ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background text-foreground hover:bg-muted'
+                                  }`}
+                                >
+                                  <i className="fa-solid fa-robot" />
+                                  <span className="hidden sm:inline">AI Tutor</span>
+                                </button>
+                                <button
+                                  onClick={() => setReaderFocusMode(f => !f)}
+                                  title={readerFocusMode ? 'Exit focus mode' : 'Expand to full screen'}
+                                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-3.5 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted"
+                                >
+                                  <i className={`fa-solid ${readerFocusMode ? 'fa-compress' : 'fa-expand'}`} />
+                                  <span className="hidden sm:inline">{readerFocusMode ? 'Exit Focus' : 'Focus Mode'}</span>
+                                </button>
+                              </div>
                             </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                              <a
-                                href={downloadUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center rounded-full bg-primary px-3.5 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
-                              >
-                                Download Original
-                              </a>
-                              <button
-                                onClick={() => setReaderFocusMode(f => !f)}
-                                title={readerFocusMode ? 'Exit focus mode' : 'Expand to full screen'}
-                                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-3.5 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted"
-                              >
-                                <i className={`fa-solid ${readerFocusMode ? 'fa-compress' : 'fa-expand'}`} />
-                                <span className="hidden sm:inline">{readerFocusMode ? 'Exit Focus' : 'Focus Mode'}</span>
-                              </button>
+
+                            <div className="flex-1 min-h-0 flex flex-col">
+                              {/* Font size toolbar — applies to text-based renders (docx/txt/md) */}
+                              <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-muted/30 shrink-0">
+                                <span className="text-xs text-muted-foreground font-medium">Font size:</span>
+                                {(['text-sm', 'text-base', 'text-lg', 'text-xl'] as const).map(size => (
+                                  <button
+                                    key={size}
+                                    onClick={() => setReaderFontSize(size)}
+                                    className={`px-2 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                                      readerFontSize === size ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                                    }`}
+                                  >
+                                    {size === 'text-sm' ? 'S' : size === 'text-base' ? 'M' : size === 'text-lg' ? 'L' : 'XL'}
+                                  </button>
+                                ))}
+                              </div>
+                              <div className="flex-1 min-h-0">
+                                <Suspense fallback={
+                                  <div className="flex items-center justify-center py-24">
+                                    <span className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                                  </div>
+                                }>
+                                  <MaterialViewer
+                                    key={activeMaterial.id}
+                                    materialId={activeMaterial.id}
+                                    materialName={activeMaterial.name}
+                                    downloadUrl={downloadUrl}
+                                    pdfViewUrl={pdfViewUrl}
+                                    studentId={savedUser?.id}
+                                    fontSize={readerFontSize}
+                                    onCompleted={() => markMaterialCompleted(activeMaterial.id, savedUser?.id)}
+                                    onPageChange={(page, numPages) => setReaderPage({ page, numPages })}
+                                  />
+                                </Suspense>
+                              </div>
                             </div>
                           </div>
 
-                          <div className="flex-1 min-h-0 flex flex-col">
-                            {/* Font size toolbar — applies to text-based renders (docx/txt/md) */}
-                            <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-muted/30 shrink-0">
-                              <span className="text-xs text-muted-foreground font-medium">Font size:</span>
-                              {(['text-sm', 'text-base', 'text-lg', 'text-xl'] as const).map(size => (
-                                <button
-                                  key={size}
-                                  onClick={() => setReaderFontSize(size)}
-                                  className={`px-2 py-1 rounded-lg text-xs font-semibold transition-colors ${
-                                    readerFontSize === size ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                                  }`}
-                                >
-                                  {size === 'text-sm' ? 'S' : size === 'text-base' ? 'M' : size === 'text-lg' ? 'L' : 'XL'}
-                                </button>
-                              ))}
-                            </div>
-                            <div className="flex-1 min-h-0">
-                              <Suspense fallback={
-                                <div className="flex items-center justify-center py-24">
-                                  <span className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-                                </div>
-                              }>
-                                <MaterialViewer
-                                  key={activeMaterial.id}
-                                  materialId={activeMaterial.id}
-                                  materialName={activeMaterial.name}
-                                  downloadUrl={downloadUrl}
-                                  pdfViewUrl={pdfViewUrl}
-                                  studentId={savedUser?.id}
-                                  fontSize={readerFontSize}
-                                  onCompleted={() => markMaterialCompleted(activeMaterial.id, savedUser?.id)}
-                                />
-                              </Suspense>
-                            </div>
-                          </div>
+                          {tutorOpen && (
+                            <Suspense fallback={null}>
+                              <AiTutorPanel
+                                materialId={activeMaterial.id}
+                                materialName={activeMaterial.name}
+                                course={activeMaterial.course}
+                                studentId={savedUser?.id}
+                                currentPage={readerPage.page}
+                                isPdf={isPdfMaterial}
+                                onClose={() => setTutorOpen(false)}
+                              />
+                            </Suspense>
+                          )}
                         </>
                       )
                     })()}

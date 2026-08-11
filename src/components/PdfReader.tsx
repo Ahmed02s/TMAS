@@ -13,6 +13,11 @@ type PdfReaderProps = {
   // or <= 1 just starts at the top like a first-time read.
   initialPage?: number
   onCompleted?: () => void
+  // Notifies the parent of the page currently in view, purely so the AI Tutor panel knows
+  // what the student is looking at — this is a read-only mirror of the currentPage state
+  // already tracked below, not a second page tracker (PdfReader remains the one source of
+  // truth for reading position/telemetry).
+  onPageChange?: (page: number, numPages: number) => void
 }
 
 // Multipliers on top of the "fit container width" base scale computed at render time.
@@ -23,7 +28,7 @@ const DEFAULT_ZOOM_INDEX = 2 // 1x — matches the previous fixed-fit behavior
 // otherwise fast scrolling past a page on the way to another would still log it as read.
 const PAGE_DWELL_MS = 1500
 
-export default function PdfReader({ materialId, arrayBuffer, studentId, initialPage, onCompleted }: PdfReaderProps) {
+export default function PdfReader({ materialId, arrayBuffer, studentId, initialPage, onCompleted, onPageChange }: PdfReaderProps) {
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null)
   const [numPages, setNumPages] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
@@ -206,6 +211,10 @@ export default function PdfReader({ materialId, arrayBuffer, studentId, initialP
       syncProgress(true)
     }
   }, [studentId, syncProgress])
+
+  useEffect(() => {
+    if (numPages) onPageChange?.(currentPage, numPages)
+  }, [currentPage, numPages, onPageChange])
 
   const goToPage = useCallback((page: number) => {
     const target = Math.max(1, Math.min(numPages || 1, page))
