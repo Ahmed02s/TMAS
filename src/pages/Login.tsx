@@ -424,15 +424,18 @@ export default function Login({
                     <label className="block text-sm font-medium text-foreground mb-1.5">
                       Email Address
                     </label>
-                    <input
-                      type="email"
-                      autoComplete="username"
-                      value={email}
-                      onChange={e => { setEmail(e.target.value); setEmailErr('') }}
-                      onBlur={() => setEmailErr(validateEmail(email))}
-                      placeholder="you@university.edu"
-                      className={inputCls(!!emailErr)}
-                    />
+                    <div className="relative">
+                      <i className="fa-solid fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-sm pointer-events-none" />
+                      <input
+                        type="email"
+                        autoComplete="username"
+                        value={email}
+                        onChange={e => { setEmail(e.target.value); setEmailErr('') }}
+                        onBlur={() => setEmailErr(validateEmail(email))}
+                        placeholder="you@university.edu"
+                        className={`${inputCls(!!emailErr)} pl-11`}
+                      />
+                    </div>
                     <FieldError msg={emailErr} />
                   </div>
 
@@ -449,6 +452,7 @@ export default function Login({
                       </button>
                     </div>
                     <div className="relative">
+                      <i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-sm pointer-events-none" />
                       <input
                         type={showLoginPassword ? 'text' : 'password'}
                         autoComplete="current-password"
@@ -456,7 +460,7 @@ export default function Login({
                         onChange={e => { setPassword(e.target.value); setPasswordErr('') }}
                         onBlur={() => setPasswordErr(!password ? 'Password is required.' : '')}
                         placeholder="••••••••"
-                        className={inputCls(!!passwordErr)}
+                        className={`${inputCls(!!passwordErr)} pl-11`}
                       />
                       <button
                         type="button"
@@ -473,7 +477,7 @@ export default function Login({
                   <button
                     onClick={handleLogin}
                     disabled={isSubmitting}
-                    className="w-full bg-primary hover:bg-blue-950 text-white font-semibold py-3.5 rounded-xl transition-colors disabled:opacity-60"
+                    className="w-full bg-primary hover:bg-blue-950 text-white font-semibold py-3.5 rounded-xl transition-all disabled:opacity-60 hover:shadow-lg hover:shadow-primary/20"
                   >
                     {isSubmitting ? <><i className="fa-solid fa-spinner fa-spin mr-2" />Signing in...</> : 'Sign In'}
                   </button>
@@ -535,14 +539,17 @@ export default function Login({
                   {/* Email */}
                   <div>
                     <label className="block text-sm font-medium text-foreground mb-1.5">Email Address</label>
-                    <input
-                      type="email"
-                      value={registerEmail}
-                      onChange={e => { setRegisterEmail(e.target.value); setRegEmailErr('') }}
-                      onBlur={() => setRegEmailErr(validateEmail(registerEmail))}
-                      placeholder="you@university.edu"
-                      className={inputCls(!!regEmailErr)}
-                    />
+                    <div className="relative">
+                      <i className="fa-solid fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-sm pointer-events-none" />
+                      <input
+                        type="email"
+                        value={registerEmail}
+                        onChange={e => { setRegisterEmail(e.target.value); setRegEmailErr('') }}
+                        onBlur={() => setRegEmailErr(validateEmail(registerEmail))}
+                        placeholder="you@university.edu"
+                        className={`${inputCls(!!regEmailErr)} pl-11`}
+                      />
+                    </div>
                     <FieldError msg={regEmailErr} />
                   </div>
 
@@ -550,13 +557,14 @@ export default function Login({
                   <div>
                     <label className="block text-sm font-medium text-foreground mb-1.5">Password</label>
                     <div className="relative">
+                      <i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-sm pointer-events-none" />
                       <input
                         type={showRegisterPassword ? 'text' : 'password'}
                         value={registerPassword}
                         onChange={e => { setRegisterPassword(e.target.value); setRegPasswordErr('') }}
                         onBlur={() => setRegPasswordErr(!registerPassword ? 'Password is required.' : registerPassword.length < 6 ? 'At least 6 characters.' : '')}
                         placeholder="••••••••"
-                        className={inputCls(!!regPasswordErr)}
+                        className={`${inputCls(!!regPasswordErr)} pl-11`}
                       />
                       <button
                         type="button"
@@ -579,18 +587,21 @@ export default function Login({
                           Student Index Number
                           <span className="ml-2 text-xs text-muted-foreground font-normal">(e.g. UEB3512822)</span>
                         </label>
-                        <input
-                          type="text"
-                          value={studentIndexNumber}
-                          onChange={e => {
-                            setStudentIndexNumber(e.target.value.toUpperCase())
-                            setStudentIdErr('')
-                          }}
-                          onBlur={() => setStudentIdErr(validateStudentId(studentIndexNumber))}
-                          placeholder="UEB3512822"
-                          maxLength={10}
-                          className={inputCls(!!studentIdErr)}
-                        />
+                        <div className="relative">
+                          <i className="fa-solid fa-id-card absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-sm pointer-events-none" />
+                          <input
+                            type="text"
+                            value={studentIndexNumber}
+                            onChange={e => {
+                              setStudentIndexNumber(e.target.value.toUpperCase())
+                              setStudentIdErr('')
+                            }}
+                            onBlur={() => setStudentIdErr(validateStudentId(studentIndexNumber))}
+                            placeholder="UEB3512822"
+                            maxLength={10}
+                            className={`${inputCls(!!studentIdErr)} pl-11`}
+                          />
+                        </div>
                         <FieldError msg={studentIdErr} />
                         {!studentIdErr && studentIndexNumber && STUDENT_ID_RE.test(studentIndexNumber) && (
                           <p className="flex items-center gap-1.5 text-xs text-emerald-600 mt-1.5 font-medium">
@@ -642,7 +653,7 @@ export default function Login({
                   <button
                     onClick={handleRegister}
                     disabled={isSubmitting}
-                    className="w-full bg-accent hover:bg-amber-600 text-white font-semibold py-3.5 rounded-xl transition-colors disabled:opacity-60"
+                    className="w-full bg-accent hover:bg-amber-600 text-white font-semibold py-3.5 rounded-xl transition-all disabled:opacity-60 hover:shadow-lg hover:shadow-amber-500/20"
                   >
                     {isSubmitting
                       ? <><i className="fa-solid fa-spinner fa-spin mr-2" />Working...</>
@@ -739,13 +750,16 @@ export default function Login({
                 </p>
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-1.5">Email Address</label>
-                  <input
-                    type="email"
-                    value={forgotEmail}
-                    onChange={e => { setForgotEmail(e.target.value); setForgotError('') }}
-                    placeholder="you@university.edu"
-                    className={inputCls(!!forgotError)}
-                  />
+                  <div className="relative">
+                    <i className="fa-solid fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-sm pointer-events-none" />
+                    <input
+                      type="email"
+                      value={forgotEmail}
+                      onChange={e => { setForgotEmail(e.target.value); setForgotError('') }}
+                      placeholder="you@university.edu"
+                      className={`${inputCls(!!forgotError)} pl-11`}
+                    />
+                  </div>
                   <FieldError msg={forgotError} />
                 </div>
                 <button

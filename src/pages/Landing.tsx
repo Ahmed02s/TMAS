@@ -4,12 +4,12 @@ import { API_BASE } from '../config'
 import LegalModal from '../components/LegalModal'
 
 const features = [
-  { iconClass: 'fa-solid fa-robot text-primary', title: 'AI-Powered Quiz Generation', desc: 'Upload PDFs, slides, or documents and our AI extracts topics, identifies learning objectives, and generates a comprehensive question bank — ready for lecturer review.' },
-  { iconClass: 'fa-solid fa-chart-column text-accent', title: 'Real-Time Progress Tracking', desc: 'Live dashboards show every student\'s completion rate, quiz performance, and learning trajectory across all enrolled courses.' },
-  { iconClass: 'fa-solid fa-building-columns text-purple-600', title: 'Smart Academic Structure', desc: 'Configure a flexible institutional hierarchy — levels, courses, and assignments — that scales from small colleges to large universities.' },
-  { iconClass: 'fa-solid fa-user-shield text-blue-600', title: 'Role-Based Access Control', desc: 'Administrators, lecturers, and students each access only what they need. Permissions are enforced at every layer of the platform.' },
-  { iconClass: 'fa-solid fa-circle-check text-emerald-600', title: 'Automated Assessment', desc: 'Objective questions are graded instantly. Results, scores, and analytics are updated in real time as students complete assessments.' },
-  { iconClass: 'fa-solid fa-bell text-amber-500', title: 'Unified Notification System', desc: 'Real-time in-app, email, and push notifications keep every stakeholder informed of approvals, deadlines, quiz releases, and results.' },
+  { iconClass: 'fa-solid fa-robot text-primary', tint: 'bg-primary/10', title: 'AI-Powered Quiz Generation', desc: 'Upload PDFs, slides, or documents and our AI extracts topics, identifies learning objectives, and generates a comprehensive question bank — ready for lecturer review.' },
+  { iconClass: 'fa-solid fa-chart-column text-accent', tint: 'bg-accent/10', title: 'Real-Time Progress Tracking', desc: 'Live dashboards show every student\'s completion rate, quiz performance, and learning trajectory across all enrolled courses.' },
+  { iconClass: 'fa-solid fa-building-columns text-purple-600', tint: 'bg-purple-500/10', title: 'Smart Academic Structure', desc: 'Configure a flexible institutional hierarchy — levels, courses, and assignments — that scales from small colleges to large universities.' },
+  { iconClass: 'fa-solid fa-user-shield text-blue-600', tint: 'bg-blue-500/10', title: 'Role-Based Access Control', desc: 'Administrators, lecturers, and students each access only what they need. Permissions are enforced at every layer of the platform.' },
+  { iconClass: 'fa-solid fa-circle-check text-emerald-600', tint: 'bg-emerald-500/10', title: 'Automated Assessment', desc: 'Objective questions are graded instantly. Results, scores, and analytics are updated in real time as students complete assessments.' },
+  { iconClass: 'fa-solid fa-bell text-amber-500', tint: 'bg-amber-500/10', title: 'Unified Notification System', desc: 'Real-time in-app, email, and push notifications keep every stakeholder informed of approvals, deadlines, quiz releases, and results.' },
 ]
 
 const steps = [
@@ -31,6 +31,7 @@ const roleCards = [
   {
     role: 'Administrator',
     iconClass: 'fa-solid fa-sliders text-purple-600',
+    tint: 'bg-purple-500/10',
     badge: 'bg-purple-100 text-purple-800',
     features: ['Full institutional control', 'Create and manage academic levels', 'Course creation and assignment', 'Lecturer approval workflow', 'Student enrollment management', 'Institution-wide analytics'],
     cta: 'Admin Login',
@@ -39,6 +40,7 @@ const roleCards = [
   {
     role: 'Lecturer',
     iconClass: 'fa-solid fa-chalkboard-user text-blue-600',
+    tint: 'bg-blue-500/10',
     badge: 'bg-blue-100 text-blue-800',
     features: ['Manage assigned courses', 'Upload learning materials', 'AI-powered quiz generation', 'Review and edit questions', 'Publish quizzes to students', 'Monitor student performance'],
     cta: 'Register as Lecturer',
@@ -47,6 +49,7 @@ const roleCards = [
   {
     role: 'Student',
     iconClass: 'fa-solid fa-graduation-cap text-emerald-600',
+    tint: 'bg-emerald-500/10',
     badge: 'bg-green-100 text-green-800',
     features: ['Access enrolled courses', 'Download learning materials', 'Complete AI-generated quizzes', 'View scores and feedback', 'Track learning progress', 'Receive deadline reminders'],
     cta: 'Register as Student',
@@ -196,7 +199,7 @@ export default function Landing({ onNavigate }: { onNavigate: (v: AppView) => vo
       </section>
 
       {/* ── Stats Strip ── */}
-      <section className="bg-primary py-12">
+      <section className="bg-linear-to-r from-primary via-primary to-blue-950 py-12">
         <div className="max-w-7xl mx-auto px-6 grid grid-cols-2 lg:grid-cols-4 gap-8 text-center">
           {[
             { val: '2,847+', label: 'Active Students' },
@@ -228,8 +231,8 @@ export default function Landing({ onNavigate }: { onNavigate: (v: AppView) => vo
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
             {features.map((f, i) => (
               <div key={i} className="bg-card border border-border rounded-2xl p-7 hover:shadow-lg hover:-translate-y-0.5 transition-all group cursor-default">
-                <div className="mb-4">
-                  <i className={`${f.iconClass} text-3xl`} />
+                <div className={`inline-flex p-3 rounded-2xl mb-4 ${f.tint}`}>
+                  <i className={`${f.iconClass} text-2xl`} />
                 </div>
                 <h3 className="font-semibold text-foreground text-lg mb-2.5 group-hover:text-primary transition-colors">{f.title}</h3>
                 <p className="text-muted-foreground text-sm leading-relaxed">{f.desc}</p>
@@ -277,9 +280,9 @@ export default function Landing({ onNavigate }: { onNavigate: (v: AppView) => vo
 
           <div className="grid lg:grid-cols-3 gap-8">
             {roleCards.map((r, i) => (
-              <div key={i} className="bg-card border border-border rounded-2xl p-8 flex flex-col">
+              <div key={i} className="bg-card border border-border rounded-2xl p-8 flex flex-col transition-all hover:shadow-lg hover:-translate-y-0.5">
                 <div className="flex items-start gap-4 mb-6">
-                  <div className="text-3xl">
+                  <div className={`inline-flex p-3 rounded-2xl text-2xl ${r.tint}`}>
                     <i className={r.iconClass} />
                   </div>
                   <div>
@@ -367,11 +370,17 @@ export default function Landing({ onNavigate }: { onNavigate: (v: AppView) => vo
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">Full Name</label>
-                <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Dr. Jane Smith" className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors" />
+                <div className="relative">
+                  <i className="fa-solid fa-user absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-sm pointer-events-none" />
+                  <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Dr. Jane Smith" className="w-full pl-11 pr-4 py-3 bg-muted border border-border rounded-xl text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors" />
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">Email Address</label>
-                <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="jane@university.edu" className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors" />
+                <div className="relative">
+                  <i className="fa-solid fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-sm pointer-events-none" />
+                  <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="jane@university.edu" className="w-full pl-11 pr-4 py-3 bg-muted border border-border rounded-xl text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors" />
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">Message</label>
