@@ -8,13 +8,26 @@ from app.core.config import EMAIL_FROM, EMAIL_FROM_NAME, EMAIL_REPLY_TO, FRONTEN
 SENDGRID_API_URL = 'https://api.sendgrid.com/v3/mail/send'
 
 
+def _wrap_html_document(body_html: str) -> str:
+    """Wraps an HTML fragment in a complete, valid document. A bare fragment (no doctype/
+    html/head) is technically valid as an email's HTML part, but several mail clients and
+    security/spam gateways treat an incomplete document as a signal to fall back to the
+    plain-text alternative instead of rendering it — a full document renders reliably."""
+    return (
+        '<!doctype html>'
+        '<html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width" /></head>'
+        f'<body style="font-family: Arial, Helvetica, sans-serif; font-size: 15px; color: #1f2937;">{body_html}</body>'
+        '</html>'
+    )
+
+
 def _build_email_payload(to_email: str, to_name: str, reset_token: str) -> dict[str, object]:
     reset_url = f"{FRONTEND_URL}/forgot-password?token={reset_token}"
     from_name = EMAIL_FROM_NAME.strip() or 'TMAS'
     from_email = EMAIL_FROM.strip()
     reply_to = EMAIL_REPLY_TO.strip() or from_email
 
-    html_body = (
+    html_body = _wrap_html_document(
         f'<p>Hi {to_name},</p>'
         f'<p>We received a request to reset your TMAS password.</p>'
         f'<p><a href="{reset_url}" target="_blank" rel="noopener noreferrer">Click here to reset your password</a></p>'
@@ -78,7 +91,7 @@ def _build_verification_email_payload(to_email: str, to_name: str, verify_token:
     from_email = EMAIL_FROM.strip()
     reply_to = EMAIL_REPLY_TO.strip() or from_email
 
-    html_body = (
+    html_body = _wrap_html_document(
         f'<p>Hi {to_name},</p>'
         f'<p>Welcome to TMAS! Please confirm your email address to activate your account.</p>'
         f'<p><a href="{verify_url}" target="_blank" rel="noopener noreferrer">Click here to verify your email</a></p>'

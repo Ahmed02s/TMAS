@@ -87,7 +87,9 @@ export default function Login({
 
   // ── Email verification ────────────────────────────────────────────────────
   // "Check your inbox" screen shown right after a student registers, holding the address
-  // so the resend button doesn't need the user to retype it.
+  // so the resend button doesn't need the user to retype it. Also populated for a lecturer
+  // registration (see lecturerPendingModal below) — verification is required for every new
+  // account regardless of role, but only the student modal used to mention it.
   const [checkInboxEmail, setCheckInboxEmail] = useState('')
   const [resendBusy, setResendBusy] = useState(false)
   const [resendMessage, setResendMessage] = useState('')
@@ -376,6 +378,10 @@ export default function Login({
             data.token,
           )
         } catch {}
+        // A new lecturer needs BOTH admin approval AND email verification before they can
+        // log in (login()'s email_verified gate is checked before the pending-approval
+        // check) — track the address so the modal below can tell them that up front.
+        setCheckInboxEmail(trimmedEmail)
         setLecturerPendingModal(true)
       } else {
         setCheckInboxEmail(trimmedEmail)
@@ -778,9 +784,29 @@ export default function Login({
                 An instant push alert was sent to the Administrator dashboard. You will receive access once approved!
               </p>
             </div>
+            <div className="bg-primary/5 border border-primary/20 rounded-2xl p-4 text-xs text-primary text-left space-y-1">
+              <p className="font-bold flex items-center gap-1.5">
+                <i className="fa-solid fa-envelope-circle-check text-xs text-primary" />
+                <span>One More Step: Verify Your Email</span>
+              </p>
+              <p className="text-muted-foreground leading-relaxed">
+                We also sent a verification link to <span className="font-semibold text-foreground">{checkInboxEmail}</span>. You'll
+                need to click it — in addition to being approved — before you can sign in.
+              </p>
+            </div>
+            {resendMessage && (
+              <p className="text-xs text-primary bg-primary/5 border border-primary/20 rounded-xl p-3 leading-relaxed">{resendMessage}</p>
+            )}
             <div className="flex flex-col gap-2 pt-2">
               <button
-                onClick={() => { setLecturerPendingModal(false); setTab('login') }}
+                onClick={() => handleResendVerification(checkInboxEmail)}
+                disabled={resendBusy}
+                className="w-full bg-muted hover:bg-secondary text-foreground font-semibold py-3 rounded-xl transition-colors text-sm disabled:opacity-60"
+              >
+                {resendBusy ? <><i className="fa-solid fa-spinner fa-spin mr-2" />Resending...</> : "Didn't get it? Resend email"}
+              </button>
+              <button
+                onClick={() => { setLecturerPendingModal(false); setCheckInboxEmail(''); setResendMessage(''); setTab('login') }}
                 className="w-full bg-primary hover:bg-blue-950 text-white font-semibold py-3 rounded-xl transition-colors text-sm"
               >
                 Sign In with Approved Account →
@@ -796,8 +822,9 @@ export default function Login({
         </div>
       )}
 
-      {/* ── Check Your Inbox (post student-registration) Modal ── */}
-      {checkInboxEmail && (
+      {/* ── Check Your Inbox (post student-registration) Modal — the lecturer path shows its
+           own combined modal above instead, since checkInboxEmail is set for both roles ── */}
+      {checkInboxEmail && !lecturerPendingModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
           <div className="bg-card border border-border rounded-3xl p-8 max-w-md w-full text-center space-y-5 shadow-2xl animate-in fade-in zoom-in-95">
             <div className="w-16 h-16 bg-primary/10 text-primary border border-primary/20 rounded-2xl flex items-center justify-center mx-auto text-2xl">
