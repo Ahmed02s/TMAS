@@ -1554,7 +1554,7 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
         onClose={() => setCourseModalOpen(false)}
         onSubmit={handleSaveCourse}
         initialCourse={selectedCourse ?? undefined}
-        levels={levels.map(level => level.name)}
+        levels={levels.filter(level => level.status === 'active').map(level => level.name)}
         lecturers={dashboardLecturers.filter(l => l.status === 'active').map(l => l.name)}
         courseCodes={Array.from(new Set(allCourses.map(c => c.code).filter(Boolean)))}
         courseTitles={Array.from(new Set(allCourses.map(c => c.title).filter(Boolean)))}

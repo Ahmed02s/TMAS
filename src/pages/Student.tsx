@@ -2147,21 +2147,27 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                             </div>
 
                             <div className="flex-1 min-h-0 flex flex-col">
-                              {/* Font size toolbar — applies to text-based renders (docx/txt/md) */}
-                              <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-muted/30 shrink-0">
-                                <span className="text-xs text-muted-foreground font-medium">Font size:</span>
-                                {(['text-sm', 'text-base', 'text-lg', 'text-xl'] as const).map(size => (
-                                  <button
-                                    key={size}
-                                    onClick={() => setReaderFontSize(size)}
-                                    className={`px-2 py-1 rounded-lg text-xs font-semibold transition-colors ${
-                                      readerFontSize === size ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                                    }`}
-                                  >
-                                    {size === 'text-sm' ? 'S' : size === 'text-base' ? 'M' : size === 'text-lg' ? 'L' : 'XL'}
-                                  </button>
-                                ))}
-                              </div>
+                              {/* Font size only affects text-based renders (docx/txt/md) — a PDF page is a
+                                  rendered canvas image, so this control did nothing yet still showed as
+                                  clickable for PDFs (the overwhelming majority of uploaded materials),
+                                  which is what "font size doesn't work" actually was. PdfReader has its
+                                  own zoom control (+/-) for that case instead. */}
+                              {!isPdfMaterial && (
+                                <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-muted/30 shrink-0">
+                                  <span className="text-xs text-muted-foreground font-medium">Font size:</span>
+                                  {(['text-sm', 'text-base', 'text-lg', 'text-xl'] as const).map(size => (
+                                    <button
+                                      key={size}
+                                      onClick={() => setReaderFontSize(size)}
+                                      className={`px-2 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                                        readerFontSize === size ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                                      }`}
+                                    >
+                                      {size === 'text-sm' ? 'S' : size === 'text-base' ? 'M' : size === 'text-lg' ? 'L' : 'XL'}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
                               <div className="flex-1 min-h-0">
                                 <Suspense fallback={
                                   <div className="flex items-center justify-center py-24">

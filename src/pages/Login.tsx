@@ -234,7 +234,11 @@ export default function Login({
         const response = await fetch(`${API_BASE}/api/levels`)
         if (!response.ok) return
         const data = await response.json()
-        const levels = Array.isArray(data.levels) ? data.levels.map((l: any) => l.name).filter(Boolean) : []
+        // Only offer levels a new student can actually be placed into — an archived level
+        // shouldn't still show up as a registration option just because it once existed.
+        const levels = Array.isArray(data.levels)
+          ? data.levels.filter((l: any) => (l.status || 'active') === 'active').map((l: any) => l.name).filter(Boolean)
+          : []
         if (levels.length) {
           setAvailableLevels(levels)
           setStudentLevel(levels[0])
