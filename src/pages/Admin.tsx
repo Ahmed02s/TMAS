@@ -320,6 +320,12 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
   }))
 
   const visiblePending = pendingLecturers
+  const greeting = (() => {
+    const hour = new Date().getHours()
+    if (hour < 12) return 'Good morning,'
+    if (hour < 17) return 'Good afternoon,'
+    return 'Good evening,'
+  })()
 
   const totalStudents = students.length
   const activeCourses = allCourses.filter(course => course.status.toLowerCase() === 'active').length
@@ -810,14 +816,26 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
           {/* ── OVERVIEW ── */}
           {tab === 'overview' && (
             <div className="space-y-6">
+              <div className="relative overflow-hidden bg-linear-to-br from-primary via-primary to-blue-950 rounded-2xl p-6 text-primary-foreground">
+                <i className="fa-solid fa-shield-halved absolute -right-4 -bottom-6 text-[9rem] text-white/5 pointer-events-none select-none" />
+                <div className="relative">
+                  <p className="text-primary-foreground/70 text-sm mb-1">{greeting}</p>
+                  <h2 className="font-display text-3xl text-white mb-2">{savedUser?.name || 'System Administrator'}</h2>
+                  <p className="text-primary-foreground/70 text-sm">
+                    Overseeing <span className="text-accent font-semibold">{activeCourses} active courses</span>
+                    {visiblePending.length > 0 && <> with <span className="text-white font-semibold">{visiblePending.length} lecturer{visiblePending.length === 1 ? '' : 's'}</span> awaiting approval</>}.
+                  </p>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                 {[
                   { label: 'Total Students', val: String(students.length), sub: 'Current student records', color: 'text-blue-600', bg: 'bg-blue-50', icon: 'fa-users' },
                   { label: 'Active Courses', val: String(allCourses.filter(course => course.status.toLowerCase() === 'active').length), sub: 'Across all levels', color: 'text-purple-600', bg: 'bg-purple-50', icon: 'fa-book-open' },
-                  { label: 'Approved Lecturers', val: String(approvedLecturers.length), sub: `${visiblePending.length} pending approval`, color: 'text-emerald-600', bg: 'bg-emerald-50', icon: 'fa-chalkboard-teacher' },
+                  { label: 'Approved Lecturers', val: String(approvedLecturers.length), sub: `${visiblePending.length} pending approval`, color: 'text-emerald-600', bg: 'bg-emerald-50', icon: 'fa-chalkboard-user' },
                   { label: 'Pending Approvals', val: String(visiblePending.length), sub: 'Lecturers awaiting review', color: 'text-amber-600', bg: 'bg-amber-50', icon: 'fa-hourglass-half' },
                 ].map((s, i) => (
-                    <div key={i} className="bg-card border border-border rounded-2xl p-5">
+                    <div key={i} className="bg-card border border-border rounded-2xl p-5 transition-all hover:shadow-md hover:-translate-y-0.5">
                       <div className={`inline-flex p-2.5 rounded-xl ${s.bg} mb-3`}>
                         <i className={`fa-solid ${(s as any).icon || 'fa-circle'} ${s.color} text-sm`} />
                       </div>
@@ -1474,13 +1492,16 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
             <div className="space-y-6">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                 {[
-                  { label: 'Institution Avg Score', val: `${avgCourseScore}%`, trend: `${activeCourses} active courses`, color: 'text-blue-600' },
-                  { label: 'Inactive Students', val: String(inactiveStudents), trend: totalStudents ? `out of ${totalStudents}` : 'No students yet', color: 'text-danger' },
-                  { label: 'Quiz Completion', val: `${quizCompletionRate}%`, trend: quizTrend, color: 'text-success' },
-                  { label: 'Materials Uploaded', val: String(materialsUploaded), trend: `${materialsCount} materials indexed`, color: 'text-purple-600' },
+                  { label: 'Institution Avg Score', val: `${avgCourseScore}%`, trend: `${activeCourses} active courses`, color: 'text-blue-600', tint: 'bg-blue-500/10', icon: 'chart-line' },
+                  { label: 'Inactive Students', val: String(inactiveStudents), trend: totalStudents ? `out of ${totalStudents}` : 'No students yet', color: 'text-danger', tint: 'bg-danger/10', icon: 'user-slash' },
+                  { label: 'Quiz Completion', val: `${quizCompletionRate}%`, trend: quizTrend, color: 'text-success', tint: 'bg-success/10', icon: 'circle-check' },
+                  { label: 'Materials Uploaded', val: String(materialsUploaded), trend: `${materialsCount} materials indexed`, color: 'text-purple-600', tint: 'bg-purple-500/10', icon: 'file-lines' },
                 ].map((s, i) => (
-                  <div key={i} className="bg-card border border-border rounded-2xl p-5">
-                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-2">{s.label}</p>
+                  <div key={i} className="bg-card border border-border rounded-2xl p-5 transition-all hover:shadow-md hover:-translate-y-0.5">
+                    <div className={`inline-flex p-2 rounded-xl mb-3 ${s.tint} ${s.color}`}>
+                      <i className={`fa-solid fa-${s.icon}`} />
+                    </div>
+                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">{s.label}</p>
                     <p className={`text-3xl font-bold font-mono ${s.color}`}>{s.val}</p>
                     <p className="text-xs text-muted-foreground mt-1.5">{s.trend}</p>
                   </div>
@@ -1498,7 +1519,10 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
                           <span className="text-xs text-muted-foreground">{l.count} students · {l.percentage}%</span>
                         </div>
                         <div className="h-2.5 bg-muted rounded-full overflow-hidden">
-                          <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${l.percentage}%` }} />
+                          <div
+                            className={`h-full rounded-full transition-all ${l.percentage >= 80 ? 'bg-success' : l.percentage >= 50 ? 'bg-primary' : 'bg-amber-500'}`}
+                            style={{ width: `${l.percentage}%` }}
+                          />
                         </div>
                       </div>
                     )) : (

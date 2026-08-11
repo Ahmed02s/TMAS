@@ -354,6 +354,12 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
 
   const studentName = typeof savedUser?.name === 'string' ? savedUser.name : 'Student'
   const studentLevelLabel = studentProfile.level || 'Level 200'
+  const greeting = (() => {
+    const hour = new Date().getHours()
+    if (hour < 12) return 'Good morning,'
+    if (hour < 17) return 'Good afternoon,'
+    return 'Good evening,'
+  })()
   let studentInitials = ''
   for (const rawPart of studentName.split(' ')) {
     const part = rawPart.trim()
@@ -953,28 +959,34 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
 
               <div className="space-y-3 mb-8">
                 {Array.isArray(q.options) && q.options.length > 0 ? (
-                  q.options.map((opt, i) => (
-                    <button
-                      key={i}
-                      onClick={() => !questionLocked && setQuizAnswers(a => ({ ...a, [currentQ]: opt }))}
-                      disabled={questionLocked}
-                      className={`w-full flex items-center gap-4 px-5 py-4 rounded-xl border-2 text-left transition-all disabled:opacity-60 disabled:cursor-not-allowed ${quizAnswers[currentQ] === opt ? 'border-primary bg-secondary text-primary font-semibold' : 'border-border hover:border-primary/40 hover:bg-muted/50 text-foreground'}`}
-                    >
-                      <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 transition-all ${quizAnswers[currentQ] === opt ? 'border-primary bg-primary' : 'border-border'}`}>
-                        {quizAnswers[currentQ] === opt && <div className="w-2.5 h-2.5 rounded-full bg-white" />}
-                      </div>
-                      {opt}
-                    </button>
-                  ))
+                  q.options.map((opt, i) => {
+                    const isSelected = quizAnswers[currentQ] === opt
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => !questionLocked && setQuizAnswers(a => ({ ...a, [currentQ]: opt }))}
+                        disabled={questionLocked}
+                        className={`w-full flex items-center gap-4 px-5 py-4 rounded-xl border-2 text-left transition-all disabled:opacity-60 disabled:cursor-not-allowed ${isSelected ? 'border-primary bg-secondary text-primary font-semibold shadow-sm' : 'border-border hover:border-primary/40 hover:bg-muted/50 text-foreground'}`}
+                      >
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-xs font-bold font-mono transition-all ${isSelected ? 'bg-primary text-white' : 'bg-muted text-muted-foreground'}`}>
+                          {isSelected ? <i className="fa-solid fa-check text-sm" /> : String.fromCharCode(65 + i)}
+                        </div>
+                        {opt}
+                      </button>
+                    )
+                  })
                 ) : (
                   <div>
-                    <label className="block text-sm font-medium text-muted-foreground mb-2">Your answer</label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-sm font-medium text-muted-foreground">Your answer</label>
+                      <span className="text-xs font-mono text-muted-foreground/70">{(quizAnswers[currentQ] ?? '').length} chars</span>
+                    </div>
                     <textarea
                       value={quizAnswers[currentQ] ?? ''}
                       onChange={e => setQuizAnswers(a => ({ ...a, [currentQ]: e.target.value }))}
                       disabled={questionLocked}
-                      rows={4}
-                      className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
+                      rows={5}
+                      className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm resize-none transition-shadow focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 disabled:opacity-60"
                       placeholder="Type your answer here..."
                     />
                   </div>
@@ -1292,7 +1304,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
           }}
         />
 
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
           {loading && (
             <div className="mb-6 rounded-3xl border border-border bg-card p-6 text-center">
               <p className="text-sm text-muted-foreground">Loading student dashboard...</p>
@@ -1308,23 +1320,26 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
           {/* ── OVERVIEW ── */}
           {tab === 'overview' && (
             <div className="space-y-6">
-              <div className="bg-primary rounded-2xl p-6 text-primary-foreground">
-                <p className="text-primary-foreground/70 text-sm mb-1">Good morning,</p>
-                <h2 className="font-display text-3xl text-white mb-2">{studentName}</h2>
-                <p className="text-primary-foreground/70 text-sm">
-                  You have <span className="text-accent font-semibold">{publishedQuizzesCount} quizzes</span> published and your overall progress is <span className="text-white font-semibold">{overallProgress}%</span>.
-                </p>
+              <div className="relative overflow-hidden bg-linear-to-br from-primary via-primary to-blue-950 rounded-2xl p-6 text-primary-foreground">
+                <i className="fa-solid fa-graduation-cap absolute -right-4 -bottom-6 text-[9rem] text-white/5 pointer-events-none select-none" />
+                <div className="relative">
+                  <p className="text-primary-foreground/70 text-sm mb-1">{greeting}</p>
+                  <h2 className="font-display text-3xl text-white mb-2">{studentName}</h2>
+                  <p className="text-primary-foreground/70 text-sm">
+                    You have <span className="text-accent font-semibold">{publishedQuizzesCount} quizzes</span> published and your overall progress is <span className="text-white font-semibold">{overallProgress}%</span>.
+                  </p>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {[
-                  { label: 'Enrolled Courses', val: String(visibleCourses.length), sub: studentProfile.level, icon: 'book-open' },
-                  { label: 'Published Quizzes', val: String(publishedQuizzesCount), sub: 'Upcoming + open', icon: 'clipboard-question' },
-                  { label: 'Avg Quiz Score', val: `${avgScore}%`, sub: `${completedQuizzesCount} completed`, icon: 'chart-line' },
-                  { label: 'Overall Progress', val: `${overallProgress}%`, sub: 'This semester', icon: 'graduation-cap' },
+                  { label: 'Enrolled Courses', val: String(visibleCourses.length), sub: studentProfile.level, icon: 'book-open', tint: 'bg-blue-500/10 text-blue-600' },
+                  { label: 'Published Quizzes', val: String(publishedQuizzesCount), sub: 'Upcoming + open', icon: 'clipboard-question', tint: 'bg-amber-500/10 text-amber-600' },
+                  { label: 'Avg Quiz Score', val: `${avgScore}%`, sub: `${completedQuizzesCount} completed`, icon: 'chart-line', tint: 'bg-emerald-500/10 text-emerald-600' },
+                  { label: 'Overall Progress', val: `${overallProgress}%`, sub: 'This semester', icon: 'graduation-cap', tint: 'bg-purple-500/10 text-purple-600' },
                 ].map((s, i) => (
-                  <div key={i} className="bg-card border border-border rounded-2xl p-5">
-                    <div className="inline-flex p-2 rounded-xl bg-muted mb-3 text-muted-foreground">
+                  <div key={i} className="bg-card border border-border rounded-2xl p-5 transition-all hover:shadow-md hover:-translate-y-0.5">
+                    <div className={`inline-flex p-2 rounded-xl mb-3 ${s.tint}`}>
                       <i className={`fa-solid fa-${s.icon}`} />
                     </div>
                     <p className="text-2xl font-bold font-mono text-foreground">{s.val}</p>
@@ -1352,7 +1367,9 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                         </div>
                         <div className="h-2 bg-muted rounded-full overflow-hidden">
                           <div
-                            className="h-full rounded-full bg-primary transition-all duration-700"
+                            className={`h-full rounded-full transition-all duration-700 ${
+                              c.progress >= 80 ? 'bg-success' : c.progress >= 50 ? 'bg-primary' : 'bg-amber-500'
+                            }`}
                             style={{ width: `${c.progress}%` }}
                           />
                         </div>
@@ -1865,17 +1882,17 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                 <h3 className="font-semibold text-foreground mb-5">Grade Summary by Course</h3>
                 <div className="space-y-4">
                   {visibleCourses.map((c, i) => (
-                    <div key={i} className="flex items-center gap-5 p-4 bg-muted/30 rounded-xl">
-                      <div className="flex-1">
+                    <div key={i} className="flex flex-wrap items-center gap-x-5 gap-y-2 p-4 bg-muted/30 rounded-xl">
+                      <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
-                          <span className="font-mono text-sm font-bold text-primary">{c.code}</span>
-                          <span className="text-sm text-foreground">{c.title}</span>
+                          <span className="font-mono text-sm font-bold text-primary shrink-0">{c.code}</span>
+                          <span className="text-sm text-foreground truncate">{c.title}</span>
                         </div>
                         <div className="h-2 bg-muted rounded-full overflow-hidden">
                           <div className={`h-full rounded-full bg-linear-to-r ${c.color}`} style={{ width: `${c.avgScore}%` }} />
                         </div>
                       </div>
-                      <div className="text-right">
+                      <div className="text-right shrink-0">
                         <p className="text-xl font-bold font-mono text-foreground">{c.avgScore}%</p>
                         <p className="text-xs text-muted-foreground">{c.quizzesDone} quizzes</p>
                       </div>

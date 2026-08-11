@@ -1221,6 +1221,12 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     const allGeneratedQuestions = (['Foundational', 'Intermediate', 'Mastery'] as const).flatMap(t => generatedQuestionsByTier[t] || [])
     const allApprovedIds = new Set((['Foundational', 'Intermediate', 'Mastery'] as const).flatMap(t => approvedByTier[t] || []))
     const pendingReviews = allGeneratedQuestions.filter(q => !allApprovedIds.has(q.id)).length
+    const greeting = (() => {
+      const hour = new Date().getHours()
+      if (hour < 12) return 'Good morning,'
+      if (hour < 17) return 'Good afternoon,'
+      return 'Good evening,'
+    })()
 
   return (
     <div className="flex h-screen bg-background overflow-hidden font-sans relative">
@@ -1547,24 +1553,33 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
 
           {/* ── OVERVIEW ── */}
           {tab === 'overview' && (
             <div className="space-y-6">
+                <div className="relative overflow-hidden bg-linear-to-br from-primary via-primary to-blue-950 rounded-2xl p-6 text-primary-foreground">
+                  <i className="fa-solid fa-chalkboard-user absolute -right-4 -bottom-6 text-[9rem] text-white/5 pointer-events-none select-none" />
+                  <div className="relative">
+                    <p className="text-primary-foreground/70 text-sm mb-1">{greeting}</p>
+                    <h2 className="font-display text-3xl text-white mb-2">{savedUser?.name || 'Lecturer'}</h2>
+                    <p className="text-primary-foreground/70 text-sm">
+                      You're teaching <span className="text-accent font-semibold">{assignedCourses} course{assignedCourses === 1 ? '' : 's'}</span>
+                      {pendingReviews > 0 && <> with <span className="text-white font-semibold">{pendingReviews} question{pendingReviews === 1 ? '' : 's'}</span> waiting for review</>}.
+                    </p>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                   {[
-                    { label: 'Assigned Courses', val: String(assignedCourses), sub: levelsStr || '—', color: 'text-blue-600', bg: 'bg-blue-50' },
-                    { label: 'Assigned Students', val: String(totalStudents), sub: `${studentHeadcount} course seats`, color: 'text-purple-600', bg: 'bg-purple-50' },
-                    { label: 'Avg Quiz Score', val: avgQuizScore !== null ? `${avgQuizScore}%` : '—', sub: 'This semester', color: 'text-success', bg: 'bg-green-50' },
-                    { label: 'Pending Reviews', val: String(pendingReviews), sub: 'Questions to approve', color: 'text-accent', bg: 'bg-amber-50' },
+                    { label: 'Assigned Courses', val: String(assignedCourses), sub: levelsStr || '—', icon: 'book-open', tint: 'bg-blue-500/10 text-blue-600' },
+                    { label: 'Assigned Students', val: String(totalStudents), sub: `${studentHeadcount} course seats`, icon: 'users', tint: 'bg-purple-500/10 text-purple-600' },
+                    { label: 'Avg Quiz Score', val: avgQuizScore !== null ? `${avgQuizScore}%` : '—', sub: 'This semester', icon: 'chart-line', tint: 'bg-emerald-500/10 text-emerald-600' },
+                    { label: 'Pending Reviews', val: String(pendingReviews), sub: 'Questions to approve', icon: 'hourglass-half', tint: 'bg-amber-500/10 text-amber-600' },
                   ].map((s, i) => (
-                    <div key={i} className="bg-card border border-border rounded-2xl p-5">
-                      <div className="inline-flex p-2 rounded-xl bg-muted mb-3 text-muted-foreground">
-                        {i === 0 && <i className="fa-solid fa-book-open" />}
-                        {i === 1 && <i className="fa-solid fa-users" />}
-                        {i === 2 && <i className="fa-solid fa-chart-line" />}
-                        {i === 3 && <i className="fa-solid fa-hourglass-half" />}
+                    <div key={i} className="bg-card border border-border rounded-2xl p-5 transition-all hover:shadow-md hover:-translate-y-0.5">
+                      <div className={`inline-flex p-2 rounded-xl mb-3 ${s.tint}`}>
+                        <i className={`fa-solid fa-${s.icon}`} />
                       </div>
                       <p className="text-2xl font-bold font-mono text-foreground">{s.val}</p>
                       <p className="text-sm font-medium text-foreground mt-0.5">{s.label}</p>
@@ -1577,7 +1592,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                 <div className="lg:col-span-2 space-y-4">
                   <h3 className="font-semibold text-foreground">My Courses at a Glance</h3>
                   {myCoursesState.map((c, i) => (
-                    <div key={i} className="bg-card border border-border rounded-2xl p-5">
+                    <div key={i} className="bg-card border border-border rounded-2xl p-5 transition-all hover:shadow-md">
                       <div className="flex items-start justify-between gap-4 mb-4">
                         <div>
                           <div className="flex items-center gap-2 mb-1">
@@ -2830,13 +2845,16 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
 
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 {[
-                  { label: 'Avg Quiz Score', val: lecturerAnalytics ? `${lecturerAnalytics.avg_score}%` : '—', trend: 'Across all courses' },
-                  { label: 'Highest Completion', val: lecturerAnalytics?.highest_completion_course ? lecturerAnalytics.highest_completion_course.code : '—', trend: lecturerAnalytics?.highest_completion_course ? `${lecturerAnalytics.highest_completion_course.completion}% complete` : '—' },
-                  { label: 'Pass Rate', val: lecturerAnalytics ? `${lecturerAnalytics.pass_rate}%` : '—', trend: 'Of all quiz attempts' },
-                  { label: 'At-Risk Students', val: lecturerAnalytics ? String(lecturerAnalytics.at_risk_students) : '—', trend: 'Below 50% completion' },
+                  { label: 'Avg Quiz Score', val: lecturerAnalytics ? `${lecturerAnalytics.avg_score}%` : '—', trend: 'Across all courses', icon: 'chart-line', tint: 'bg-blue-500/10 text-blue-600' },
+                  { label: 'Highest Completion', val: lecturerAnalytics?.highest_completion_course ? lecturerAnalytics.highest_completion_course.code : '—', trend: lecturerAnalytics?.highest_completion_course ? `${lecturerAnalytics.highest_completion_course.completion}% complete` : '—', icon: 'trophy', tint: 'bg-emerald-500/10 text-emerald-600' },
+                  { label: 'Pass Rate', val: lecturerAnalytics ? `${lecturerAnalytics.pass_rate}%` : '—', trend: 'Of all quiz attempts', icon: 'circle-check', tint: 'bg-purple-500/10 text-purple-600' },
+                  { label: 'At-Risk Students', val: lecturerAnalytics ? String(lecturerAnalytics.at_risk_students) : '—', trend: 'Below 50% completion', icon: 'triangle-exclamation', tint: 'bg-amber-500/10 text-amber-600' },
                 ].map((s, i) => (
-                  <div key={i} className="bg-card border border-border rounded-2xl p-5">
-                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-2">{s.label}</p>
+                  <div key={i} className="bg-card border border-border rounded-2xl p-5 transition-all hover:shadow-md hover:-translate-y-0.5">
+                    <div className={`inline-flex p-2 rounded-xl mb-3 ${s.tint}`}>
+                      <i className={`fa-solid fa-${s.icon}`} />
+                    </div>
+                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">{s.label}</p>
                     <p className="text-2xl font-bold font-mono text-foreground">{s.val}</p>
                     <p className="text-xs text-muted-foreground mt-1">{s.trend}</p>
                   </div>
@@ -2853,7 +2871,10 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                         <span className="text-sm font-bold font-mono text-foreground">{c.avg_score}%</span>
                       </div>
                       <div className="h-3 bg-muted rounded-full overflow-hidden">
-                        <div className="h-full bg-primary rounded-full" style={{ width: `${c.avg_score}%` }} />
+                        <div
+                          className={`h-full rounded-full ${c.avg_score >= 80 ? 'bg-success' : c.avg_score >= 50 ? 'bg-primary' : 'bg-amber-500'}`}
+                          style={{ width: `${c.avg_score}%` }}
+                        />
                       </div>
                       <div className="flex items-center justify-between mt-1">
                         <span className="text-xs text-muted-foreground">{c.students} students</span>
