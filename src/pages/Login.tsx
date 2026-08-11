@@ -4,6 +4,7 @@ import { API_BASE } from '../config'
 import LegalModal from '../components/LegalModal'
 import { clearPasswordResetUrl, getPasswordResetIntent } from '../utils/passwordReset'
 import { clearEmailVerificationUrl, getEmailVerificationIntent } from '../utils/emailVerification'
+import { extractErrorMessage } from '../utils/apiError'
 
 const fallbackLevelOptions = ['Level 100', 'Level 200', 'Level 300', 'Level 400']
 const programOptions = ['Computer Science', 'Mathematics', 'Engineering', 'Business']
@@ -129,7 +130,7 @@ export default function Login({
           body: JSON.stringify({ token: intent.token }),
         })
         const data = await response.json()
-        if (!response.ok) throw new Error(data.detail || data.error || 'Could not verify email')
+        if (!response.ok) throw new Error(extractErrorMessage(data, 'Could not verify email'))
         setVerifyResult({ status: 'success', message: data.message || 'Your email has been verified. You can now log in.' })
         setTab('login')
       } catch (error) {
@@ -148,7 +149,7 @@ export default function Login({
         body: JSON.stringify({ email: targetEmail }),
       })
       const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || data.error || 'Could not resend verification email')
+      if (!response.ok) throw new Error(extractErrorMessage(data, 'Could not resend verification email'))
       setResendMessage(data.message || 'If that email is registered and not yet verified, a new verification link has been sent.')
     } catch (error) {
       setResendMessage(error instanceof Error ? error.message : 'Could not resend verification email')
@@ -183,7 +184,7 @@ export default function Login({
         body: JSON.stringify({ email: forgotEmail.trim() }),
       })
       const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || data.error || 'Could not process request')
+      if (!response.ok) throw new Error(extractErrorMessage(data, 'Could not process request'))
       setForgotMessage(data.message || 'If that email is registered, password reset instructions have been sent.')
       // Real email delivery only — the backend no longer echoes the token back in this
       // response (see backend/app/routers/auth.py forgot_password), so the user pastes it
@@ -216,7 +217,7 @@ export default function Login({
         body: JSON.stringify({ token: resetToken.trim(), new_password: newPassword }),
       })
       const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || data.error || 'Could not reset password')
+      if (!response.ok) throw new Error(extractErrorMessage(data, 'Could not reset password'))
       closeForgotModal()
       setTab('login')
       setStatusMessage('Password updated successfully. Please sign in with your new password.')
@@ -289,7 +290,7 @@ export default function Login({
         body: JSON.stringify({ email: email.trim(), password }),
       })
       const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || data.error || 'Login failed')
+      if (!response.ok) throw new Error(extractErrorMessage(data, 'Login failed'))
 
       localStorage.setItem('tmas-token', data.token)
       localStorage.setItem('tmas-user', JSON.stringify(data.user))
@@ -351,7 +352,7 @@ export default function Login({
         }),
       })
       const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || data.error || 'Registration failed')
+      if (!response.ok) throw new Error(extractErrorMessage(data, 'Registration failed'))
 
       clearRegisterFields()
 

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { AppView } from '../App'
 import { API_BASE } from '../config'
 import LegalModal from '../components/LegalModal'
+import { extractErrorMessage } from '../utils/apiError'
 
 const features = [
   { iconClass: 'fa-solid fa-robot text-primary', tint: 'bg-primary/10', title: 'AI-Powered Quiz Generation', desc: 'Upload PDFs, slides, or documents and our AI extracts topics, identifies learning objectives, and generates a comprehensive question bank — ready for lecturer review.' },
@@ -81,7 +82,7 @@ export default function Landing({ onNavigate }: { onNavigate: (v: AppView) => vo
         body: JSON.stringify({ name: form.name.trim(), email: form.email.trim(), message: form.message.trim() }),
       })
       const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || data.error || 'Could not send message')
+      if (!response.ok) throw new Error(extractErrorMessage(data, 'Could not send message'))
       setContactStatus(data.message || 'Thanks for reaching out — we will get back to you shortly.')
       setForm({ name: '', email: '', message: '' })
     } catch (error) {

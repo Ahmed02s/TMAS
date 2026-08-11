@@ -5,6 +5,7 @@ import Icon from '../components/Icon'
 import ProfileModal from '../components/ProfileModal'
 import { dismissNotificationIds, getDismissedNotificationIds } from '../utils/notificationDismissal'
 import { getQuestionSeconds } from '../utils/questionTiming'
+import { extractErrorMessage } from '../utils/apiError'
 
 // pdfjs/mammoth/jszip are heavy parsing libraries only needed once a student actually
 // opens a material — code-split so they don't bloat the initial app bundle.
@@ -540,7 +541,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
         })
         if (!startRes.ok) {
           const startErr = await startRes.json().catch(() => ({ detail: startRes.statusText }))
-          throw new Error(startErr.detail || 'You have already used your attempt for this quiz.')
+          throw new Error(extractErrorMessage(startErr, 'You have already used your attempt for this quiz.'))
         }
         const startData = await startRes.json().catch(() => ({}))
 
@@ -673,7 +674,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
         }
         attempt = missedRecord
         setLastAttempt(missedRecord)
-        setError(errBody.detail || 'Time limit exceeded. This attempt has been recorded as missed.')
+        setError(extractErrorMessage(errBody, 'Time limit exceeded. This attempt has been recorded as missed.'))
         setCompletedQuizzes(prev => {
           const filtered = prev.filter(q => q.quizId !== activeQuiz)
           return [missedRecord, ...filtered]

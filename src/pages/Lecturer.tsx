@@ -4,6 +4,7 @@ import { API_BASE } from '../config'
 import ProfileModal from '../components/ProfileModal'
 import { dismissNotificationIds, getDismissedNotificationIds } from '../utils/notificationDismissal'
 import { QUESTION_TYPE_SECONDS } from '../utils/questionTiming'
+import { extractErrorMessage } from '../utils/apiError'
 
 type Tab = 'overview' | 'courses' | 'materials' | 'students' | 'quizgen' | 'quizreview' | 'analytics'
 
@@ -482,7 +483,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       const res = await fetch(`${API_BASE}/api/materials/${material.id}`, { method: 'DELETE' })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || 'Failed to delete material')
+        throw new Error(extractErrorMessage(err, 'Failed to delete material'))
       }
       setMaterialsState(prev => prev.filter(m => m.id !== material.id))
       setUploadMessage({ type: 'success', text: `Deleted "${material.name}".` })
@@ -610,7 +611,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
         if (data.error) setProgressError(p => ({ ...p, [courseCode]: data.error }))
       } else {
         const err = await res.json().catch(() => ({}))
-        setProgressError(p => ({ ...p, [courseCode]: err.detail || `Error ${res.status}` }))
+        setProgressError(p => ({ ...p, [courseCode]: extractErrorMessage(err, `Error ${res.status}`) }))
         setCourseStudentProgress(p => ({ ...p, [courseCode]: [] }))
       }
     } catch (e: any) {
@@ -702,7 +703,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || 'Failed to update schedule')
+        throw new Error(extractErrorMessage(err, 'Failed to update schedule'))
       }
       await loadPublishedQuizzes(genCourse)
       setScheduleSaveSuccess(prev => ({ ...prev, [quizId]: 'Schedule saved.' }))
@@ -726,7 +727,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || 'Failed to open quiz now')
+        throw new Error(extractErrorMessage(err, 'Failed to open quiz now'))
       }
       await loadPublishedQuizzes(genCourse)
     } catch (err: any) {
@@ -894,7 +895,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
 
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null)
-        setUploadMessage({ type: 'error', text: errorBody?.detail || response.statusText })
+        setUploadMessage({ type: 'error', text: extractErrorMessage(errorBody, response.statusText) })
         return
       }
 
@@ -979,7 +980,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
       })
-      if (!res.ok) throw new Error((await res.json()).detail || res.statusText)
+      if (!res.ok) throw new Error(extractErrorMessage(await res.json(), res.statusText))
       const data = await res.json()
 
       const stamp = Date.now()
@@ -1090,7 +1091,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
         body: JSON.stringify({ quizzes: quizzesToPublish }),
       })
 
-      if (!res.ok) throw new Error((await res.json()).detail || res.statusText)
+      if (!res.ok) throw new Error(extractErrorMessage(await res.json(), res.statusText))
 
       try {
         const { dispatchPushNotification } = await import('../utils/notifications')
@@ -1124,7 +1125,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       const res = await fetch(`${API_BASE}/api/quizzes/all`, { method: 'DELETE' })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }))
-        alert(`Failed to clear quizzes: ${err.detail || res.statusText}`)
+        alert(`Failed to clear quizzes: ${extractErrorMessage(err, res.statusText)}`)
         return
       }
       alert('✅ All quizzes, questions, and attempts have been cleared successfully.')

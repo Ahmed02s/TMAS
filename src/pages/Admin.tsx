@@ -5,6 +5,7 @@ import CourseModal, { type CourseFormValues } from '../components/CourseModal'
 import ProfileModal from '../components/ProfileModal'
 import { API_BASE } from '../config'
 import { dismissNotificationIds, getDismissedNotificationIds } from '../utils/notificationDismissal'
+import { extractErrorMessage } from '../utils/apiError'
 
 type Tab = 'overview' | 'levels' | 'courses' | 'lecturers' | 'students' | 'analytics'
 
@@ -441,7 +442,7 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
       })
       const data = await response.json()
       if (!response.ok) {
-        throw new Error(data.detail || data.error || 'Could not update lecturer status')
+        throw new Error(extractErrorMessage(data, 'Could not update lecturer status'))
       }
 
       setDashboardLecturers(prev => prev.map(lecturer =>
@@ -534,7 +535,7 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
         }),
       })
       const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || data.error || 'Could not save course')
+      if (!response.ok) throw new Error(extractErrorMessage(data, 'Could not save course'))
 
       const savedCourse = data.course ?? data
       const normalizedCourse = {
