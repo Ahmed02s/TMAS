@@ -21,8 +21,12 @@ def _wrap_html_document(body_html: str) -> str:
     )
 
 
+def _frontend_url(path: str, query: str) -> str:
+    return f"{FRONTEND_URL.rstrip('/')}/{path.lstrip('/')}?{query}"
+
+
 def _build_email_payload(to_email: str, to_name: str, reset_token: str) -> dict[str, object]:
-    reset_url = f"{FRONTEND_URL}/forgot-password?token={reset_token}"
+    reset_url = _frontend_url('forgot-password', f'token={reset_token}')
     from_name = EMAIL_FROM_NAME.strip() or 'TMAS'
     from_email = EMAIL_FROM.strip()
     reply_to = EMAIL_REPLY_TO.strip() or from_email
@@ -86,7 +90,7 @@ def send_password_reset_email(to_email: str, to_name: str, reset_token: str) -> 
 def _build_verification_email_payload(to_email: str, to_name: str, verify_token: str) -> dict[str, object]:
     # A distinct `verify_token` param (not `token`) so this link can never be confused with
     # a password-reset link if a user has both sitting in their inbox at once.
-    verify_url = f"{FRONTEND_URL}/verify-email?verify_token={verify_token}"
+    verify_url = _frontend_url('verify-email', f'verify_token={verify_token}')
     from_name = EMAIL_FROM_NAME.strip() or 'TMAS'
     from_email = EMAIL_FROM.strip()
     reply_to = EMAIL_REPLY_TO.strip() or from_email

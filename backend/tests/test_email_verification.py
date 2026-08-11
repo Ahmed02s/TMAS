@@ -1,4 +1,5 @@
 import app.routers.auth as auth_router
+from app.core import email as email_core
 
 
 class _RaisingTable:
@@ -75,3 +76,13 @@ def test_verify_email_request_requires_token():
 def test_resend_verification_request_validates_email():
     model = auth_router.ResendVerificationRequest(email='student@example.edu')
     assert model.email == 'student@example.edu'
+
+
+def test_frontend_email_urls_strip_trailing_slash(monkeypatch):
+    monkeypatch.setattr(email_core, 'FRONTEND_URL', 'https://tmas.example.com/')
+
+    reset_payload = email_core._build_email_payload('student@example.edu', 'Ada Lovelace', 'reset-token')
+    verify_payload = email_core._build_verification_email_payload('student@example.edu', 'Ada Lovelace', 'verify-token')
+
+    assert 'https://tmas.example.com/forgot-password?token=reset-token' in reset_payload['content'][0]['value']
+    assert 'https://tmas.example.com/verify-email?verify_token=verify-token' in verify_payload['content'][0]['value']

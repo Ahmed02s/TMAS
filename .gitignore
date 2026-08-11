@@ -2,6 +2,10 @@ node_modules/
 dist/
 build/
 .cache/
+.pytest_cache/
+backend/.pytest_cache/
+backend/.pytest_cache_local/
+backend/.pytest_tmp/
 .env*
 .vite/
 vite.config.*.timestamp-*
@@ -21,4 +25,3 @@ __pycache__/
 # committed) were silently lost. The real fix is Supabase Storage (see materials.py); this
 # directory should never hold the only copy of anything.
 backend/data/uploads/
-
