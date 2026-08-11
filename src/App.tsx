@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 import { getPasswordResetIntent } from './utils/passwordReset'
+import { getEmailVerificationIntent } from './utils/emailVerification'
 
 // Each portal is a large, self-contained bundle (dashboards, forms, quiz UI) that only one
 // visitor role ever needs at a time — lazy-loading them keeps the initial bundle to just
@@ -31,6 +32,7 @@ function getInitialView(): AppView {
   if (typeof window === 'undefined') return 'landing'
 
   if (getPasswordResetIntent().open) return 'login'
+  if (getEmailVerificationIntent().open) return 'login'
 
   const storedView = window.localStorage.getItem(VIEW_STORAGE_KEY) as AppView | null
   if (storedView && VALID_VIEWS.includes(storedView)) {

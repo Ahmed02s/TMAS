@@ -23,6 +23,22 @@ CREATE TABLE IF NOT EXISTS password_resets (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Email verification (added for the register -> verify-email -> login gate flow).
+-- The backfill UPDATE grandfathers in every account that existed before this migration ran
+-- (all of them predate email verification existing at all) — only accounts created AFTER
+-- this migration are subject to the new-account default of FALSE and the login gate.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE users SET email_verified = TRUE WHERE email_verified = FALSE;
+
+CREATE TABLE IF NOT EXISTS email_verifications (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token TEXT NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS contact_messages (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name TEXT NOT NULL,

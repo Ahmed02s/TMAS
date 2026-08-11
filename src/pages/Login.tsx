@@ -3,6 +3,7 @@ import type { AppView } from '../App'
 import { API_BASE } from '../config'
 import LegalModal from '../components/LegalModal'
 import { clearPasswordResetUrl, getPasswordResetIntent } from '../utils/passwordReset'
+import { clearEmailVerificationUrl, getEmailVerificationIntent } from '../utils/emailVerification'
 
 const fallbackLevelOptions = ['Level 100', 'Level 200', 'Level 300', 'Level 400']
 const programOptions = ['Computer Science', 'Mathematics', 'Engineering', 'Business']
@@ -83,6 +84,15 @@ export default function Login({
   const [lecturerPendingModal, setLecturerPendingModal] = useState(false)
   const [legalModal, setLegalModal] = useState<'terms' | 'privacy' | null>(null)
 
+  // ── Email verification ────────────────────────────────────────────────────
+  // "Check your inbox" screen shown right after a student registers, holding the address
+  // so the resend button doesn't need the user to retype it.
+  const [checkInboxEmail, setCheckInboxEmail] = useState('')
+  const [resendBusy, setResendBusy] = useState(false)
+  const [resendMessage, setResendMessage] = useState('')
+  // Result of auto-verifying a `verify_token` link the user clicked from their email.
+  const [verifyResult, setVerifyResult] = useState<{ status: 'pending' | 'success' | 'error'; message: string } | null>(null)
+
   // ── Forgot / reset password ──────────────────────────────────────────────
   // Read directly from the URL via the same entrypoint App.tsx uses to decide whether to
   // render this component in the first place — this makes the modal open correctly even if
@@ -103,6 +113,49 @@ export default function Login({
   useEffect(() => {
     if (initialForgot.token) clearPasswordResetUrl()
   }, [])
+
+  // A verification link lands here with a `verify_token` in the URL — call the endpoint
+  // immediately on mount rather than waiting for the user to do anything.
+  useEffect(() => {
+    const intent = getEmailVerificationIntent()
+    if (!intent.open) return
+    clearEmailVerificationUrl()
+    setVerifyResult({ status: 'pending', message: 'Verifying your email…' })
+    ;(async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/auth/verify-email`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token: intent.token }),
+        })
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.detail || data.error || 'Could not verify email')
+        setVerifyResult({ status: 'success', message: data.message || 'Your email has been verified. You can now log in.' })
+        setTab('login')
+      } catch (error) {
+        setVerifyResult({ status: 'error', message: error instanceof Error ? error.message : 'Could not verify email' })
+      }
+    })()
+  }, [])
+
+  async function handleResendVerification(targetEmail: string) {
+    setResendBusy(true)
+    setResendMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/resend-verification`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: targetEmail }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || data.error || 'Could not resend verification email')
+      setResendMessage(data.message || 'If that email is registered and not yet verified, a new verification link has been sent.')
+    } catch (error) {
+      setResendMessage(error instanceof Error ? error.message : 'Could not resend verification email')
+    } finally {
+      setResendBusy(false)
+    }
+  }
 
   function closeForgotModal() {
     setForgotOpen(false)
@@ -320,8 +373,7 @@ export default function Login({
         } catch {}
         setLecturerPendingModal(true)
       } else {
-        setStatusMessage('Student account created successfully! Please log in.')
-        setTab('login')
+        setCheckInboxEmail(trimmedEmail)
       }
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Registration failed')
@@ -485,6 +537,19 @@ export default function Login({
                     <p className={`text-sm text-center mt-2 font-medium ${statusMessage.toLowerCase().includes('success') ? 'text-emerald-600' : 'text-danger'}`}>
                       {statusMessage}
                     </p>
+                  )}
+                  {statusMessage.toLowerCase().includes('verify your email') && (
+                    <button
+                      type="button"
+                      onClick={() => handleResendVerification(email)}
+                      disabled={resendBusy}
+                      className="w-full text-xs text-primary hover:underline text-center disabled:opacity-60"
+                    >
+                      {resendBusy ? 'Resending...' : "Didn't get the link? Resend verification email"}
+                    </button>
+                  )}
+                  {resendMessage && (
+                    <p className="text-xs text-primary text-center leading-relaxed">{resendMessage}</p>
                   )}
                 </div>
               </>
@@ -722,6 +787,70 @@ export default function Login({
                 Return to Homepage
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Check Your Inbox (post student-registration) Modal ── */}
+      {checkInboxEmail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+          <div className="bg-card border border-border rounded-3xl p-8 max-w-md w-full text-center space-y-5 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="w-16 h-16 bg-primary/10 text-primary border border-primary/20 rounded-2xl flex items-center justify-center mx-auto text-2xl">
+              <i className="fa-solid fa-envelope-circle-check" />
+            </div>
+            <div>
+              <h3 className="font-display text-2xl font-bold text-foreground">Check your inbox</h3>
+              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
+                We sent a verification link to <span className="font-semibold text-foreground">{checkInboxEmail}</span>. Click it to activate your account before signing in.
+              </p>
+            </div>
+            {resendMessage && (
+              <p className="text-xs text-primary bg-primary/5 border border-primary/20 rounded-xl p-3 leading-relaxed">{resendMessage}</p>
+            )}
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                onClick={() => handleResendVerification(checkInboxEmail)}
+                disabled={resendBusy}
+                className="w-full bg-muted hover:bg-secondary text-foreground font-semibold py-3 rounded-xl transition-colors text-sm disabled:opacity-60"
+              >
+                {resendBusy ? <><i className="fa-solid fa-spinner fa-spin mr-2" />Resending...</> : "Didn't get it? Resend email"}
+              </button>
+              <button
+                onClick={() => { setCheckInboxEmail(''); setResendMessage(''); setTab('login') }}
+                className="w-full bg-primary hover:bg-blue-950 text-white font-semibold py-3 rounded-xl transition-colors text-sm"
+              >
+                Back to Sign In
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Email Verification Result Banner (from clicking a verify_token link) ── */}
+      {verifyResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+          <div className="bg-card border border-border rounded-3xl p-8 max-w-md w-full text-center space-y-5 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mx-auto text-2xl border ${
+              verifyResult.status === 'success' ? 'bg-success/10 text-success border-success/20'
+                : verifyResult.status === 'error' ? 'bg-danger/10 text-danger border-danger/20'
+                : 'bg-primary/10 text-primary border-primary/20'
+            }`}>
+              <i className={`fa-solid ${verifyResult.status === 'success' ? 'fa-circle-check' : verifyResult.status === 'error' ? 'fa-triangle-exclamation' : 'fa-spinner fa-spin'}`} />
+            </div>
+            <div>
+              <h3 className="font-display text-2xl font-bold text-foreground">
+                {verifyResult.status === 'success' ? 'Email Verified!' : verifyResult.status === 'error' ? 'Verification Failed' : 'Verifying…'}
+              </h3>
+              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{verifyResult.message}</p>
+            </div>
+            {verifyResult.status !== 'pending' && (
+              <button
+                onClick={() => setVerifyResult(null)}
+                className="w-full bg-primary hover:bg-blue-950 text-white font-semibold py-3 rounded-xl transition-colors text-sm"
+              >
+                {verifyResult.status === 'success' ? 'Sign In Now' : 'Dismiss'}
+              </button>
+            )}
           </div>
         </div>
       )}

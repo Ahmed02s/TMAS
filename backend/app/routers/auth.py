@@ -17,12 +17,13 @@ from app.core.security import (
     verify_password,
 )
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_error_message, supabase_failed
-from app.core.email import send_password_reset_email
+from app.core.email import send_password_reset_email, send_verification_email
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix='/api/auth', tags=['auth'])
 
 PASSWORD_RESET_EXPIRY_MINUTES = 30
+EMAIL_VERIFICATION_EXPIRY_HOURS = 48
 
 
 class AuthRegisterRequest(BaseModel):
@@ -60,6 +61,14 @@ class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
 
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
@@ -83,6 +92,26 @@ def _build_user_payload(user: dict[str, Any]) -> dict[str, Any]:
         'program': user.get('program'),
         'department': user.get('department', user.get('dept')),
     }
+
+
+def _start_email_verification(user_id: str, email: str, name: str) -> None:
+    """Generates a verification token, records it, and emails it — used right after a new
+    account is created. Deliberately never raises: if the email_verifications table hasn't
+    been migrated yet, or SendGrid isn't configured, the account still exists and works
+    exactly as it did before this feature existed (see the login-gate default in login()),
+    it just won't be gated on verification until the operator finishes setting this up."""
+    try:
+        verify_token = secrets.token_urlsafe(32)
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=EMAIL_VERIFICATION_EXPIRY_HOURS)).isoformat()
+        supabase.table('email_verifications').insert({
+            'user_id': user_id,
+            'token': verify_token,
+            'expires_at': expires_at,
+            'used': False,
+        }).execute()
+        send_verification_email(email, name, verify_token)
+    except Exception:
+        logger.exception('register: failed to start email verification for user_id=%s', user_id)
 
 
 @router.post('/register', status_code=201)
@@ -112,6 +141,7 @@ def register(payload: AuthRegisterRequest, _rl: None = Depends(rate_limiter('reg
         'level': payload.level,
         'program': payload.program or payload.department,
         'department': payload.department or payload.program,
+        'email_verified': False,
     }
 
     # Automatically adapt to schema differences if 'department' or 'program' columns don't exist in Supabase
@@ -138,6 +168,7 @@ def register(payload: AuthRegisterRequest, _rl: None = Depends(rate_limiter('reg
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase register failed'))
     if response.data:
         user = response.data[0]
+        _start_email_verification(user['id'], user['email'], user.get('name', user['email']))
         token = create_access_token(user_id=user['id'], email=user['email'], role=user.get('role', 'student'))
         return {'user': _build_user_payload(user), 'token': token}
     raise HTTPException(status_code=502, detail='Supabase register returned no user')
@@ -176,6 +207,11 @@ def login(payload: AuthLoginRequest, _rl: None = Depends(rate_limiter('login', 1
     status = str(user.get('status', 'active')).lower()
     if status == 'suspended':
         raise HTTPException(status_code=403, detail='Your account has been suspended by Administrator. Please contact support.')
+    # Defaults to True (permissive) when the column is absent — either the user predates
+    # this feature and was backfilled, or the email_verifications migration hasn't been run
+    # yet on this deployment, in which case login must keep working exactly as before.
+    if user.get('email_verified', True) is False:
+        raise HTTPException(status_code=403, detail='Please verify your email before logging in. Check your inbox for the verification link.')
     if role == 'lecturer' and status != 'active':
         if status == 'pending':
             raise HTTPException(status_code=403, detail='Lecturer account is pending administrator approval.')
@@ -275,3 +311,61 @@ def reset_password(payload: ResetPasswordRequest) -> dict[str, Any]:
         pass
 
     return {'status': 'reset', 'message': 'Your password has been updated. You can now log in with your new password.'}
+
+
+@router.post('/verify-email')
+def verify_email(payload: VerifyEmailRequest) -> dict[str, Any]:
+    ensure_supabase_enabled()
+
+    response = supabase.table('email_verifications').select('*').eq('token', payload.token).eq('used', False).limit(1).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase lookup failed'))
+    if not response.data:
+        raise HTTPException(status_code=400, detail='This verification link is invalid or has already been used.')
+
+    verify_row = response.data[0]
+    expires_at = verify_row.get('expires_at')
+    if expires_at:
+        try:
+            expiry_dt = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+            if expiry_dt.tzinfo is None:
+                expiry_dt = expiry_dt.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > expiry_dt:
+                raise HTTPException(status_code=400, detail='This verification link has expired. Please request a new one.')
+        except ValueError:
+            pass
+
+    user_id = verify_row.get('user_id')
+    update_resp = supabase.table('users').update({'email_verified': True}).eq('id', user_id).execute()
+    if supabase_failed(update_resp):
+        raise HTTPException(status_code=502, detail=supabase_error_message(update_resp, 'Supabase verification update failed'))
+
+    try:
+        supabase.table('email_verifications').update({'used': True}).eq('id', verify_row['id']).execute()
+    except Exception:
+        pass
+
+    return {'status': 'verified', 'message': 'Your email has been verified. You can now log in.'}
+
+
+@router.post('/resend-verification')
+def resend_verification(payload: ResendVerificationRequest, _rl: None = Depends(rate_limiter('resend-verification', 3, 60))) -> dict[str, Any]:
+    """Always returns the same generic response regardless of whether the email exists or
+    is already verified — same enumeration-avoidance reasoning as forgot_password above."""
+    ensure_supabase_enabled()
+    email = payload.email.strip().lower()
+
+    generic_result = {'status': 'sent', 'message': 'If that email is registered and not yet verified, a new verification link has been sent.'}
+
+    response = supabase.table('users').select('id,email,name,email_verified').eq('email', email).limit(1).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase lookup failed'))
+    if not response.data:
+        return generic_result
+
+    user = response.data[0]
+    if user.get('email_verified', True):
+        return generic_result
+
+    _start_email_verification(user['id'], user['email'], user.get('name', user['email']))
+    return generic_result
