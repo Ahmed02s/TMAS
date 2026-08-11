@@ -201,7 +201,7 @@ def me(claims: dict[str, Any] = Depends(get_current_claims)) -> dict[str, Any]:
 
 
 @router.post('/forgot-password')
-def forgot_password(payload: ForgotPasswordRequest) -> dict[str, Any]:
+def forgot_password(payload: ForgotPasswordRequest, _rl: None = Depends(rate_limiter('forgot-password', 3, 60))) -> dict[str, Any]:
     """Always returns success (even for an unknown email) so this endpoint can't be used to
     enumerate registered addresses. The actual reset link is emailed via SendGrid (see
     app.core.email.send_password_reset_email) — nothing is ever returned in this response,

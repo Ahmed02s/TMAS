@@ -195,6 +195,33 @@ def _grade_from_score(score: int) -> str:
     return 'F'
 
 
+def _answers_match(expected: str, given: str, q_type: str) -> bool:
+    """Return True if the student's answer is correct.
+    - Always case-insensitive.
+    - For MCQ / True-False: exact match only.
+    - For Fill in the Blank / Short Answer: also accept partial / contained matches
+      so 'Halt' matches 'halt' and semantically similar phrases pass.
+    """
+    exp = expected.strip().lower()
+    ans = given.strip().lower()
+    if not ans:
+        return False
+    if exp == ans:
+        return True
+    # For text-entry types allow partial match
+    text_types = {'fill in the blank', 'fill-in-the-blank', 'short answer', 'short_answer', 'fitb'}
+    if str(q_type).strip().lower() in text_types:
+        # Pass if one is a substring of the other
+        if exp in ans or ans in exp:
+            return True
+        # Pass if student answer contains every word of the expected answer
+        exp_words = set(exp.split())
+        ans_words = set(ans.split())
+        if exp_words and exp_words.issubset(ans_words):
+            return True
+    return False
+
+
 def _build_question_seed(course: str, material_titles: list[str], difficulty: str, index: int) -> int:
     base = f"{course}|{'|'.join(material_titles)}|{difficulty}|{index}"
     return abs(hash(base)) % (2**32)
@@ -1602,32 +1629,6 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
 
     rng.shuffle(questions)
     correct = 0
-
-    def _answers_match(expected: str, given: str, q_type: str) -> bool:
-        """Return True if the student's answer is correct.
-        - Always case-insensitive.
-        - For MCQ / True-False: exact match only.
-        - For Fill in the Blank / Short Answer: also accept partial / contained matches
-          so 'Halt' matches 'halt' and semantically similar phrases pass.
-        """
-        exp = expected.strip().lower()
-        ans = given.strip().lower()
-        if not ans:
-            return False
-        if exp == ans:
-            return True
-        # For text-entry types allow partial match
-        text_types = {'fill in the blank', 'fill-in-the-blank', 'short answer', 'short_answer', 'fitb'}
-        if str(q_type).strip().lower() in text_types:
-            # Pass if one is a substring of the other
-            if exp in ans or ans in exp:
-                return True
-            # Pass if student answer contains every word of the expected answer
-            exp_words = set(exp.split())
-            ans_words = set(ans.split())
-            if exp_words and exp_words.issubset(ans_words):
-                return True
-        return False
 
     # Built after grading (attempt is already locked in) so the post-submission review
     # screen can show correct answers without ever exposing them beforehand.

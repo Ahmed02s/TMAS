@@ -1,10 +1,22 @@
-import { useEffect, useState } from 'react'
-import Landing from './pages/Landing'
-import Login from './pages/Login'
-import Admin from './pages/Admin'
-import Lecturer from './pages/Lecturer'
-import Student from './pages/Student'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { getPasswordResetIntent } from './utils/passwordReset'
+
+// Each portal is a large, self-contained bundle (dashboards, forms, quiz UI) that only one
+// visitor role ever needs at a time — lazy-loading them keeps the initial bundle to just
+// whatever view the user actually lands on instead of shipping all five up front.
+const Landing = lazy(() => import('./pages/Landing'))
+const Login = lazy(() => import('./pages/Login'))
+const Admin = lazy(() => import('./pages/Admin'))
+const Lecturer = lazy(() => import('./pages/Lecturer'))
+const Student = lazy(() => import('./pages/Student'))
+
+function ViewLoading() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-background">
+      <i className="fa-solid fa-circle-notch fa-spin text-2xl text-primary" />
+    </div>
+  )
+}
 
 export type AppView = 'landing' | 'login' | 'register' | 'admin' | 'lecturer' | 'student'
 
@@ -74,13 +86,13 @@ export default function App() {
   }, [])
 
   return (
-    <>
+    <Suspense fallback={<ViewLoading />}>
       {view === 'landing' && <Landing onNavigate={setView} />}
       {view === 'login' && <Login onNavigate={setView} initialTab="login" />}
       {view === 'register' && <Login onNavigate={setView} initialTab="register" />}
       {view === 'admin' && <Admin onNavigate={setView} />}
       {view === 'lecturer' && <Lecturer onNavigate={setView} />}
       {view === 'student' && <Student onNavigate={setView} />}
-    </>
+    </Suspense>
   )
 }
