@@ -683,22 +683,6 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
 
           <div className="flex items-center gap-2 sm:gap-3">
             <button
-              onClick={async () => {
-                const { requestPushPermission, triggerWebPushNotification, playNotificationChime } = await import('../utils/notifications')
-                const granted = await requestPushPermission()
-                triggerWebPushNotification('🔔 TMAS Push Notification System Active!', {
-                  body: 'Web Push alerts and real-time notification engine are fully working on your device.',
-                })
-                playNotificationChime()
-                alert(granted ? '🔔 Browser Push Notification Dispatched! Check your desktop/mobile notifications.' : '🔔 Sound chime played! (Enable browser notification permissions to see desktop popups).')
-              }}
-              className="flex items-center gap-1.5 text-xs font-semibold bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 px-2.5 sm:px-3 py-1.5 rounded-xl transition-colors shrink-0"
-              title="Test Instant Web Push Notification"
-            >
-              <Icon name="bolt" size={14} />
-              <span className="hidden sm:inline">Test Push</span>
-            </button>
-            <button
               onClick={() => setAnnouncementModalOpen(true)}
               className="flex items-center gap-1.5 text-xs font-semibold bg-accent/15 hover:bg-accent/25 text-accent border border-accent/30 px-2.5 sm:px-3 py-1.5 rounded-xl transition-colors shrink-0"
               title="Broadcast Announcement"
@@ -707,7 +691,14 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
               <span className="hidden sm:inline">Broadcast</span>
             </button>
             <div className="relative">
-              <button onClick={() => setNotifOpen(!notifOpen)} className="relative p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted transition-colors">
+              <button
+                onClick={async () => {
+                  setNotifOpen(!notifOpen)
+                  const { requestPushPermission } = await import('../utils/notifications')
+                  requestPushPermission()
+                }}
+                className="relative p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted transition-colors"
+              >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
                 </svg>

@@ -1309,25 +1309,17 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
             </h1>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={async () => {
-                const { requestPushPermission, triggerWebPushNotification, playNotificationChime } = await import('../utils/notifications')
-                const granted = await requestPushPermission()
-                triggerWebPushNotification('TMAS Push Notification System Active!', {
-                  body: 'Web Push alerts and real-time notification engine are fully working on your device.',
-                })
-                playNotificationChime()
-                alert(granted ? 'Browser Push Notification Dispatched! Check your desktop/mobile notifications.' : 'Sound chime played! (Enable browser notification permissions to see desktop popups).')
-              }}
-              className="flex items-center gap-1.5 text-xs font-semibold bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 px-2.5 py-1 rounded-full transition-colors"
-              title="Test Instant Web Push Notification"
-            >
-              <i className="fa-solid fa-bolt" />
-              <span>Test Push</span>
-            </button>
             <span className="text-xs bg-success/10 text-success px-3 py-1 rounded-full font-semibold">Account Active</span>
             <div className="relative">
-              <button onClick={() => setNotifOpen(!notifOpen)} className="relative p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted transition-colors" title="Notifications">
+              <button
+                onClick={async () => {
+                  setNotifOpen(!notifOpen)
+                  const { requestPushPermission } = await import('../utils/notifications')
+                  requestPushPermission()
+                }}
+                className="relative p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted transition-colors"
+                title="Notifications"
+              >
                 <i className="fa-solid fa-bell text-lg" />
                 {visibleNotifications.length > 0 && (
                   <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-accent" />
