@@ -91,6 +91,7 @@ export default function Login({
   // registration (see lecturerPendingModal below) — verification is required for every new
   // account regardless of role, but only the student modal used to mention it.
   const [checkInboxEmail, setCheckInboxEmail] = useState('')
+  const [verificationSendFailed, setVerificationSendFailed] = useState(false)
   const [resendBusy, setResendBusy] = useState(false)
   const [resendMessage, setResendMessage] = useState('')
   // Result of auto-verifying a `verify_token` link the user clicked from their email.
@@ -152,8 +153,10 @@ export default function Login({
       })
       const data = await response.json()
       if (!response.ok) throw new Error(extractErrorMessage(data, 'Could not resend verification email'))
+      setVerificationSendFailed(false)
       setResendMessage(data.message || 'If that email is registered and not yet verified, a new verification link has been sent.')
     } catch (error) {
+      setVerificationSendFailed(true)
       setResendMessage(error instanceof Error ? error.message : 'Could not resend verification email')
     } finally {
       setResendBusy(false)
@@ -312,7 +315,11 @@ export default function Login({
         onNavigate('student')
       }
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Login failed')
+      const message = error instanceof Error ? error.message : 'Login failed'
+      setStatusMessage(message)
+      if (message.toLowerCase().includes('verify your email')) {
+        setCheckInboxEmail(email.trim())
+      }
     } finally {
       setIsSubmitting(false)
     }
@@ -361,6 +368,7 @@ export default function Login({
       if (!response.ok) throw new Error(extractErrorMessage(data, 'Registration failed'))
 
       clearRegisterFields()
+      setVerificationSendFailed(data.verification_email_sent === false)
 
       if (role === 'lecturer') {
         try {
@@ -789,13 +797,22 @@ export default function Login({
                 <i className="fa-solid fa-envelope-circle-check text-xs text-primary" />
                 <span>One More Step: Verify Your Email</span>
               </p>
-              <p className="text-muted-foreground leading-relaxed">
-                We also sent a verification link to <span className="font-semibold text-foreground">{checkInboxEmail}</span>. You'll
-                need to click it — in addition to being approved — before you can sign in.
-              </p>
+              {verificationSendFailed && (
+                <p className="text-danger leading-relaxed">
+                  We could not send the verification link. Use resend below; if it fails again, check the mail service settings.
+                </p>
+              )}
+              {!verificationSendFailed && (
+                <p className="text-muted-foreground leading-relaxed">
+                  We also sent a verification link to <span className="font-semibold text-foreground">{checkInboxEmail}</span>. You'll
+                  need to click it — in addition to being approved — before you can sign in.
+                </p>
+              )}
             </div>
             {resendMessage && (
-              <p className="text-xs text-primary bg-primary/5 border border-primary/20 rounded-xl p-3 leading-relaxed">{resendMessage}</p>
+              <p className={`text-xs rounded-xl p-3 leading-relaxed ${
+                verificationSendFailed ? 'text-danger bg-danger/5 border border-danger/20' : 'text-primary bg-primary/5 border border-primary/20'
+              }`}>{resendMessage}</p>
             )}
             <div className="flex flex-col gap-2 pt-2">
               <button
@@ -806,7 +823,7 @@ export default function Login({
                 {resendBusy ? <><i className="fa-solid fa-spinner fa-spin mr-2" />Resending...</> : "Didn't get it? Resend email"}
               </button>
               <button
-                onClick={() => { setLecturerPendingModal(false); setCheckInboxEmail(''); setResendMessage(''); setTab('login') }}
+                onClick={() => { setLecturerPendingModal(false); setCheckInboxEmail(''); setVerificationSendFailed(false); setResendMessage(''); setTab('login') }}
                 className="w-full bg-primary hover:bg-blue-950 text-white font-semibold py-3 rounded-xl transition-colors text-sm"
               >
                 Sign In with Approved Account →
@@ -832,12 +849,21 @@ export default function Login({
             </div>
             <div>
               <h3 className="font-display text-2xl font-bold text-foreground">Check your inbox</h3>
-              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
-                We sent a verification link to <span className="font-semibold text-foreground">{checkInboxEmail}</span>. Click it to activate your account before signing in.
-              </p>
+              {verificationSendFailed && (
+                <p className="text-sm text-danger mt-2 leading-relaxed">
+                  We could not send the verification link. Try resending it below.
+                </p>
+              )}
+              {!verificationSendFailed && (
+                <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
+                  We sent a verification link to <span className="font-semibold text-foreground">{checkInboxEmail}</span>. Click it to activate your account before signing in.
+                </p>
+              )}
             </div>
             {resendMessage && (
-              <p className="text-xs text-primary bg-primary/5 border border-primary/20 rounded-xl p-3 leading-relaxed">{resendMessage}</p>
+              <p className={`text-xs rounded-xl p-3 leading-relaxed ${
+                verificationSendFailed ? 'text-danger bg-danger/5 border border-danger/20' : 'text-primary bg-primary/5 border border-primary/20'
+              }`}>{resendMessage}</p>
             )}
             <div className="flex flex-col gap-2 pt-2">
               <button
@@ -848,7 +874,7 @@ export default function Login({
                 {resendBusy ? <><i className="fa-solid fa-spinner fa-spin mr-2" />Resending...</> : "Didn't get it? Resend email"}
               </button>
               <button
-                onClick={() => { setCheckInboxEmail(''); setResendMessage(''); setTab('login') }}
+                onClick={() => { setCheckInboxEmail(''); setVerificationSendFailed(false); setResendMessage(''); setTab('login') }}
                 className="w-full bg-primary hover:bg-blue-950 text-white font-semibold py-3 rounded-xl transition-colors text-sm"
               >
                 Back to Sign In

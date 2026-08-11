@@ -17,7 +17,7 @@ def test_start_email_verification_never_raises_when_table_missing(monkeypatch):
     monkeypatch.setattr(auth_router, 'supabase', _RaisingSupabase())
     # Should not raise — a deployment that hasn't run the email_verifications migration yet
     # must still be able to register accounts exactly as it could before this feature existed.
-    auth_router._start_email_verification('user-1', 'student@example.edu', 'Ada Lovelace')
+    assert auth_router._start_email_verification('user-1', 'student@example.edu', 'Ada Lovelace') is False
 
 
 def test_start_email_verification_never_raises_when_email_send_fails(monkeypatch):
@@ -38,7 +38,33 @@ def test_start_email_verification_never_raises_when_email_send_fails(monkeypatch
     monkeypatch.setattr(auth_router, 'supabase', _WorkingSupabase())
     monkeypatch.setattr(auth_router, 'send_verification_email', _boom)
 
-    auth_router._start_email_verification('user-1', 'student@example.edu', 'Ada Lovelace')
+    assert auth_router._start_email_verification('user-1', 'student@example.edu', 'Ada Lovelace') is False
+
+
+def test_start_email_verification_can_raise_for_resend(monkeypatch):
+    class _WorkingTable:
+        def insert(self, *_args, **_kwargs):
+            return self
+
+        def execute(self):
+            return None
+
+    class _WorkingSupabase:
+        def table(self, *_args, **_kwargs):
+            return _WorkingTable()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError('SendGrid API key is not configured.')
+
+    monkeypatch.setattr(auth_router, 'supabase', _WorkingSupabase())
+    monkeypatch.setattr(auth_router, 'send_verification_email', _boom)
+
+    try:
+        auth_router._start_email_verification('user-1', 'student@example.edu', 'Ada Lovelace', raise_on_failure=True)
+    except RuntimeError as exc:
+        assert 'SendGrid API key' in str(exc)
+    else:
+        raise AssertionError('Expected delivery failure to be raised')
 
 
 def test_verify_email_request_requires_token():

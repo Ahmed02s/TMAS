@@ -94,12 +94,11 @@ def _build_user_payload(user: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _start_email_verification(user_id: str, email: str, name: str) -> None:
+def _start_email_verification(user_id: str, email: str, name: str, *, raise_on_failure: bool = False) -> bool:
     """Generates a verification token, records it, and emails it — used right after a new
-    account is created. Deliberately never raises: if the email_verifications table hasn't
-    been migrated yet, or SendGrid isn't configured, the account still exists and works
-    exactly as it did before this feature existed (see the login-gate default in login()),
-    it just won't be gated on verification until the operator finishes setting this up."""
+    account is created. Returns whether the verification email was actually sent. By
+    default this preserves the old non-fatal registration behavior, but call sites such as
+    resend can opt into a clear error so delivery failures don't look like success."""
     try:
         verify_token = secrets.token_urlsafe(32)
         expires_at = (datetime.now(timezone.utc) + timedelta(hours=EMAIL_VERIFICATION_EXPIRY_HOURS)).isoformat()
@@ -110,8 +109,12 @@ def _start_email_verification(user_id: str, email: str, name: str) -> None:
             'used': False,
         }).execute()
         send_verification_email(email, name, verify_token)
+        return True
     except Exception:
         logger.exception('register: failed to start email verification for user_id=%s', user_id)
+        if raise_on_failure:
+            raise
+        return False
 
 
 @router.post('/register', status_code=201)
@@ -168,9 +171,13 @@ def register(payload: AuthRegisterRequest, _rl: None = Depends(rate_limiter('reg
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase register failed'))
     if response.data:
         user = response.data[0]
-        _start_email_verification(user['id'], user['email'], user.get('name', user['email']))
+        verification_email_sent = _start_email_verification(user['id'], user['email'], user.get('name', user['email']))
         token = create_access_token(user_id=user['id'], email=user['email'], role=user.get('role', 'student'))
-        return {'user': _build_user_payload(user), 'token': token}
+        return {
+            'user': _build_user_payload(user),
+            'token': token,
+            'verification_email_sent': verification_email_sent,
+        }
     raise HTTPException(status_code=502, detail='Supabase register returned no user')
 
 
@@ -367,5 +374,8 @@ def resend_verification(payload: ResendVerificationRequest, _rl: None = Depends(
     if user.get('email_verified', True):
         return generic_result
 
-    _start_email_verification(user['id'], user['email'], user.get('name', user['email']))
+    try:
+        _start_email_verification(user['id'], user['email'], user.get('name', user['email']), raise_on_failure=True)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f'Could not send verification email: {exc}')
     return generic_result
