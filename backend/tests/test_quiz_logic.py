@@ -5,9 +5,22 @@ from app.routers.quizzes import (
     _answers_match,
     _compute_time_limit_minutes,
     _grade_from_score,
+    _materials_match_course,
     _normalize_single_question_type,
     _question_type_seconds,
 )
+
+
+def test_materials_match_course_accepts_equivalent_course_formatting():
+    assert _materials_match_course([{'course': 'COMP 401'}], 'comp-401')
+
+
+def test_materials_match_course_rejects_material_from_another_course():
+    assert not _materials_match_course([{'course': 'COMP 401'}, {'course': 'COMP 402'}], 'COMP 401')
+
+
+def test_materials_match_course_rejects_missing_course_assignment():
+    assert not _materials_match_course([{'course': ''}], 'COMP 401')
 
 
 # ── Question type normalization ──────────────────────────────────────────────

@@ -965,6 +965,20 @@ def _clean_code_str(s: str | None) -> str:
     return _re.sub(r'[^a-zA-Z0-9]', '', s or '').lower()
 
 
+def _materials_match_course(materials: list[dict[str, Any]], course: str) -> bool:
+    """Return whether every supplied material belongs to the requested course.
+
+    Material IDs come from the browser, so they must not be allowed to change the
+    course a quiz is generated for. Normalizing formatting keeps `COMP 401` and
+    `comp-401` equivalent without accepting partial course-code matches.
+    """
+    requested_course = _clean_code_str(course)
+    return bool(requested_course) and all(
+        _clean_code_str(str(material.get('course') or '')) == requested_course
+        for material in materials
+    )
+
+
 def _fetch_allowed_course_codes(level: str | None, program: str | None) -> list[str]:
     if not level:
         return []
@@ -1041,11 +1055,14 @@ def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_
             raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase list materials failed'))
         materials = response.data or []
         if not materials:
-            raise HTTPException(status_code=404, detail='No processed materials found for this course')
+            raise HTTPException(status_code=404, detail='No materials found for this course. Upload course material before generating a quiz.')
+        if payload.material_ids and len(materials) != len(set(payload.material_ids)):
+            raise HTTPException(status_code=404, detail='One or more selected materials could not be found.')
+        if not _materials_match_course(materials, payload.course):
+            raise HTTPException(status_code=400, detail='Selected materials must belong to the target course.')
 
-        # Inherit course from material if specified
-        mat_course = next((m.get('course') for m in materials if m.get('course')), None)
-        effective_course = mat_course or payload.course
+        # Keep the requested course authoritative after validating every material.
+        effective_course = payload.course
 
         raw_titles = [material.get('name', '') for material in materials]
         material_titles = [_clean_material_title(title) for title in raw_titles]

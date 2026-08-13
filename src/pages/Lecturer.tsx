@@ -226,6 +226,10 @@ function getInitials(name?: string) {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
 }
 
+function normalizeCourseCode(course?: string) {
+  return String(course || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
 // The `/api/courses` API returns snake_case fields (progress, avg_score, student_count),
 // but several views in this file read camelCase names (completion, avgScore, students)
 // that don't exist on the raw response — which silently rendered as 0/blank everywhere
@@ -837,11 +841,8 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
 
   const filteredMaterialsForCourse = useMemo(() => {
     if (!genCourse) return materialsState
-    const cleanGenCourse = genCourse.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
-    return materialsState.filter(m => {
-      const matCourse = (m.course || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '')
-      return !matCourse || matCourse === cleanGenCourse || matCourse.includes(cleanGenCourse) || cleanGenCourse.includes(matCourse)
-    })
+    const cleanGenCourse = normalizeCourseCode(genCourse)
+    return materialsState.filter(m => normalizeCourseCode(m.course) === cleanGenCourse)
   }, [materialsState, genCourse])
 
   // Keeps the "Uploaded Materials" table in sync with whichever course is selected in the
@@ -960,6 +961,10 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       setGenError('Select at least one question type.')
       return
     }
+    if (!filteredMaterialsForCourse.length) {
+      setGenError(`No materials are uploaded for ${genCourse}. Upload course material before generating a quiz.`)
+      return
+    }
     if (isNaN(count) || count < 3 || count > 30) {
       setGenError('Questions per tier must be between 3 and 30.')
       return
@@ -967,12 +972,15 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     setGenerating(true)
     setGenerated(false)
     try {
+      const materialIds = selectedMaterialId
+        ? [Number(selectedMaterialId)]
+        : filteredMaterialsForCourse.map(material => Number(material.id))
       const payload = {
         course: genCourse,
         question_count: count,
         generate_all_tiers: true,
         question_types: genQuestionTypes,
-        material_ids: selectedMaterialId ? [Number(selectedMaterialId)] : [],
+        material_ids: materialIds,
       }
 
       const res = await fetch(`${API_BASE}/api/quizzes/generate`, {
@@ -1081,7 +1089,9 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
           open_date: new Date(config.openDate).toISOString(),
           close_date: new Date(config.closeDate).toISOString(),
           due_date: new Date(config.closeDate).toISOString(),
-          material_ids: selectedMaterialId ? [Number(selectedMaterialId)] : [],
+          material_ids: selectedMaterialId
+            ? [Number(selectedMaterialId)]
+            : filteredMaterialsForCourse.map(material => Number(material.id)),
         }
       })
 
@@ -2148,7 +2158,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                         onChange={e => setSelectedMaterialId(e.target.value)}
                         className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                       >
-                        <option value="">All Uploaded Materials ({filteredMaterialsForCourse.length} indexed)</option>
+                        <option value="">All Materials for This Course ({filteredMaterialsForCourse.length} indexed)</option>
                         {filteredMaterialsForCourse.map(m => (
                           <option key={m.id} value={String(m.id)}>
                             📄 {m.name} ({m.course || 'General'})
