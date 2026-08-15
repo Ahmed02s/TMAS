@@ -29,7 +29,7 @@ def call_llm(
             api_url = QROK_API_URL or 'https://api.groq.com/openai/v1/chat/completions'
             headers = {'Authorization': f'Bearer {QROK_API_KEY}', 'Content-Type': 'application/json'}
             body: dict = {
-                'model': 'llama-3.3-70b-versatile',
+                'model': 'Qwen3.6 27B',
                 'messages': [
                     {'role': 'system', 'content': system},
                     {'role': 'user', 'content': user},
