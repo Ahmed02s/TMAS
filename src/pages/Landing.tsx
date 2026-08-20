@@ -351,7 +351,7 @@ export default function Landing({ onNavigate }: { onNavigate: (v: AppView) => vo
             </p>
             <div className="space-y-5">
               {[
-                { icon: '📧', label: 'Email', val: 'contact@tmas.edu' },
+                { icon: '📧', label: 'Email', val: 'medsa0206@gmail.com' },
                 { icon: '📞', label: 'Phone', val: '+1 (555) 234-5678' },
                 { icon: '📍', label: 'Address', val: '123 Academic Avenue, Innovation Hub, Tech City' },
               ].map((item, i) => (

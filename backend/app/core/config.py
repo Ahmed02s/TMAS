@@ -19,6 +19,7 @@ SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY', '')
 EMAIL_FROM = os.getenv('EMAIL_FROM', '')
 EMAIL_FROM_NAME = os.getenv('EMAIL_FROM_NAME', '')
 EMAIL_REPLY_TO = os.getenv('EMAIL_REPLY_TO', EMAIL_FROM)
+CONTACT_EMAIL = os.getenv('CONTACT_EMAIL', 'medsa0206@gmail.com')
 # Used to build the link inside password-reset emails (see app.core.email). This backend
 # runs on Render, not on whatever machine sends the email, so defaulting to localhost meant
 # every reset email sent from a deployment without an explicit FRONTEND_URL env var contained

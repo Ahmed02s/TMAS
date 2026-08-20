@@ -638,7 +638,7 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sidebar-foreground text-xs font-semibold truncate">{savedUser?.name || 'System Administrator'}</p>
-              <p className="text-sidebar-muted text-xs truncate">{savedUser?.email || 'med3719@gmail.com'}</p>
+              <p className="text-sidebar-muted text-xs truncate">{savedUser?.email || 'medsa0206@gmail.com'}</p>
             </div>
             <button onClick={() => {
               localStorage.removeItem('tmas-token')
@@ -795,7 +795,7 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
         <ProfileModal
           open={profileModalOpen}
           onClose={() => setProfileModalOpen(false)}
-          user={savedUser || { name: 'System Administrator', email: 'admin@tmas.com', role: 'administrator' }}
+          user={savedUser || { name: 'System Administrator', email: 'medsa0206@gmail.com', role: 'administrator' }}
           onLogout={() => {
             localStorage.removeItem('tmas-token')
             localStorage.removeItem('tmas-user')

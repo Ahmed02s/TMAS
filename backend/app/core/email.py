@@ -4,7 +4,7 @@ from html import escape
 
 import httpx
 
-from app.core.config import EMAIL_FROM, EMAIL_FROM_NAME, EMAIL_REPLY_TO, FRONTEND_URL, SENDGRID_API_KEY
+from app.core.config import CONTACT_EMAIL, EMAIL_FROM, EMAIL_FROM_NAME, EMAIL_REPLY_TO, FRONTEND_URL, SENDGRID_API_KEY
 
 SENDGRID_API_URL = 'https://api.sendgrid.com/v3/mail/send'
 
@@ -153,7 +153,8 @@ def send_verification_email(to_email: str, to_name: str, verify_token: str) -> N
 
 
 def _build_contact_email_payload(sender_name: str, sender_email: str, message: str) -> dict[str, object]:
-    recipient = EMAIL_FROM.strip()
+    recipient = CONTACT_EMAIL.strip()
+    from_email = EMAIL_FROM.strip()
     from_name = EMAIL_FROM_NAME.strip() or 'TMAS'
     safe_name = escape(sender_name)
     safe_email = escape(sender_email)
@@ -161,7 +162,7 @@ def _build_contact_email_payload(sender_name: str, sender_email: str, message: s
     return {
         'personalizations': [{'to': [{'email': recipient, 'name': from_name}],
                               'subject': f'New TMAS contact message from {sender_name}'}],
-        'from': {'email': recipient, 'name': from_name},
+        'from': {'email': from_email, 'name': from_name},
         'reply_to': {'email': sender_email, 'name': sender_name},
         'content': [
             {'type': 'text/plain', 'value': f'Name: {sender_name}\nEmail: {sender_email}\n\nMessage:\n{message}'},
@@ -178,6 +179,8 @@ def send_contact_email(sender_name: str, sender_email: str, message: str) -> Non
         raise RuntimeError('SendGrid API key is not configured.')
     if not EMAIL_FROM:
         raise RuntimeError('EMAIL_FROM is not configured.')
+    if not CONTACT_EMAIL:
+        raise RuntimeError('CONTACT_EMAIL is not configured.')
     body = _build_contact_email_payload(sender_name, sender_email, message)
     headers = {'Authorization': f'Bearer {SENDGRID_API_KEY}', 'Content-Type': 'application/json'}
     response = httpx.post(SENDGRID_API_URL, json=body, headers=headers, timeout=15.0)
