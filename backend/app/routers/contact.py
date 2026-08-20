@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr, field_validator
 
+from app.core.email import send_contact_email
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_error_message, supabase_failed
 
 logger = logging.getLogger(__name__)
@@ -57,4 +58,9 @@ def send_contact_message(payload: ContactMessageRequest) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f'Could not send message: {exc}')
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase insert contact message failed'))
+    try:
+        send_contact_email(payload.name, str(payload.email), payload.message.strip())
+    except Exception as exc:
+        logger.exception('send_contact_message: email delivery failed')
+        raise HTTPException(status_code=502, detail=f'Message was saved, but email delivery failed: {exc}')
     return {'status': 'received', 'message': "Thanks — we've received your message and will get back to you soon."}

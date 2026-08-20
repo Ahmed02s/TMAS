@@ -1,5 +1,6 @@
 import os
 from email.message import EmailMessage
+from html import escape
 
 import httpx
 
@@ -146,6 +147,39 @@ def send_verification_email(to_email: str, to_name: str, verify_token: str) -> N
         'Content-Type': 'application/json',
     }
 
+    response = httpx.post(SENDGRID_API_URL, json=body, headers=headers, timeout=15.0)
+    if response.status_code >= 400:
+        raise RuntimeError(f'SendGrid send failed: {response.status_code} {response.text}')
+
+
+def _build_contact_email_payload(sender_name: str, sender_email: str, message: str) -> dict[str, object]:
+    recipient = EMAIL_FROM.strip()
+    from_name = EMAIL_FROM_NAME.strip() or 'TMAS'
+    safe_name = escape(sender_name)
+    safe_email = escape(sender_email)
+    safe_message = escape(message).replace('\n', '<br/>')
+    return {
+        'personalizations': [{'to': [{'email': recipient, 'name': from_name}],
+                              'subject': f'New TMAS contact message from {sender_name}'}],
+        'from': {'email': recipient, 'name': from_name},
+        'reply_to': {'email': sender_email, 'name': sender_name},
+        'content': [
+            {'type': 'text/plain', 'value': f'Name: {sender_name}\nEmail: {sender_email}\n\nMessage:\n{message}'},
+            {'type': 'text/html', 'value': _wrap_html_document(
+                f'<p><strong>Name:</strong> {safe_name}<br/><strong>Email:</strong> {safe_email}</p>'
+                f'<p><strong>Message:</strong></p><p>{safe_message}</p>'
+            )},
+        ],
+    }
+
+
+def send_contact_email(sender_name: str, sender_email: str, message: str) -> None:
+    if not SENDGRID_API_KEY:
+        raise RuntimeError('SendGrid API key is not configured.')
+    if not EMAIL_FROM:
+        raise RuntimeError('EMAIL_FROM is not configured.')
+    body = _build_contact_email_payload(sender_name, sender_email, message)
+    headers = {'Authorization': f'Bearer {SENDGRID_API_KEY}', 'Content-Type': 'application/json'}
     response = httpx.post(SENDGRID_API_URL, json=body, headers=headers, timeout=15.0)
     if response.status_code >= 400:
         raise RuntimeError(f'SendGrid send failed: {response.status_code} {response.text}')
