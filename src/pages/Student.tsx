@@ -692,7 +692,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     postIntegrityEvent('assessment_resumed', focusViolations)
   }
 
-  const handleSubmitQuiz = async () => {
+  const handleSubmitQuiz = async (submissionReason: 'normal' | 'integrity_violation' = 'normal') => {
     if (activeQuiz === null || quizSubmitted || isAutoSubmittingRef.current) return
     setQuizLoading(true)
     isAutoSubmittingRef.current = true
@@ -700,7 +700,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     let attempt: CompletedQuiz | null = null
 
     try {
-      const payload = { student_id: student?.id || '', answers: quizAnswersRef.current }
+      const payload = { student_id: student?.id || '', answers: quizAnswersRef.current, submission_reason: submissionReason }
       const res = await fetch(`${API_BASE}/api/quizzes/${activeQuiz}/submit`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -841,7 +841,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
         if (next >= 3) {
           setFocusViolationMessage('Third assessment-integrity violation detected. Submitting your saved answers now.')
           postIntegrityEvent('automatic_submission', next, { trigger: eventType })
-          window.setTimeout(() => handleSubmitQuiz(), 0)
+          window.setTimeout(() => handleSubmitQuiz('integrity_violation'), 0)
         }
         return next
       })
@@ -1196,7 +1196,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                   </button>
                 ) : (
                   <button
-                    onClick={handleSubmitQuiz}
+                    onClick={() => handleSubmitQuiz()}
                     disabled={!quizAnswers[currentQ] || quizLoading}
                     className="px-6 py-3 bg-success text-white rounded-xl text-sm font-semibold hover:bg-green-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >

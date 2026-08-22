@@ -121,8 +121,13 @@ CREATE TABLE IF NOT EXISTS quiz_questions (
   question TEXT NOT NULL,
   options JSONB NOT NULL DEFAULT '[]',
   correct TEXT NOT NULL,
+  question_type TEXT NOT NULL DEFAULT 'MCQ',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Existing deployments predate question_type. Without this column the backend's safe-write
+-- fallback drops every generated type and all questions reload as MCQ.
+ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS question_type TEXT NOT NULL DEFAULT 'MCQ';
 
 CREATE TABLE IF NOT EXISTS quiz_attempts (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -133,7 +138,26 @@ CREATE TABLE IF NOT EXISTS quiz_attempts (
   grade TEXT NOT NULL DEFAULT 'F',
   passed BOOLEAN NOT NULL DEFAULT FALSE,
   status TEXT NOT NULL DEFAULT 'completed',
+  answers JSONB NOT NULL DEFAULT '{}',
+  answers_recorded BOOLEAN NOT NULL DEFAULT FALSE,
+  submission_reason TEXT NOT NULL DEFAULT 'normal',
   attempted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS answers JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS answers_recorded BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS submission_reason TEXT NOT NULL DEFAULT 'normal';
+
+CREATE TABLE IF NOT EXISTS quiz_attempt_review_actions (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  attempt_id BIGINT REFERENCES quiz_attempts(id) ON DELETE SET NULL,
+  quiz_id BIGINT NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+  student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  action TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  actor_email TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- One recoverable answer snapshot per student/quiz. The backend merges this snapshot with
@@ -212,6 +236,7 @@ CREATE INDEX IF NOT EXISTS idx_quizzes_status ON quizzes(status);
 CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz_id ON quiz_questions(quiz_id);
 CREATE INDEX IF NOT EXISTS idx_quiz_answer_drafts_student ON quiz_answer_drafts(student_id);
 CREATE INDEX IF NOT EXISTS idx_quiz_integrity_events_attempt ON quiz_integrity_events(quiz_id, student_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_quiz_attempt_review_actions_attempt ON quiz_attempt_review_actions(quiz_id, student_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_material_reads_student ON material_reads(student_id);
 CREATE INDEX IF NOT EXISTS idx_material_reads_material ON material_reads(material_id);
 CREATE INDEX IF NOT EXISTS idx_material_page_reads_student_material ON material_page_reads(student_id, material_id);

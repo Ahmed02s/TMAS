@@ -76,6 +76,22 @@ def _verify_acting_as_self_if_authenticated(claims: dict[str, Any] | None, stude
         raise HTTPException(status_code=403, detail='You can only do this for your own account')
 
 
+def _require_quiz_review_access(quiz: dict[str, Any], claims: dict[str, Any]) -> None:
+    """Lecturers may review only quizzes belonging to courses assigned to them."""
+    if str(claims.get('role') or '').lower() in ('admin', 'administrator'):
+        return
+    user_response = supabase.table('users').select('name').eq('id', claims.get('sub')).limit(1).execute()
+    if supabase_failed(user_response) or not user_response.data:
+        raise HTTPException(status_code=403, detail='Lecturer profile could not be verified')
+    lecturer_name = str(user_response.data[0].get('name') or '').strip()
+    course_code = str(quiz.get('course') or '').strip()
+    if not lecturer_name or not course_code:
+        raise HTTPException(status_code=403, detail='Quiz ownership could not be verified')
+    course_response = supabase.table('courses').select('id').eq('code', course_code).ilike('lecturer', f'%{lecturer_name}%').limit(1).execute()
+    if supabase_failed(course_response) or not course_response.data:
+        raise HTTPException(status_code=403, detail='You can review only quizzes assigned to your courses')
+
+
 def _clean_material_title(title: str) -> str:
     title = re.sub(r'\.[^.]+$', '', title)
     title = title.replace('_', ' ').replace('-', ' ')
@@ -913,6 +929,7 @@ class PublishQuizRequest(BaseModel):
 class QuizSubmissionRequest(BaseModel):
     student_id: str
     answers: dict[str, str]
+    submission_reason: str = Field(default='normal', pattern=r'^(normal|integrity_violation)$')
 
 
 class QuizAutosaveRequest(BaseModel):
@@ -925,6 +942,14 @@ class QuizIntegrityEventRequest(BaseModel):
     event_type: str = Field(pattern=r'^(assessment_started|tab_hidden|fullscreen_exit|assessment_resumed|automatic_submission)$')
     violation_number: int = Field(default=0, ge=0, le=3)
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+class QuizReviewNoteRequest(BaseModel):
+    note: str = Field(min_length=1, max_length=2000)
+
+
+class QuizGrantRetryRequest(BaseModel):
+    note: str = Field(min_length=5, max_length=2000)
 
 
 def _get_student_attempts(quiz_id: int, student_id: str) -> list[dict[str, Any]]:
@@ -958,6 +983,25 @@ def _merge_submission_answers(saved_answers: dict[str, str], submitted_answers: 
     return {**saved_answers, **submitted_answers}
 
 
+def _ordered_questions_for_student(raw_questions: list[dict[str, Any]], quiz_id: int, student_id: str) -> list[dict[str, Any]]:
+    """Reproduce the exact stable question/option order used during the student's attempt."""
+    import hashlib
+    stable_seed = int(hashlib.md5(f"{quiz_id}_{student_id or 'random'}".encode()).hexdigest(), 16)
+    rng = random.Random(stable_seed)
+    questions: list[dict[str, Any]] = []
+    for raw in raw_questions:
+        question = dict(raw)
+        question['type'] = question.get('question_type') or question.get('type') or 'MCQ'
+        options = question.get('options')
+        if isinstance(options, list) and len(options) > 1:
+            shuffled_options = list(options)
+            rng.shuffle(shuffled_options)
+            question['options'] = shuffled_options
+        questions.append(question)
+    rng.shuffle(questions)
+    return questions
+
+
 def _fetch_student_attempt_counts(student_id: str) -> dict[int, int]:
     """Returns count of attempts per quiz for the given student, used solely by
     list_available_quizzes to decide whether a quiz has already been used up.
@@ -979,6 +1023,8 @@ def _fetch_student_attempt_counts(student_id: str) -> dict[int, int]:
 
     counts: dict[int, int] = {}
     for attempt in response.data or []:
+        if attempt.get('status') == 'retry_granted':
+            continue
         quiz_id = attempt.get('quiz_id')
         if quiz_id is not None:
             counts[quiz_id] = counts.get(quiz_id, 0) + 1
@@ -1520,9 +1566,9 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
 
     attempts = _get_student_attempts(quiz_id, payload.student_id)
 
-    # Already has a completed attempt — block
-    completed = [a for a in attempts if a.get('status') == 'completed']
-    if completed:
+    # A finalized attempt blocks a new start until a lecturer explicitly grants a retry.
+    finalized = [a for a in attempts if a.get('status') in ('completed', 'missed')]
+    if finalized:
         raise HTTPException(status_code=403, detail='No attempts remaining for this quiz')
 
     time_limit_minutes = int(quiz.get('time_limit') or 0)
@@ -1567,6 +1613,9 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
         'grade': 'F',
         'passed': False,
         'status': 'in_progress',
+        'answers': {},
+        'answers_recorded': False,
+        'submission_reason': 'in_progress',
         'attempted_at': started_at_iso,
     }
     insert_response = _safe_insert('quiz_attempts', attempt_record)
@@ -1646,6 +1695,145 @@ def list_quiz_integrity_events(quiz_id: int, student_id: str, _claims: dict = De
     return {'events': response.data or []}
 
 
+def _review_actions_for_quiz(quiz_id: int) -> list[dict[str, Any]]:
+    try:
+        response = supabase.table('quiz_attempt_review_actions').select('*').eq('quiz_id', quiz_id).order('created_at').execute()
+    except Exception as exc:
+        if _is_missing_table_error(exc):
+            return []
+        raise
+    return response.data or [] if not supabase_failed(response) else []
+
+
+@router.get('/{quiz_id}/attempt-reviews')
+def list_quiz_attempt_reviews(quiz_id: int, claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+    ensure_supabase_enabled()
+    quiz_response = supabase.table('quizzes').select('*').eq('id', quiz_id).limit(1).execute()
+    if supabase_failed(quiz_response) or not quiz_response.data:
+        raise HTTPException(status_code=404, detail='Quiz not found')
+    quiz = _normalize_quiz_row(quiz_response.data[0])
+    _require_quiz_review_access(quiz, claims)
+
+    attempts_response = supabase.table('quiz_attempts').select('*').eq('quiz_id', quiz_id).order('attempted_at', desc=True).execute()
+    if supabase_failed(attempts_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(attempts_response, 'Supabase fetch attempts failed'))
+    attempts = attempts_response.data or []
+    student_ids = list({str(attempt.get('student_id')) for attempt in attempts if attempt.get('student_id')})
+
+    students_by_id: dict[str, dict[str, Any]] = {}
+    if student_ids:
+        students_response = supabase.table('users').select('id,name,email').in_('id', student_ids).execute()
+        if not supabase_failed(students_response):
+            students_by_id = {str(student['id']): student for student in students_response.data or []}
+
+    questions_response = supabase.table('quiz_questions').select('*').eq('quiz_id', quiz_id).execute()
+    raw_questions = questions_response.data or [] if not supabase_failed(questions_response) else []
+
+    try:
+        events_response = supabase.table('quiz_integrity_events').select('*').eq('quiz_id', quiz_id).order('occurred_at').execute()
+        integrity_events = events_response.data or [] if not supabase_failed(events_response) else []
+    except Exception as exc:
+        integrity_events = [] if _is_missing_table_error(exc) else []
+    review_actions = _review_actions_for_quiz(quiz_id)
+
+    review_rows: list[dict[str, Any]] = []
+    for attempt in attempts:
+        student_id = str(attempt.get('student_id') or '')
+        ordered_questions = _ordered_questions_for_student(raw_questions, quiz_id, student_id)
+        answers = attempt.get('answers') if isinstance(attempt.get('answers'), dict) else {}
+        answer_review = [{
+            'question': question.get('question', ''),
+            'type': question.get('type', 'MCQ'),
+            'options': question.get('options', []),
+            'student_answer': answers.get(str(index), ''),
+            'correct_answer': question.get('correct', ''),
+            'unanswered': not bool(str(answers.get(str(index), '')).strip()),
+            'is_correct': _answers_match(question.get('correct', ''), answers.get(str(index), ''), question.get('type', 'MCQ')),
+        } for index, question in enumerate(ordered_questions)]
+        student_events = [event for event in integrity_events if str(event.get('student_id')) == student_id]
+        reason = attempt.get('submission_reason') or 'normal'
+        if any(event.get('event_type') == 'automatic_submission' for event in student_events):
+            reason = 'integrity_violation'
+        elif attempt.get('status') == 'missed' and reason == 'normal':
+            reason = 'timeout_or_forfeit'
+        review_rows.append({
+            **attempt,
+            'student': students_by_id.get(student_id, {'id': student_id, 'name': 'Unknown student', 'email': ''}),
+            'submission_reason': reason,
+            'answers_available': bool(attempt.get('answers_recorded')),
+            'answer_review': answer_review,
+            'integrity_events': student_events,
+            'review_actions': [action for action in review_actions if action.get('attempt_id') == attempt.get('id')],
+        })
+    return {'quiz': quiz, 'attempts': review_rows}
+
+
+@router.post('/attempts/{attempt_id}/review-note', status_code=201)
+def add_attempt_review_note(attempt_id: int, payload: QuizReviewNoteRequest, claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+    ensure_supabase_enabled()
+    attempt_response = supabase.table('quiz_attempts').select('*').eq('id', attempt_id).limit(1).execute()
+    if supabase_failed(attempt_response) or not attempt_response.data:
+        raise HTTPException(status_code=404, detail='Attempt not found')
+    attempt = attempt_response.data[0]
+    quiz_response = supabase.table('quizzes').select('*').eq('id', attempt.get('quiz_id')).limit(1).execute()
+    if supabase_failed(quiz_response) or not quiz_response.data:
+        raise HTTPException(status_code=404, detail='Quiz not found')
+    _require_quiz_review_access(_normalize_quiz_row(quiz_response.data[0]), claims)
+    record = {
+        'attempt_id': attempt_id,
+        'quiz_id': attempt.get('quiz_id'),
+        'student_id': attempt.get('student_id'),
+        'action': 'note_added',
+        'note': payload.note.strip(),
+        'actor_id': claims.get('sub'),
+        'actor_email': claims.get('email'),
+        'created_at': datetime.now(timezone.utc).isoformat(),
+    }
+    response = _safe_insert('quiz_attempt_review_actions', record)
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase insert review note failed'))
+    return {'action': response.data[0] if response.data else record}
+
+
+@router.post('/attempts/{attempt_id}/grant-retry', status_code=201)
+def grant_attempt_retry(attempt_id: int, payload: QuizGrantRetryRequest, claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+    ensure_supabase_enabled()
+    attempt_response = supabase.table('quiz_attempts').select('*').eq('id', attempt_id).limit(1).execute()
+    if supabase_failed(attempt_response) or not attempt_response.data:
+        raise HTTPException(status_code=404, detail='Attempt not found')
+    attempt = attempt_response.data[0]
+    quiz_response = supabase.table('quizzes').select('*').eq('id', attempt.get('quiz_id')).limit(1).execute()
+    if supabase_failed(quiz_response) or not quiz_response.data:
+        raise HTTPException(status_code=404, detail='Quiz not found')
+    _require_quiz_review_access(_normalize_quiz_row(quiz_response.data[0]), claims)
+    if attempt.get('status') not in ('completed', 'missed'):
+        raise HTTPException(status_code=409, detail='Only a completed or missed attempt can be granted a retry')
+
+    update_response = _safe_update('quiz_attempts', {'status': 'retry_granted'}, 'id', [attempt_id])
+    if supabase_failed(update_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(update_response, 'Supabase grant retry failed'))
+    record = {
+        'attempt_id': attempt_id,
+        'quiz_id': attempt.get('quiz_id'),
+        'student_id': attempt.get('student_id'),
+        'action': 'retry_granted',
+        'note': payload.note.strip(),
+        'actor_id': claims.get('sub'),
+        'actor_email': claims.get('email'),
+        'created_at': datetime.now(timezone.utc).isoformat(),
+    }
+    action_response = _safe_insert('quiz_attempt_review_actions', record)
+    if supabase_failed(action_response):
+        # Do not leave an unaudited permission change behind.
+        _safe_update('quiz_attempts', {'status': attempt.get('status')}, 'id', [attempt_id])
+        raise HTTPException(status_code=502, detail=supabase_error_message(action_response, 'Supabase audit retry grant failed'))
+    try:
+        supabase.table('quiz_answer_drafts').delete().eq('quiz_id', attempt.get('quiz_id')).eq('student_id', attempt.get('student_id')).execute()
+    except Exception:
+        pass
+    return {'status': 'retry_granted', 'action': action_response.data[0] if action_response.data else record}
+
+
 @router.post('/{quiz_id}/submit')
 def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Depends(get_current_claims)) -> dict[str, Any]:
     _verify_acting_as_self(claims, payload.student_id)
@@ -1691,13 +1879,14 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
     if in_progress_attempt_id and time_limit_minutes:
         started_at = _parse_datetime(in_progress_attempts[0].get('attempted_at'))
         if started_at and (now - started_at).total_seconds() > time_limit_minutes * 60 + TIME_LIMIT_GRACE_SECONDS:
-            supabase.table('quiz_attempts').update({
+            _safe_update('quiz_attempts', {
                 'status': 'missed',
                 'score': 0,
                 'grade': 'F',
                 'passed': False,
+                'submission_reason': 'timeout',
                 'attempted_at': now.isoformat(),
-            }).eq('id', in_progress_attempt_id).execute()
+            }, 'id', [in_progress_attempt_id])
             raise HTTPException(status_code=403, detail='Time limit exceeded. Your attempt has been recorded as missed with a score of 0.')
 
     saved_answers = _load_answer_draft(quiz_id, payload.student_id)
@@ -1708,26 +1897,7 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
         raise HTTPException(status_code=502, detail=supabase_error_message(questions_response, 'Supabase get quiz questions failed'))
     raw_questions = questions_response.data or []
 
-    import hashlib
-    seed_key = f"{quiz_id}_{payload.student_id or 'random'}"
-    stable_seed = int(hashlib.md5(seed_key.encode()).hexdigest(), 16)
-    rng = random.Random(stable_seed)
-
-    questions = []
-    for q in raw_questions:
-        q_copy = dict(q)
-        # `type` lived only in-memory pre-persistence; the DB column is `question_type`.
-        # Normalize back to `type` here so grading (_answers_match) sees the real type
-        # instead of silently defaulting every question to MCQ-style exact matching.
-        q_copy['type'] = q_copy.get('question_type') or q_copy.get('type') or 'MCQ'
-        opts = q_copy.get('options')
-        if isinstance(opts, list) and len(opts) > 1:
-            opts_copy = list(opts)
-            rng.shuffle(opts_copy)
-            q_copy['options'] = opts_copy
-        questions.append(q_copy)
-
-    rng.shuffle(questions)
+    questions = _ordered_questions_for_student(raw_questions, quiz_id, payload.student_id)
     correct = 0
 
     # Built after grading (attempt is already locked in) so the post-submission review
@@ -1760,19 +1930,25 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
         'grade': grade,
         'passed': passed,
         'status': 'completed',
+        'answers': submitted_answers,
+        'answers_recorded': True,
+        'submission_reason': payload.submission_reason,
         'attempted_at': datetime.now(timezone.utc).isoformat(),
     }
 
     if in_progress_attempt_id:
         # Update the existing in-progress record to completed
-        update_resp = supabase.table('quiz_attempts').update({
+        update_resp = _safe_update('quiz_attempts', {
             'score': score,
             'out_of': total_questions,
             'grade': grade,
             'passed': passed,
             'status': 'completed',
+            'answers': submitted_answers,
+            'answers_recorded': True,
+            'submission_reason': payload.submission_reason,
             'attempted_at': datetime.now(timezone.utc).isoformat(),
-        }).eq('id', in_progress_attempt_id).execute()
+        }, 'id', [in_progress_attempt_id])
         if supabase_failed(update_resp):
             raise HTTPException(status_code=502, detail=supabase_error_message(update_resp, 'Supabase update quiz attempt failed'))
     else:
@@ -1818,13 +1994,14 @@ def forfeit_quiz(quiz_id: int, payload: QuizForfeitRequest, claims: dict | None 
         return {'status': 'no_active_attempt'}
 
     attempt = in_progress[0]
-    update_resp = supabase.table('quiz_attempts').update({
+    update_resp = _safe_update('quiz_attempts', {
         'status': 'missed',
         'score': 0,
         'grade': 'F',
         'passed': False,
+        'submission_reason': 'left_assessment',
         'attempted_at': datetime.now(timezone.utc).isoformat(),
-    }).eq('id', attempt['id']).execute()
+    }, 'id', [attempt['id']])
     if supabase_failed(update_resp):
         raise HTTPException(status_code=502, detail=supabase_error_message(update_resp, 'Supabase forfeit quiz attempt failed'))
 

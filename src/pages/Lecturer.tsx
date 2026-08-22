@@ -454,6 +454,13 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   // the archive grew. Defaults to Published since that's what a lecturer browses most.
   const [bankViewFilter, setBankViewFilter] = useState<'published' | 'pending'>('published')
   const [downloadingBankId, setDownloadingBankId] = useState<number | null>(null)
+  const [reviewQuizId, setReviewQuizId] = useState<number | null>(null)
+  const [attemptReviewData, setAttemptReviewData] = useState<{ quiz?: any; attempts: any[] }>({ attempts: [] })
+  const [loadingAttemptReviews, setLoadingAttemptReviews] = useState(false)
+  const [attemptReviewError, setAttemptReviewError] = useState('')
+  const [expandedAttemptId, setExpandedAttemptId] = useState<number | null>(null)
+  const [reviewNoteDrafts, setReviewNoteDrafts] = useState<Record<number, string>>({})
+  const [savingAttemptAction, setSavingAttemptAction] = useState<number | null>(null)
 
   const getActiveTier = () => activeReviewTier
 
@@ -793,6 +800,96 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
         setLoadingBankQuestionsId(null)
       }
     }
+  }
+
+  const loadAttemptReviews = useCallback(async (quizId: number) => {
+    setLoadingAttemptReviews(true)
+    setAttemptReviewError('')
+    try {
+      const response = await fetch(`${API_BASE}/api/quizzes/${quizId}/attempt-reviews`)
+      if (!response.ok) throw new Error(extractErrorMessage(await response.json().catch(() => ({})), 'Failed to load assessment reviews'))
+      setAttemptReviewData(await response.json())
+    } catch (error) {
+      setAttemptReviewError(error instanceof Error ? error.message : 'Failed to load assessment reviews')
+      setAttemptReviewData({ attempts: [] })
+    } finally {
+      setLoadingAttemptReviews(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (tab === 'quizreview' && reviewQuizId !== null) loadAttemptReviews(reviewQuizId)
+  }, [tab, reviewQuizId, loadAttemptReviews])
+
+  const saveAttemptNote = async (attemptId: number) => {
+    const note = (reviewNoteDrafts[attemptId] || '').trim()
+    if (!note) return
+    setSavingAttemptAction(attemptId)
+    try {
+      const response = await fetch(`${API_BASE}/api/quizzes/attempts/${attemptId}/review-note`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ note }),
+      })
+      if (!response.ok) throw new Error(extractErrorMessage(await response.json().catch(() => ({})), 'Failed to save review note'))
+      setReviewNoteDrafts(previous => ({ ...previous, [attemptId]: '' }))
+      if (reviewQuizId !== null) await loadAttemptReviews(reviewQuizId)
+    } catch (error) {
+      setAttemptReviewError(error instanceof Error ? error.message : 'Failed to save review note')
+    } finally {
+      setSavingAttemptAction(null)
+    }
+  }
+
+  const grantAttemptRetry = async (attempt: any) => {
+    const defaultReason = (reviewNoteDrafts[attempt.id] || '').trim()
+    const reason = window.prompt(
+      `Grant ${attempt.student?.name || 'this student'} another attempt? Enter the technical or administrative reason.`,
+      defaultReason,
+    )?.trim()
+    if (!reason) return
+    if (!window.confirm('This action will reopen the quiz for this student and will be permanently recorded. Continue?')) return
+    setSavingAttemptAction(attempt.id)
+    try {
+      const response = await fetch(`${API_BASE}/api/quizzes/attempts/${attempt.id}/grant-retry`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ note: reason }),
+      })
+      if (!response.ok) throw new Error(extractErrorMessage(await response.json().catch(() => ({})), 'Failed to grant another attempt'))
+      if (reviewQuizId !== null) await loadAttemptReviews(reviewQuizId)
+    } catch (error) {
+      setAttemptReviewError(error instanceof Error ? error.message : 'Failed to grant another attempt')
+    } finally {
+      setSavingAttemptAction(null)
+    }
+  }
+
+  const exportAttemptReviewsCsv = () => {
+    const attempts = attemptReviewData.attempts || []
+    if (!attempts.length) return
+    const escapeCsv = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`
+    const headers = ['Student', 'Email', 'Score', 'Out Of', 'Grade', 'Status', 'Submission Reason', 'Violation Count', 'Attempted At', 'Review Notes']
+    const rows = attempts.map(attempt => [
+      escapeCsv(attempt.student?.name),
+      escapeCsv(attempt.student?.email),
+      attempt.score ?? 0,
+      attempt.out_of ?? 0,
+      escapeCsv(attempt.grade),
+      escapeCsv(attempt.status),
+      escapeCsv(attempt.submission_reason),
+      (attempt.integrity_events || []).filter((event: any) => Number(event.violation_number) > 0).length,
+      escapeCsv(attempt.attempted_at),
+      escapeCsv((attempt.review_actions || []).map((action: any) => `${action.action}: ${action.note}`).join(' | ')),
+    ])
+    const csv = [headers.join(','), ...rows.map(row => row.join(','))].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${attemptReviewData.quiz?.title || 'Assessment'}_Reviews_${new Date().toISOString().slice(0, 10)}.csv`.replace(/[^a-z0-9_.-]+/gi, '_')
+    link.click()
+    URL.revokeObjectURL(url)
   }
 
   const handleDownloadQuestionBank = async (quiz: any) => {
@@ -2671,6 +2768,146 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
           {/* ── QUESTION BANKS ARCHIVE ── */}
           {tab === 'quizreview' && (
             <div className="space-y-6">
+              <div className="bg-card border border-border rounded-2xl p-5 sm:p-6 space-y-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="font-display text-lg font-bold text-foreground">Assessment Attempt Reviews</h3>
+                    <p className="text-xs text-muted-foreground mt-1">Review student answers, submission reasons, integrity events, notes, and authorized retries.</p>
+                  </div>
+                  <button
+                    onClick={exportAttemptReviewsCsv}
+                    disabled={!attemptReviewData.attempts.length}
+                    className="inline-flex items-center gap-2 bg-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl hover:bg-blue-950 disabled:opacity-40"
+                  >
+                    <i className="fa-solid fa-file-csv" /> Export Reviews
+                  </button>
+                </div>
+
+                <select
+                  value={reviewQuizId ?? ''}
+                  onChange={event => setReviewQuizId(event.target.value ? Number(event.target.value) : null)}
+                  className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  <option value="">Select a published quiz to review</option>
+                  {questionBankQuizzes.filter(quiz => quiz.status !== 'draft').map(quiz => (
+                    <option key={quiz.id} value={quiz.id}>{quiz.course} — {quiz.title}</option>
+                  ))}
+                </select>
+
+                {attemptReviewError && (
+                  <div className="bg-danger/10 border border-danger/25 rounded-xl px-4 py-3 text-sm text-danger">
+                    <i className="fa-solid fa-triangle-exclamation mr-2" />{attemptReviewError}
+                  </div>
+                )}
+                {loadingAttemptReviews ? (
+                  <div className="py-8 text-center text-sm text-muted-foreground"><i className="fa-solid fa-spinner fa-spin mr-2" />Loading attempts...</div>
+                ) : reviewQuizId !== null && !attemptReviewData.attempts.length ? (
+                  <div className="py-8 text-center text-sm text-muted-foreground">No student attempts have been recorded for this quiz.</div>
+                ) : (
+                  <div className="space-y-3">
+                    {attemptReviewData.attempts.map((attempt: any) => {
+                      const isExpanded = expandedAttemptId === attempt.id
+                      const violations = (attempt.integrity_events || []).filter((event: any) => Number(event.violation_number) > 0)
+                      const reasonLabels: Record<string, string> = {
+                        normal: 'Normal submission',
+                        timeout: 'Time limit exceeded',
+                        left_assessment: 'Assessment exited',
+                        integrity_violation: 'Automatic integrity submission',
+                        timeout_or_forfeit: 'Timeout or forfeiture (legacy)',
+                        in_progress: 'In progress',
+                      }
+                      return (
+                        <div key={attempt.id} className="border border-border rounded-2xl overflow-hidden">
+                          <button
+                            onClick={() => setExpandedAttemptId(isExpanded ? null : attempt.id)}
+                            className="w-full p-4 text-left flex flex-wrap items-center justify-between gap-3 hover:bg-muted/30"
+                          >
+                            <div>
+                              <p className="font-semibold text-sm text-foreground">{attempt.student?.name || 'Unknown student'}</p>
+                              <p className="text-xs text-muted-foreground">{attempt.student?.email || attempt.student_id}</p>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
+                              <span className={`font-bold px-2.5 py-1 rounded-full ${attempt.passed ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>{attempt.score ?? 0}% · {attempt.grade || 'F'}</span>
+                              <span className="bg-muted px-2.5 py-1 rounded-full text-muted-foreground">{reasonLabels[attempt.submission_reason] || attempt.submission_reason}</span>
+                              <span className={`px-2.5 py-1 rounded-full ${violations.length ? 'bg-amber-500/10 text-amber-700' : 'bg-success/10 text-success'}`}>{violations.length} violation{violations.length === 1 ? '' : 's'}</span>
+                              <i className={`fa-solid fa-chevron-${isExpanded ? 'up' : 'down'} text-muted-foreground`} />
+                            </div>
+                          </button>
+
+                          {isExpanded && (
+                            <div className="border-t border-border bg-muted/15 p-4 sm:p-5 space-y-5">
+                              <div className="grid lg:grid-cols-2 gap-5">
+                                <div className="space-y-3">
+                                  <h4 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Submitted Answers</h4>
+                                  {attempt.answers_available ? attempt.answer_review.map((answer: any, index: number) => (
+                                    <div key={index} className="bg-card border border-border rounded-xl p-3 text-xs space-y-1">
+                                      <p className="font-semibold text-foreground">{index + 1}. {answer.question}</p>
+                                      <p className={answer.unanswered ? 'text-danger' : answer.is_correct ? 'text-success' : 'text-danger'}>
+                                        Student: {answer.unanswered ? 'Unanswered' : answer.student_answer}
+                                      </p>
+                                      <p className="text-success">Correct: {answer.correct_answer}</p>
+                                    </div>
+                                  )) : <p className="text-xs text-muted-foreground">Answer details are unavailable for this legacy attempt.</p>}
+                                </div>
+
+                                <div className="space-y-3">
+                                  <h4 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Integrity Timeline</h4>
+                                  {(attempt.integrity_events || []).length ? attempt.integrity_events.map((event: any) => {
+                                    const eventLabels: Record<string, string> = {
+                                      assessment_started: 'Assessment started',
+                                      tab_hidden: 'Tab switched or window minimized',
+                                      fullscreen_exit: 'Fullscreen exited',
+                                      assessment_resumed: 'Assessment resumed',
+                                      automatic_submission: 'Automatic submission',
+                                    }
+                                    return (
+                                      <div key={event.id} className="flex gap-3 text-xs">
+                                        <span className="font-mono text-muted-foreground whitespace-nowrap">{new Date(event.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                                        <span className="text-foreground">{eventLabels[event.event_type] || event.event_type}{event.violation_number ? ` (${event.violation_number}/3)` : ''}</span>
+                                      </div>
+                                    )
+                                  }) : <p className="text-xs text-muted-foreground">No integrity events recorded.</p>}
+                                </div>
+                              </div>
+
+                              <div className="space-y-2">
+                                <h4 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Review Audit</h4>
+                                {(attempt.review_actions || []).map((action: any) => (
+                                  <div key={action.id} className="text-xs bg-card border border-border rounded-xl p-3">
+                                    <span className="font-semibold">{action.action === 'retry_granted' ? 'Retry granted' : 'Note'}</span>
+                                    <span className="text-muted-foreground"> by {action.actor_email || 'lecturer'} on {new Date(action.created_at).toLocaleString()}</span>
+                                    <p className="mt-1 text-foreground">{action.note}</p>
+                                  </div>
+                                ))}
+                                <textarea
+                                  value={reviewNoteDrafts[attempt.id] || ''}
+                                  onChange={event => setReviewNoteDrafts(previous => ({ ...previous, [attempt.id]: event.target.value }))}
+                                  rows={3}
+                                  placeholder="Add a review note..."
+                                  className="w-full bg-card border border-border rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                />
+                                <div className="flex flex-wrap gap-2">
+                                  <button
+                                    onClick={() => saveAttemptNote(attempt.id)}
+                                    disabled={savingAttemptAction === attempt.id || !(reviewNoteDrafts[attempt.id] || '').trim()}
+                                    className="bg-primary text-white text-xs font-semibold px-4 py-2 rounded-lg disabled:opacity-40"
+                                  >Save Note</button>
+                                  <button
+                                    onClick={() => grantAttemptRetry(attempt)}
+                                    disabled={savingAttemptAction === attempt.id || !['completed', 'missed'].includes(attempt.status)}
+                                    className="bg-amber-500/15 text-amber-800 border border-amber-500/30 text-xs font-semibold px-4 py-2 rounded-lg disabled:opacity-40"
+                                  ><i className="fa-solid fa-rotate-right mr-1.5" />Grant Another Attempt</button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
               <div className="bg-card border border-border rounded-2xl p-5 sm:p-6 space-y-4">
                 <div>
                   <h3 className="font-display text-lg font-bold text-foreground">Question Banks</h3>

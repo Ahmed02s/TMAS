@@ -9,6 +9,7 @@ from app.routers.quizzes import (
     _materials_match_course,
     _merge_submission_answers,
     _normalize_single_question_type,
+    _ordered_questions_for_student,
     _question_type_seconds,
 )
 
@@ -18,6 +19,18 @@ def test_submission_answers_recover_server_draft_without_overriding_final_client
         {'0': 'saved zero', '1': 'old answer'},
         {'1': 'final answer', '2': 'new answer'},
     ) == {'0': 'saved zero', '1': 'final answer', '2': 'new answer'}
+
+
+def test_attempt_review_reconstructs_same_stable_question_order():
+    questions = [
+        {'id': 1, 'question': 'One', 'options': ['A', 'B', 'C'], 'question_type': 'MCQ'},
+        {'id': 2, 'question': 'Two', 'options': ['True', 'False'], 'question_type': 'True/False'},
+        {'id': 3, 'question': 'Three', 'options': [], 'question_type': 'Short Answer'},
+    ]
+    first = _ordered_questions_for_student(questions, 10, 'student-1')
+    second = _ordered_questions_for_student(questions, 10, 'student-1')
+    assert first == second
+    assert all(question['type'] in {'MCQ', 'True/False', 'Short Answer'} for question in first)
 
 
 def test_generated_quiz_title_uses_single_material_name():
