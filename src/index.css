@@ -37,6 +37,39 @@ body {
 
 html { scroll-behavior: smooth; }
 
+.quiz-secure-surface,
+.quiz-secure-surface :not(input):not(textarea) {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.quiz-secure-surface input,
+.quiz-secure-surface textarea,
+.quiz-secure-surface [contenteditable='true'] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+@media print {
+  .quiz-secure-surface * {
+    visibility: hidden !important;
+  }
+
+  .quiz-secure-surface::after {
+    content: 'Printing assessment content is disabled.';
+    visibility: visible;
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: 600 18px system-ui, sans-serif;
+    color: #111827;
+    background: white;
+  }
+}
+
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 99px; }

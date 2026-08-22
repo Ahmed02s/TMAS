@@ -5,10 +5,26 @@ from app.routers.quizzes import (
     _answers_match,
     _compute_time_limit_minutes,
     _grade_from_score,
+    _generated_quiz_title,
     _materials_match_course,
     _normalize_single_question_type,
     _question_type_seconds,
 )
+
+
+def test_generated_quiz_title_uses_single_material_name():
+    title = _generated_quiz_title('Foundational', [{'name': 'Database Concepts.pdf'}], 'CS 401')
+    assert title == 'Foundation Quiz: Database Concepts'
+    assert 'AI Generated' not in title
+
+
+def test_generated_quiz_title_uses_course_materials_for_multiple_sources():
+    title = _generated_quiz_title(
+        'Mastery',
+        [{'name': 'Week One.pdf'}, {'name': 'Week Two.pdf'}],
+        'CS 401',
+    )
+    assert title == 'Mastery Quiz: Combined Course Materials'
 
 
 def test_materials_match_course_accepts_equivalent_course_formatting():

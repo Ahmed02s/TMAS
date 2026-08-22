@@ -1043,6 +1043,23 @@ def _normalize_question_types(question_types: list[str]) -> list[str]:
     return normalized or ['MCQ', 'True/False', 'Fill in the Blank']
 
 
+def _generated_quiz_title(tier: str, materials: list[dict[str, Any]], course: str) -> str:
+    """Name generated quizzes after their learning material, not the generation method."""
+    material_names = [
+        _clean_material_title(str(material.get('name') or '')).strip()
+        for material in materials
+        if str(material.get('name') or '').strip()
+    ]
+    if len(material_names) == 1:
+        subject = material_names[0]
+    elif material_names:
+        subject = 'Combined Course Materials'
+    else:
+        subject = course
+    tier_label = 'Foundation' if _normalize_tier(tier) == 'Foundational' else _normalize_tier(tier)
+    return f'{tier_label} Quiz: {subject}'
+
+
 @router.post('/generate')
 def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
     ensure_supabase_enabled()
@@ -1111,7 +1128,7 @@ def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_
             tier_open = open_dt + offset * base_window
             tier_close = tier_open + base_window
             return {
-                'title': f"AI Generated {tier} Quiz for {effective_course}",
+                'title': _generated_quiz_title(tier, materials, effective_course),
                 'course': effective_course,
                 'questions': len(questions),
                 'time_limit': _compute_time_limit_minutes(questions),
@@ -1208,7 +1225,7 @@ def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_
 
         return {
             'quiz': {
-                'title': f"AI Generated {normalized_tier} Quiz for {effective_course}",
+                'title': _generated_quiz_title(normalized_tier, materials, effective_course),
                 'course': effective_course,
                 'questions': len(questions),
                 'time_limit': _compute_time_limit_minutes(questions),
@@ -1265,7 +1282,8 @@ def publish_quiz(payload: PublishQuizRequest, _claims: dict = Depends(require_ro
 
             normalized_tier = _normalize_tier(q.get('tier') or payload.tier)
             derived_course = q.get('course') or payload.course
-            derived_title = q.get('title') or payload.title or f"AI Generated {normalized_tier} Quiz for {derived_course}"
+            fallback_tier = 'Foundation' if normalized_tier == 'Foundational' else normalized_tier
+            derived_title = q.get('title') or payload.title or f"{fallback_tier} Quiz: Course Materials"
 
             quiz_record = {
                 'title': derived_title,
@@ -1361,7 +1379,8 @@ def publish_quiz(payload: PublishQuizRequest, _claims: dict = Depends(require_ro
 
     # Derive title when not provided to reflect the publishing course
     derived_course = payload.course
-    derived_title = payload.title or f"AI Generated {normalized_tier} Quiz for {derived_course}"
+    fallback_tier = 'Foundation' if normalized_tier == 'Foundational' else normalized_tier
+    derived_title = payload.title or f"{fallback_tier} Quiz: Course Materials"
 
     quiz_record = {
         'title': derived_title,

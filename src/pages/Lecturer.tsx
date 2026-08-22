@@ -1061,6 +1061,10 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
     setPublishing(true)
 
     try {
+      const selectedMaterial = selectedMaterialId
+        ? filteredMaterialsForCourse.find(material => String(material.id) === selectedMaterialId)
+        : filteredMaterialsForCourse.length === 1 ? filteredMaterialsForCourse[0] : null
+      const quizSubject = selectedMaterial?.name?.replace(/\.[^.]+$/, '') || 'Combined Course Materials'
       const quizzesToPublish = (['Foundational', 'Intermediate', 'Mastery'] as const).map(tier => {
         const config = tierScheduleConfigs[tier]
         const approvedIds = new Set(approvedByTier[tier] || [])
@@ -1071,7 +1075,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
 
         return {
           id: draftQuizIds[tier],
-          title: `AI Generated ${tier} Quiz for ${genCourse}`,
+          title: `${tier === 'Foundational' ? 'Foundation' : tier} Quiz: ${quizSubject}`,
           course: genCourse,
           tier: tier,
           questions: questions.map((q: any) => ({

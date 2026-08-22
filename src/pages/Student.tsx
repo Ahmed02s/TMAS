@@ -227,7 +227,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       return 'overview'
     }
   })
-  const [savedUser, setSavedUser] = useState<{ id?: string; name?: string; level?: string; program?: string } | null>(null)
+  const [savedUser, setSavedUser] = useState<{ id?: string; name?: string; email?: string; level?: string; program?: string } | null>(null)
   const [studentProfile, setStudentProfile] = useState({ level: '', program: '' })
   const [courses, setCourses] = useState<Course[]>([])
   const [availableQuizzes, setAvailableQuizzes] = useState<Quiz[]>([])
@@ -274,7 +274,12 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   const [quizExpiresAt, setQuizExpiresAt] = useState<number | null>(null)
   const [quizTimedOut, setQuizTimedOut] = useState(false)
   const [quizForfeited, setQuizForfeited] = useState(false)
+  const [assessmentPaused, setAssessmentPaused] = useState(false)
+  const [focusViolations, setFocusViolations] = useState(0)
+  const [focusViolationMessage, setFocusViolationMessage] = useState('')
   const quizAnswersRef = useRef<Record<number, string>>({})
+  const fullscreenRequiredRef = useRef(false)
+  const lastFocusViolationAtRef = useRef(0)
 
   // Anti-cheating: each question gets its own fixed answering window (see
   // src/utils/questionTiming.ts) on top of the overall quiz clock, so a student can't sit
@@ -534,6 +539,10 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       setError('')
       setQuizTimedOut(false)
       setQuizForfeited(false)
+      setAssessmentPaused(false)
+      setFocusViolations(0)
+      setFocusViolationMessage('')
+      lastFocusViolationAtRef.current = 0
 
       try {
         const studentId = savedUser?.id || ''
@@ -618,6 +627,39 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
 
   const selectedQuiz = activeQuiz !== null ? visibleQuizzes.find(q => q.id === activeQuiz) : undefined
 
+  const beginAssessment = async (quizId: number) => {
+    setCurrentQ(0)
+    setQuizAnswers({})
+    setAssessmentPaused(false)
+    setFocusViolations(0)
+    setFocusViolationMessage('')
+    fullscreenRequiredRef.current = false
+    try {
+      if (document.fullscreenEnabled && !document.fullscreenElement) {
+        await document.documentElement.requestFullscreen()
+        fullscreenRequiredRef.current = true
+      } else if (document.fullscreenElement) {
+        fullscreenRequiredRef.current = true
+      }
+    } catch {
+      // Some embedded/mobile browsers deny native fullscreen. Visibility monitoring still
+      // protects the attempt, and the assessment remains usable rather than failing to open.
+    }
+    setActiveQuiz(quizId)
+  }
+
+  const resumeAssessment = async () => {
+    if (fullscreenRequiredRef.current && !document.fullscreenElement) {
+      try {
+        await document.documentElement.requestFullscreen()
+      } catch {
+        setFocusViolationMessage('Fullscreen is required to continue this assessment. Allow fullscreen and try again.')
+        return
+      }
+    }
+    setAssessmentPaused(false)
+  }
+
   const handleSubmitQuiz = async () => {
     if (activeQuiz === null || quizSubmitted || isAutoSubmittingRef.current) return
     setQuizLoading(true)
@@ -698,10 +740,9 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     }
   }
 
-  // Leaving the assessment screen (switching tabs/apps, closing the window) is how a
-  // student could copy questions out to a third-party solver, so it immediately forfeits
-  // the attempt with a score of 0 rather than leaving it open to resume. Uses sendBeacon
-  // so the request has the best chance of completing even as the tab is backgrounded/closing.
+  // Deliberately closing/leaving the assessment still forfeits it. Ordinary tab switches,
+  // minimization and fullscreen exits are handled separately below with a three-strike
+  // policy that submits whatever answers have already been saved on the third violation.
   const forfeitQuizForLeaving = useCallback(() => {
     if (activeQuiz === null || quizSubmitted || isAutoSubmittingRef.current) return
     isAutoSubmittingRef.current = true
@@ -741,7 +782,12 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     if (activeQuiz === null || quizSubmitted) return
 
     function handleVisibilityChange() {
-      if (document.hidden) forfeitQuizForLeaving()
+      if (!document.hidden) return
+      recordFocusViolation('You switched tabs or minimized the assessment window.')
+    }
+    function handleFullscreenChange() {
+      if (!fullscreenRequiredRef.current || document.fullscreenElement) return
+      recordFocusViolation('You exited fullscreen mode during the assessment.')
     }
     function handleBeforeUnload(e: BeforeUnloadEvent) {
       forfeitQuizForLeaving()
@@ -749,13 +795,72 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       e.returnValue = ''
     }
 
+    function recordFocusViolation(message: string) {
+      if (isAutoSubmittingRef.current) return
+      const now = Date.now()
+      // A single app switch can fire visibilitychange and fullscreenchange together.
+      if (now - lastFocusViolationAtRef.current < 750) return
+      lastFocusViolationAtRef.current = now
+      setAssessmentPaused(true)
+      setFocusViolationMessage(message)
+      setFocusViolations(previous => {
+        const next = previous + 1
+        if (next >= 3) {
+          setFocusViolationMessage('Third assessment-integrity violation detected. Submitting your saved answers now.')
+          window.setTimeout(() => handleSubmitQuiz(), 0)
+        }
+        return next
+      })
+    }
+
     document.addEventListener('visibilitychange', handleVisibilityChange)
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
     window.addEventListener('beforeunload', handleBeforeUnload)
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
+      document.removeEventListener('fullscreenchange', handleFullscreenChange)
       window.removeEventListener('beforeunload', handleBeforeUnload)
     }
-  }, [activeQuiz, quizSubmitted, forfeitQuizForLeaving])
+  }, [activeQuiz, quizSubmitted, forfeitQuizForLeaving, handleSubmitQuiz])
+
+  useEffect(() => {
+    if (!quizSubmitted || !document.fullscreenElement) return
+    document.exitFullscreen().catch(() => {})
+  }, [quizSubmitted])
+
+  useEffect(() => {
+    if (activeQuiz === null || quizSubmitted) return
+
+    const isEditableTarget = (target: EventTarget | null) => {
+      const element = target instanceof HTMLElement ? target : null
+      return Boolean(element?.closest('input, textarea, [contenteditable="true"]'))
+    }
+    const blockProtectedContentAction = (event: Event) => {
+      if (!isEditableTarget(event.target)) event.preventDefault()
+    }
+    const blockProtectedShortcut = (event: KeyboardEvent) => {
+      if (isEditableTarget(event.target)) return
+      const key = event.key.toLowerCase()
+      if ((event.ctrlKey || event.metaKey) && ['a', 'c', 'x', 'p', 's'].includes(key)) {
+        event.preventDefault()
+      }
+    }
+
+    document.addEventListener('copy', blockProtectedContentAction)
+    document.addEventListener('cut', blockProtectedContentAction)
+    document.addEventListener('contextmenu', blockProtectedContentAction)
+    document.addEventListener('dragstart', blockProtectedContentAction)
+    document.addEventListener('selectstart', blockProtectedContentAction)
+    document.addEventListener('keydown', blockProtectedShortcut)
+    return () => {
+      document.removeEventListener('copy', blockProtectedContentAction)
+      document.removeEventListener('cut', blockProtectedContentAction)
+      document.removeEventListener('contextmenu', blockProtectedContentAction)
+      document.removeEventListener('dragstart', blockProtectedContentAction)
+      document.removeEventListener('selectstart', blockProtectedContentAction)
+      document.removeEventListener('keydown', blockProtectedShortcut)
+    }
+  }, [activeQuiz, quizSubmitted])
 
   // Fallback for the rare case the server didn't return an authoritative expiry
   // (e.g. an untimed quiz, or an older in-progress attempt): fall back to a plain countdown.
@@ -908,7 +1013,16 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     const questionLocked = questionTimeLeft !== null && questionTimeLeft <= 0
 
     return (
-      <div className="min-h-screen bg-background font-sans flex flex-col">
+      <div className="quiz-secure-surface min-h-screen bg-background font-sans flex flex-col">
+        <div className="pointer-events-none fixed inset-0 z-[60] overflow-hidden select-none" aria-hidden="true">
+          <div className="grid h-[140%] w-[140%] -translate-x-[10%] -translate-y-[10%] rotate-[-24deg] grid-cols-3 content-around gap-16 opacity-[0.065]">
+            {Array.from({ length: 18 }, (_, index) => (
+              <span key={index} className="whitespace-nowrap text-center text-sm font-bold tracking-wider text-slate-700">
+                {savedUser?.name || 'TMAS Student'} · {savedUser?.email || savedUser?.id || 'Assessment'}
+              </span>
+            ))}
+          </div>
+        </div>
         <div className="bg-primary text-primary-foreground px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center">
@@ -939,7 +1053,8 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
 
         <div className="bg-danger/10 border-b border-danger/20 text-danger text-xs font-semibold px-6 py-2 flex items-center gap-2">
           <i className="fa-solid fa-triangle-exclamation" />
-          Do not switch tabs, minimize, or leave this screen — doing so immediately forfeits this attempt with a score of 0.
+          Assessment focus monitoring is active. Fullscreen is enforced when supported; violation 3 submits your saved answers.
+          {focusViolations > 0 && <span className="ml-auto whitespace-nowrap">Violations: {focusViolations}/3</span>}
         </div>
 
         <div className="flex-1 flex items-center justify-center p-8">
@@ -1038,6 +1153,31 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
             </div>
           </div>
         </div>
+
+        {assessmentPaused && !quizSubmitted && (
+          <div className="fixed inset-0 z-[100] bg-slate-950/95 backdrop-blur-2xl flex items-center justify-center p-6">
+            <div className="w-full max-w-md rounded-2xl border border-white/15 bg-slate-900 p-8 text-center text-white shadow-2xl">
+              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-amber-500/15 text-amber-400">
+                <i className="fa-solid fa-shield-halved text-2xl" />
+              </div>
+              <h2 className="text-xl font-bold mb-2">Assessment Paused</h2>
+              <p className="text-sm text-slate-300 mb-4">{focusViolationMessage}</p>
+              <p className="text-sm font-semibold text-amber-300 mb-6">Integrity violation {focusViolations} of 3</p>
+              {focusViolations < 3 ? (
+                <button
+                  onClick={resumeAssessment}
+                  className="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700"
+                >
+                  <i className="fa-solid fa-expand mr-2" /> {fullscreenRequiredRef.current ? 'Return to Fullscreen and Continue' : 'Return to Assessment'}
+                </button>
+              ) : (
+                <div className="flex items-center justify-center gap-2 text-sm text-slate-300">
+                  <i className="fa-solid fa-spinner fa-spin" /> Submitting answered questions...
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -1133,7 +1273,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
               </div>
             )}
 
-            <button onClick={() => { setActiveQuiz(null); setQuizSubmitted(false); setQuizTimedOut(false); setQuizForfeited(false); setCurrentQ(0); setQuizAnswers({}); setFlippedFlashcards({}) }} className="w-full mt-6 bg-primary hover:bg-blue-950 text-white font-semibold py-3.5 rounded-xl transition-colors">
+            <button onClick={() => { setActiveQuiz(null); setQuizSubmitted(false); setQuizTimedOut(false); setQuizForfeited(false); setAssessmentPaused(false); setFocusViolations(0); setFocusViolationMessage(''); setCurrentQ(0); setQuizAnswers({}); setFlippedFlashcards({}) }} className="w-full mt-6 bg-primary hover:bg-blue-950 text-white font-semibold py-3.5 rounded-xl transition-colors">
               Back to Dashboard
             </button>
           </div>
@@ -1413,7 +1553,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                             )}
                           </div>
                           <button
-                            onClick={() => isAvailable && setActiveQuiz(q.id)}
+                            onClick={() => isAvailable && beginAssessment(q.id)}
                             disabled={!isAvailable && !isOverdue}
                             className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap ${isOverdue ? 'bg-danger/10 text-danger hover:bg-danger/20' : isAvailable ? 'bg-primary/10 text-primary hover:bg-primary/20' : 'bg-muted text-muted-foreground cursor-not-allowed'}`}
                           >
@@ -1791,7 +1931,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                                             </button>
                                           ) : (
                                             <button
-                                              onClick={() => { setActiveQuiz(q.id); setCurrentQ(0); setQuizAnswers({}) }}
+                                              onClick={() => beginAssessment(q.id)}
                                               className="w-full sm:w-auto font-bold px-6 py-3 rounded-xl text-xs bg-primary hover:bg-blue-950 text-white transition-all flex items-center justify-center gap-2 shadow-md"
                                             >
                                               <span>Start Assessment</span>
