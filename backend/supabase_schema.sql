@@ -136,6 +136,28 @@ CREATE TABLE IF NOT EXISTS quiz_attempts (
   attempted_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- One recoverable answer snapshot per student/quiz. The backend merges this snapshot with
+-- the final submission, so a temporary browser/network failure cannot erase saved work.
+CREATE TABLE IF NOT EXISTS quiz_answer_drafts (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  quiz_id BIGINT NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+  student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  answers JSONB NOT NULL DEFAULT '{}',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (quiz_id, student_id)
+);
+
+-- Immutable assessment-integrity audit trail for lecturer review.
+CREATE TABLE IF NOT EXISTS quiz_integrity_events (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  quiz_id BIGINT NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+  student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL,
+  violation_number INTEGER NOT NULL DEFAULT 0,
+  details JSONB NOT NULL DEFAULT '{}',
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- NOTE: the actual deployed table (created before this file existed) has NEVER had
 -- scroll_percent/time_spent_seconds/completed — its real columns are id, student_id,
 -- material_id, course, material_name, read_at, read_count. The ALTER statements below were
@@ -188,6 +210,8 @@ CREATE INDEX IF NOT EXISTS idx_courses_level_program ON courses(level, program);
 CREATE INDEX IF NOT EXISTS idx_materials_course ON materials(course);
 CREATE INDEX IF NOT EXISTS idx_quizzes_status ON quizzes(status);
 CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz_id ON quiz_questions(quiz_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_answer_drafts_student ON quiz_answer_drafts(student_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_integrity_events_attempt ON quiz_integrity_events(quiz_id, student_id, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_material_reads_student ON material_reads(student_id);
 CREATE INDEX IF NOT EXISTS idx_material_reads_material ON material_reads(material_id);
 CREATE INDEX IF NOT EXISTS idx_material_page_reads_student_material ON material_page_reads(student_id, material_id);

@@ -277,6 +277,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   const [assessmentPaused, setAssessmentPaused] = useState(false)
   const [focusViolations, setFocusViolations] = useState(0)
   const [focusViolationMessage, setFocusViolationMessage] = useState('')
+  const [answerSaveStatus, setAnswerSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'offline'>('idle')
   const quizAnswersRef = useRef<Record<number, string>>({})
   const fullscreenRequiredRef = useRef(false)
   const lastFocusViolationAtRef = useRef(0)
@@ -559,6 +560,20 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
           throw new Error(extractErrorMessage(startErr, 'You have already used your attempt for this quiz.'))
         }
         const startData = await startRes.json().catch(() => ({}))
+        const restoredAnswers = startData?.saved_answers && typeof startData.saved_answers === 'object'
+          ? startData.saved_answers as Record<number, string>
+          : {}
+
+        fetch(`${API_BASE}/api/quizzes/${activeQuiz}/integrity-events`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            student_id: studentId,
+            event_type: 'assessment_started',
+            violation_number: 0,
+            details: { resumed: Boolean(startData?.already_started) },
+          }),
+        }).catch(() => {})
 
         // The server is the source of truth for when this attempt expires (start time +
         // time limit), so the countdown survives refreshes instead of resetting to the
@@ -587,7 +602,8 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
           : []
 
         setQuizQuestions(safeQuestions)
-        setQuizAnswers({})
+        setQuizAnswers(restoredAnswers)
+        setAnswerSaveStatus(Object.keys(restoredAnswers).length ? 'saved' : 'idle')
         setQuizReview([])
         setCurrentQ(0)
         setQuestionDeadlines({})
@@ -627,12 +643,27 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
 
   const selectedQuiz = activeQuiz !== null ? visibleQuizzes.find(q => q.id === activeQuiz) : undefined
 
+  const postIntegrityEvent = (eventType: string, violationNumber: number, details: Record<string, unknown> = {}) => {
+    if (activeQuiz === null || !savedUser?.id) return
+    fetch(`${API_BASE}/api/quizzes/${activeQuiz}/integrity-events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        student_id: savedUser.id,
+        event_type: eventType,
+        violation_number: violationNumber,
+        details,
+      }),
+    }).catch(() => {})
+  }
+
   const beginAssessment = async (quizId: number) => {
     setCurrentQ(0)
     setQuizAnswers({})
     setAssessmentPaused(false)
     setFocusViolations(0)
     setFocusViolationMessage('')
+    setAnswerSaveStatus('idle')
     fullscreenRequiredRef.current = false
     try {
       if (document.fullscreenEnabled && !document.fullscreenElement) {
@@ -658,6 +689,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       }
     }
     setAssessmentPaused(false)
+    postIntegrityEvent('assessment_resumed', focusViolations)
   }
 
   const handleSubmitQuiz = async () => {
@@ -783,11 +815,11 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
 
     function handleVisibilityChange() {
       if (!document.hidden) return
-      recordFocusViolation('You switched tabs or minimized the assessment window.')
+      recordFocusViolation('You switched tabs or minimized the assessment window.', 'tab_hidden')
     }
     function handleFullscreenChange() {
       if (!fullscreenRequiredRef.current || document.fullscreenElement) return
-      recordFocusViolation('You exited fullscreen mode during the assessment.')
+      recordFocusViolation('You exited fullscreen mode during the assessment.', 'fullscreen_exit')
     }
     function handleBeforeUnload(e: BeforeUnloadEvent) {
       forfeitQuizForLeaving()
@@ -795,7 +827,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       e.returnValue = ''
     }
 
-    function recordFocusViolation(message: string) {
+    function recordFocusViolation(message: string, eventType: 'tab_hidden' | 'fullscreen_exit') {
       if (isAutoSubmittingRef.current) return
       const now = Date.now()
       // A single app switch can fire visibilitychange and fullscreenchange together.
@@ -805,8 +837,10 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       setFocusViolationMessage(message)
       setFocusViolations(previous => {
         const next = previous + 1
+        postIntegrityEvent(eventType, next)
         if (next >= 3) {
           setFocusViolationMessage('Third assessment-integrity violation detected. Submitting your saved answers now.')
+          postIntegrityEvent('automatic_submission', next, { trigger: eventType })
           window.setTimeout(() => handleSubmitQuiz(), 0)
         }
         return next
@@ -822,6 +856,24 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
       window.removeEventListener('beforeunload', handleBeforeUnload)
     }
   }, [activeQuiz, quizSubmitted, forfeitQuizForLeaving, handleSubmitQuiz])
+
+  useEffect(() => {
+    if (activeQuiz === null || quizSubmitted || !savedUser?.id) return
+    setAnswerSaveStatus('saving')
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/quizzes/${activeQuiz}/autosave`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ student_id: savedUser.id, answers: quizAnswers }),
+        })
+        setAnswerSaveStatus(response.ok ? 'saved' : 'offline')
+      } catch {
+        setAnswerSaveStatus('offline')
+      }
+    }, 700)
+    return () => window.clearTimeout(timer)
+  }, [activeQuiz, quizAnswers, quizSubmitted, savedUser?.id])
 
   useEffect(() => {
     if (!quizSubmitted || !document.fullscreenElement) return
@@ -1054,7 +1106,13 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
         <div className="bg-danger/10 border-b border-danger/20 text-danger text-xs font-semibold px-6 py-2 flex items-center gap-2">
           <i className="fa-solid fa-triangle-exclamation" />
           Assessment focus monitoring is active. Fullscreen is enforced when supported; violation 3 submits your saved answers.
-          {focusViolations > 0 && <span className="ml-auto whitespace-nowrap">Violations: {focusViolations}/3</span>}
+          <span className="ml-auto whitespace-nowrap flex items-center gap-3">
+            <span className={answerSaveStatus === 'offline' ? 'text-amber-700' : ''}>
+              <i className={`fa-solid ${answerSaveStatus === 'saving' ? 'fa-spinner fa-spin' : answerSaveStatus === 'saved' ? 'fa-cloud-arrow-up' : answerSaveStatus === 'offline' ? 'fa-cloud-exclamation' : 'fa-cloud'} mr-1`} />
+              {answerSaveStatus === 'saving' ? 'Saving' : answerSaveStatus === 'saved' ? 'Answers saved' : answerSaveStatus === 'offline' ? 'Save pending' : 'Autosave ready'}
+            </span>
+            {focusViolations > 0 && <span>Violations: {focusViolations}/3</span>}
+          </span>
         </div>
 
         <div className="flex-1 flex items-center justify-center p-8">
@@ -1273,7 +1331,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
               </div>
             )}
 
-            <button onClick={() => { setActiveQuiz(null); setQuizSubmitted(false); setQuizTimedOut(false); setQuizForfeited(false); setAssessmentPaused(false); setFocusViolations(0); setFocusViolationMessage(''); setCurrentQ(0); setQuizAnswers({}); setFlippedFlashcards({}) }} className="w-full mt-6 bg-primary hover:bg-blue-950 text-white font-semibold py-3.5 rounded-xl transition-colors">
+            <button onClick={() => { setActiveQuiz(null); setQuizSubmitted(false); setQuizTimedOut(false); setQuizForfeited(false); setAssessmentPaused(false); setFocusViolations(0); setFocusViolationMessage(''); setAnswerSaveStatus('idle'); setCurrentQ(0); setQuizAnswers({}); setFlippedFlashcards({}) }} className="w-full mt-6 bg-primary hover:bg-blue-950 text-white font-semibold py-3.5 rounded-xl transition-colors">
               Back to Dashboard
             </button>
           </div>

@@ -7,9 +7,17 @@ from app.routers.quizzes import (
     _grade_from_score,
     _generated_quiz_title,
     _materials_match_course,
+    _merge_submission_answers,
     _normalize_single_question_type,
     _question_type_seconds,
 )
+
+
+def test_submission_answers_recover_server_draft_without_overriding_final_client_values():
+    assert _merge_submission_answers(
+        {'0': 'saved zero', '1': 'old answer'},
+        {'1': 'final answer', '2': 'new answer'},
+    ) == {'0': 'saved zero', '1': 'final answer', '2': 'new answer'}
 
 
 def test_generated_quiz_title_uses_single_material_name():

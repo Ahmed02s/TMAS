@@ -915,6 +915,18 @@ class QuizSubmissionRequest(BaseModel):
     answers: dict[str, str]
 
 
+class QuizAutosaveRequest(BaseModel):
+    student_id: str
+    answers: dict[str, str]
+
+
+class QuizIntegrityEventRequest(BaseModel):
+    student_id: str
+    event_type: str = Field(pattern=r'^(assessment_started|tab_hidden|fullscreen_exit|assessment_resumed|automatic_submission)$')
+    violation_number: int = Field(default=0, ge=0, le=3)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
 def _get_student_attempts(quiz_id: int, student_id: str) -> list[dict[str, Any]]:
     try:
         response = supabase.table('quiz_attempts').select('*').eq('quiz_id', quiz_id).eq('student_id', student_id).execute()
@@ -925,6 +937,25 @@ def _get_student_attempts(quiz_id: int, student_id: str) -> list[dict[str, Any]]
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase fetch student quiz attempts failed'))
     return response.data or []
+
+
+def _load_answer_draft(quiz_id: int, student_id: str) -> dict[str, str]:
+    """Load a saved snapshot, degrading safely until the new table is deployed."""
+    try:
+        response = supabase.table('quiz_answer_drafts').select('answers').eq('quiz_id', quiz_id).eq('student_id', student_id).limit(1).execute()
+    except Exception as exc:
+        if _is_missing_table_error(exc):
+            return {}
+        raise
+    if supabase_failed(response) or not response.data:
+        return {}
+    answers = response.data[0].get('answers')
+    return {str(key): str(value) for key, value in answers.items()} if isinstance(answers, dict) else {}
+
+
+def _merge_submission_answers(saved_answers: dict[str, str], submitted_answers: dict[str, str]) -> dict[str, str]:
+    """Final client values win, while server drafts recover answers absent from the client."""
+    return {**saved_answers, **submitted_answers}
 
 
 def _fetch_student_attempt_counts(student_id: str) -> dict[int, int]:
@@ -1519,6 +1550,7 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
             'time_limit': time_limit_minutes,
             'started_at': existing.get('attempted_at'),
             'expires_at': expires_at,
+            'saved_answers': _load_answer_draft(quiz_id, payload.student_id),
         }
 
     # Fetch total question count
@@ -1548,7 +1580,70 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
         'time_limit': time_limit_minutes,
         'started_at': started_at_iso,
         'expires_at': expires_at,
+        'saved_answers': {},
     }
+
+
+@router.post('/{quiz_id}/autosave')
+def autosave_quiz_answers(quiz_id: int, payload: QuizAutosaveRequest, claims: dict = Depends(get_current_claims)) -> dict[str, Any]:
+    _verify_acting_as_self(claims, payload.student_id)
+    ensure_supabase_enabled()
+    attempts = _get_student_attempts(quiz_id, payload.student_id)
+    if not any(attempt.get('status') == 'in_progress' for attempt in attempts):
+        raise HTTPException(status_code=409, detail='There is no active attempt to save')
+
+    record = {
+        'quiz_id': quiz_id,
+        'student_id': payload.student_id,
+        'answers': payload.answers,
+        'updated_at': datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        response = supabase.table('quiz_answer_drafts').upsert(record, on_conflict='quiz_id,student_id').execute()
+    except Exception as exc:
+        if _is_missing_table_error(exc):
+            raise HTTPException(status_code=503, detail='Answer autosave is not available until the database migration is applied')
+        raise HTTPException(status_code=502, detail=f'Could not autosave answers: {exc}')
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase autosave answers failed'))
+    return {'status': 'saved', 'updated_at': record['updated_at']}
+
+
+@router.post('/{quiz_id}/integrity-events', status_code=201)
+def record_quiz_integrity_event(quiz_id: int, payload: QuizIntegrityEventRequest, claims: dict = Depends(get_current_claims)) -> dict[str, Any]:
+    _verify_acting_as_self(claims, payload.student_id)
+    ensure_supabase_enabled()
+    record = {
+        'quiz_id': quiz_id,
+        'student_id': payload.student_id,
+        'event_type': payload.event_type,
+        'violation_number': payload.violation_number,
+        'details': payload.details,
+        'occurred_at': datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        response = supabase.table('quiz_integrity_events').insert(record).execute()
+    except Exception as exc:
+        if _is_missing_table_error(exc):
+            raise HTTPException(status_code=503, detail='Integrity logging is not available until the database migration is applied')
+        raise HTTPException(status_code=502, detail=f'Could not record integrity event: {exc}')
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase insert integrity event failed'))
+    return {'status': 'recorded'}
+
+
+@router.get('/{quiz_id}/integrity-events')
+def list_quiz_integrity_events(quiz_id: int, student_id: str, _claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+    ensure_supabase_enabled()
+    try:
+        response = supabase.table('quiz_integrity_events').select('*').eq('quiz_id', quiz_id).eq('student_id', student_id).order('occurred_at').execute()
+    except Exception as exc:
+        if _is_missing_table_error(exc):
+            raise HTTPException(status_code=503, detail='Integrity logging is not available until the database migration is applied')
+        raise HTTPException(status_code=502, detail=f'Could not load integrity events: {exc}')
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase fetch integrity events failed'))
+    return {'events': response.data or []}
 
 
 @router.post('/{quiz_id}/submit')
@@ -1605,6 +1700,9 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
             }).eq('id', in_progress_attempt_id).execute()
             raise HTTPException(status_code=403, detail='Time limit exceeded. Your attempt has been recorded as missed with a score of 0.')
 
+    saved_answers = _load_answer_draft(quiz_id, payload.student_id)
+    submitted_answers = _merge_submission_answers(saved_answers, payload.answers)
+
     questions_response = supabase.table('quiz_questions').select('*').eq('quiz_id', quiz_id).execute()
     if supabase_failed(questions_response):
         raise HTTPException(status_code=502, detail=supabase_error_message(questions_response, 'Supabase get quiz questions failed'))
@@ -1636,7 +1734,7 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
     # screen can show correct answers without ever exposing them beforehand.
     review: list[dict[str, Any]] = []
     for idx, question in enumerate(questions):
-        answer = payload.answers.get(str(idx), '')
+        answer = submitted_answers.get(str(idx), '')
         q_type = question.get('type', 'MCQ')
         is_correct = _answers_match(question.get('correct', ''), answer, q_type)
         if is_correct:
@@ -1683,7 +1781,13 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
         if supabase_failed(insert_response):
             raise HTTPException(status_code=502, detail=supabase_error_message(insert_response, 'Supabase insert quiz attempt failed'))
 
-    return {'attempt': attempt_record, 'quiz': quiz, 'review': review}
+    try:
+        supabase.table('quiz_answer_drafts').delete().eq('quiz_id', quiz_id).eq('student_id', payload.student_id).execute()
+    except Exception as exc:
+        if not _is_missing_table_error(exc):
+            logger.exception('submit_quiz: failed to clear answer draft for quiz=%s student=%s', quiz_id, payload.student_id)
+
+    return {'attempt': attempt_record, 'quiz': quiz, 'review': review, 'recovered_saved_answers': bool(saved_answers)}
 
 
 class QuizForfeitRequest(BaseModel):
