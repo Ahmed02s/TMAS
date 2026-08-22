@@ -4,6 +4,7 @@ from app.routers.quizzes import (
     QUESTION_TYPE_SECONDS,
     _answers_match,
     _compute_time_limit_minutes,
+    _course_generation_label,
     _grade_from_score,
     _generated_quiz_title,
     _materials_match_course,
@@ -12,6 +13,11 @@ from app.routers.quizzes import (
     _ordered_questions_for_student,
     _question_type_seconds,
 )
+
+
+def test_question_generation_prefers_course_title_over_code():
+    assert _course_generation_label('COMP 402', 'Human Nutrition') == 'Human Nutrition'
+    assert _course_generation_label('COMP 402', '') == 'COMP 402'
 
 
 def test_submission_answers_recover_server_draft_without_overriding_final_client_values():

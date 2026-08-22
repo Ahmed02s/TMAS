@@ -1137,6 +1137,11 @@ def _generated_quiz_title(tier: str, materials: list[dict[str, Any]], course: st
     return f'{tier_label} Quiz: {subject}'
 
 
+def _course_generation_label(course_code: str, course_title: str | None) -> str:
+    """Use a readable course title in question wording while retaining the code in data."""
+    return str(course_title or '').strip() or str(course_code or '').strip()
+
+
 @router.post('/generate')
 def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
     ensure_supabase_enabled()
@@ -1157,6 +1162,14 @@ def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_
 
         # Keep the requested course authoritative after validating every material.
         effective_course = payload.course
+        course_title: str | None = None
+        try:
+            course_response = supabase.table('courses').select('title').eq('code', effective_course).limit(1).execute()
+            if not supabase_failed(course_response) and course_response.data:
+                course_title = course_response.data[0].get('title')
+        except Exception:
+            logger.exception('generate_quiz: failed to resolve title for course=%s', effective_course)
+        generation_course_name = _course_generation_label(effective_course, course_title)
 
         raw_titles = [material.get('name', '') for material in materials]
         material_titles = [_clean_material_title(title) for title in raw_titles]
@@ -1201,7 +1214,7 @@ def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_
             questions: list[dict[str, Any]] = []
             for index in range(payload.question_count):
                 question_type = question_types[index % len(question_types)]
-                questions.append(_generate_question(effective_course, summarized_titles, effective_difficulty, question_type, index + offset * 1000))
+                questions.append(_generate_question(generation_course_name, summarized_titles, effective_difficulty, question_type, index + offset * 1000))
             tier_open = open_dt + offset * base_window
             tier_close = tier_open + base_window
             return {
@@ -1298,7 +1311,7 @@ def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_
         questions: list[dict[str, Any]] = []
         for index in range(payload.question_count):
             question_type = question_types[index % len(question_types)]
-            questions.append(_generate_question(effective_course, summarized_titles, payload.difficulty if payload.difficulty != 'Mixed' else _tier_default_difficulty(normalized_tier), question_type, index))
+            questions.append(_generate_question(generation_course_name, summarized_titles, payload.difficulty if payload.difficulty != 'Mixed' else _tier_default_difficulty(normalized_tier), question_type, index))
 
         return {
             'quiz': {
@@ -1603,7 +1616,6 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
     qcount_resp = supabase.table('quiz_questions').select('id').eq('quiz_id', quiz_id).execute()
     total_questions = len(qcount_resp.data or []) if not supabase_failed(qcount_resp) else 0
 
-    # Record in-progress attempt with score 0 immediately
     started_at_iso = now.isoformat()
     attempt_record = {
         'quiz_id': quiz_id,
@@ -1618,6 +1630,49 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
         'submission_reason': 'in_progress',
         'attempted_at': started_at_iso,
     }
+
+    # A lecturer-authorized retry reuses the finalized row. The next score therefore
+    # replaces the old score instead of creating a second result that would distort
+    # gradebooks and analytics. Collapse duplicate retry rows left by older deployments.
+    retry_attempts = sorted(
+        [attempt for attempt in attempts if attempt.get('status') == 'retry_granted'],
+        key=lambda attempt: str(attempt.get('attempted_at') or ''),
+        reverse=True,
+    )
+    if retry_attempts:
+        retry_attempt = retry_attempts[0]
+        retry_attempt_id = retry_attempt.get('id')
+        for obsolete in retry_attempts[1:]:
+            obsolete_id = obsolete.get('id')
+            if obsolete_id is None:
+                continue
+            try:
+                supabase.table('quiz_attempt_review_actions').update({'attempt_id': retry_attempt_id}).eq('attempt_id', obsolete_id).execute()
+            except Exception:
+                pass
+            supabase.table('quiz_attempts').delete().eq('id', obsolete_id).execute()
+
+        reset_payload = {key: value for key, value in attempt_record.items() if key not in ('quiz_id', 'student_id')}
+        reset_response = _safe_update('quiz_attempts', reset_payload, 'id', [retry_attempt_id])
+        if supabase_failed(reset_response):
+            raise HTTPException(status_code=502, detail=supabase_error_message(reset_response, 'Supabase restart granted attempt failed'))
+        try:
+            supabase.table('quiz_answer_drafts').delete().eq('quiz_id', quiz_id).eq('student_id', payload.student_id).execute()
+        except Exception:
+            pass
+        updated_attempt = {**retry_attempt, **reset_payload}
+        expires_at = _format_datetime(now + timedelta(minutes=time_limit_minutes)) if time_limit_minutes else None
+        return {
+            'attempt': reset_response.data[0] if reset_response.data else updated_attempt,
+            'already_started': False,
+            'retry_replaced_previous_score': True,
+            'time_limit': time_limit_minutes,
+            'started_at': started_at_iso,
+            'expires_at': expires_at,
+            'saved_answers': {},
+        }
+
+    # First attempt: record an in-progress row with score 0 immediately.
     insert_response = _safe_insert('quiz_attempts', attempt_record)
     if supabase_failed(insert_response):
         raise HTTPException(status_code=502, detail=supabase_error_message(insert_response, 'Supabase insert quiz attempt failed'))
