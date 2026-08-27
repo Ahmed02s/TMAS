@@ -493,13 +493,18 @@ def get_course_student_progress(
     for s in students:
         sid = str(s['id'])
         attempts = attempts_by_student.get(sid, [])
-        completed = [a for a in attempts if a.get('status') == 'completed']
-        # Also count non-completed attempts as done (some systems mark final without completing)
-        all_attempts = attempts
-        scores    = [a.get('score', 0) for a in completed]
+        latest_by_quiz: dict[Any, dict[str, Any]] = {}
+        for attempt in attempts:
+            quiz_id = attempt.get('quiz_id')
+            current = latest_by_quiz.get(quiz_id)
+            if current is None or str(attempt.get('attempted_at') or '') > str(current.get('attempted_at') or ''):
+                latest_by_quiz[quiz_id] = attempt
+        all_attempts = sorted(latest_by_quiz.values(), key=lambda attempt: str(attempt.get('attempted_at') or ''), reverse=True)
+        finalized = [a for a in all_attempts if a.get('status') in ('completed', 'missed')]
+        scores    = [float(a.get('score') or 0) for a in finalized]
         avg_score = round(sum(scores) / len(scores)) if scores else 0
-        quizzes_done  = len(set(a.get('quiz_id') for a in completed))
-        passed_count  = sum(1 for a in completed if a.get('passed'))
+        quizzes_done  = len(finalized)
+        passed_count  = sum(1 for a in finalized if a.get('passed'))
         quiz_progress = round((quizzes_done / len(quizzes)) * 100) if quizzes else 0
         materials_read = min(reads_by_student.get(sid, 0), total_materials) if total_materials else reads_by_student.get(sid, 0)
         reading_progress = round((materials_read / total_materials) * 100) if total_materials else 0

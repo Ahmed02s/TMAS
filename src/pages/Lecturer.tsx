@@ -53,6 +53,7 @@ function ProgressBar({ value }: { value: number }) {
 // by both the Courses tab's drill-down and the Students tab, so the numbers a lecturer
 // sees for a given student are always computed and rendered identically in both places.
 function StudentProgressTable({ students }: { students: any[] }) {
+  const [expandedStudentId, setExpandedStudentId] = useState<string | null>(null)
   return (
     <div className="divide-y divide-border">
       {/* Table Header */}
@@ -108,33 +109,9 @@ function StudentProgressTable({ students }: { students: any[] }) {
                 </div>
                 <div className="bg-card rounded-lg p-2.5 border border-border">
                   <p className="text-muted-foreground mb-1">Avg Score</p>
-                  <p className={`font-mono font-bold text-lg ${scoreColor}`}>{stu.avg_score > 0 ? `${stu.avg_score}%` : '—'}</p>
+                  <p className={`font-mono font-bold text-lg ${scoreColor}`}>{qDone > 0 ? `${stu.avg_score}%` : '—'}</p>
                 </div>
               </div>
-              {/* Individual quiz attempts */}
-              {(stu.attempts || []).length > 0 && (
-                <div className="space-y-1.5">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Quiz Attempts</p>
-                  {(stu.attempts || []).map((att: any, ai: number) => (
-                    <div key={ai} className="flex items-center justify-between bg-card border border-border rounded-lg px-3 py-2 text-xs">
-                      <div>
-                        <span className={`font-bold mr-1.5 ${
-                          att.quiz_tier === 'Mastery' ? 'text-purple-600' :
-                          att.quiz_tier === 'Intermediate' ? 'text-amber-600' : 'text-emerald-600'
-                        }`}>[{att.quiz_tier}]</span>
-                        <span className="text-muted-foreground">{att.quiz_title}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold text-foreground">{att.score}/{att.out_of}</span>
-                        <span className={`font-bold ${att.passed ? 'text-success' : 'text-danger'}`}>{att.grade}</span>
-                        {att.passed
-                          ? <i className="fa-solid fa-circle-check text-success" />
-                          : <i className="fa-solid fa-circle-xmark text-danger" />}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
 
             {/* Desktop layout */}
@@ -152,23 +129,6 @@ function StudentProgressTable({ students }: { students: any[] }) {
                   </div>
                   <span className="text-xs font-mono font-bold text-foreground shrink-0">{qDone}/{qTotal}</span>
                 </div>
-                {(stu.attempts || []).length > 0 && (
-                  <div className="mt-1.5 space-y-1">
-                    {(stu.attempts || []).map((att: any, ai: number) => (
-                      <div key={ai} className="flex items-center gap-1.5 text-[10px]">
-                        <span className={`font-bold ${
-                          att.quiz_tier === 'Mastery' ? 'text-purple-600' :
-                          att.quiz_tier === 'Intermediate' ? 'text-amber-600' : 'text-emerald-600'
-                        }`}>{att.quiz_tier?.slice(0,1) ?? '?'}</span>
-                        <span className="text-muted-foreground truncate max-w-[80px]">{att.quiz_title}</span>
-                        <span className="font-mono font-bold text-foreground ml-auto">{att.score}/{att.out_of}</span>
-                        {att.passed
-                          ? <i className="fa-solid fa-circle-check text-success shrink-0" />
-                          : <i className="fa-solid fa-circle-xmark text-danger shrink-0" />}
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
               <div className="col-span-2">
                 <div className="flex items-center gap-2">
@@ -181,7 +141,7 @@ function StudentProgressTable({ students }: { students: any[] }) {
                 </div>
               </div>
               <div className="col-span-2">
-                <p className={`text-base font-mono font-bold ${scoreColor}`}>{stu.avg_score > 0 ? `${stu.avg_score}%` : '—'}</p>
+                <p className={`text-base font-mono font-bold ${scoreColor}`}>{qDone > 0 ? `${stu.avg_score}%` : '—'}</p>
               </div>
               <div className="col-span-1">
                 <span className="text-sm font-semibold text-foreground">{stu.quizzes_passed ?? 0}</span>
@@ -195,6 +155,49 @@ function StudentProgressTable({ students }: { students: any[] }) {
                 }`}>{stu.status || 'active'}</span>
               </div>
             </div>
+
+            {(stu.attempts || []).length > 0 && (
+              <div className="mt-3">
+                <button
+                  onClick={() => setExpandedStudentId(current => current === String(stu.id) ? null : String(stu.id))}
+                  className="w-full flex items-center gap-2 rounded-xl border border-border bg-muted/30 px-3 py-2.5 text-xs font-semibold text-foreground hover:bg-muted/60 transition-colors"
+                >
+                  <i className="fa-solid fa-clipboard-check text-primary" />
+                  <span>Quiz Results</span>
+                  <span className="bg-primary/10 text-primary rounded-full px-2 py-0.5">{(stu.attempts || []).length}</span>
+                  <i className={`fa-solid fa-chevron-${expandedStudentId === String(stu.id) ? 'up' : 'down'} ml-auto text-muted-foreground`} />
+                </button>
+                {expandedStudentId === String(stu.id) && (
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                    {(stu.attempts || []).map((att: any, ai: number) => {
+                      const status = String(att.status || 'completed')
+                      const finalized = ['completed', 'missed'].includes(status)
+                      return (
+                        <div key={att.quiz_id ?? ai} className="rounded-xl border border-border bg-card p-3 text-xs space-y-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="font-semibold text-foreground truncate" title={att.quiz_title}>{att.quiz_title || 'Quiz'}</p>
+                              <p className="text-muted-foreground">{att.quiz_tier || 'Foundational'} · {att.out_of ?? 0} questions</p>
+                            </div>
+                            <span className={`shrink-0 rounded-full px-2 py-0.5 font-semibold ${
+                              status === 'completed' ? 'bg-success/10 text-success' :
+                              status === 'missed' ? 'bg-danger/10 text-danger' : 'bg-muted text-muted-foreground'
+                            }`}>{status.replace('_', ' ')}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">Score</span>
+                            <span className={`font-mono text-base font-bold ${finalized ? (att.passed ? 'text-success' : 'text-danger') : 'text-muted-foreground'}`}>
+                              {finalized ? `${Number(att.score || 0)}%` : 'Pending'}
+                            </span>
+                          </div>
+                          {finalized && <p className="text-muted-foreground">Grade {att.grade || 'F'} · {att.passed ? 'Passed' : 'Not passed'}</p>}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )
       })}
@@ -440,6 +443,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   // not the primary action on this page, and was previously always fully expanded with a
   // full date-editor per quiz, crowding out the actual "generate a new bank" form above it.
   const [publishedPanelOpen, setPublishedPanelOpen] = useState(false)
+  const [openPublishedDateGroups, setOpenPublishedDateGroups] = useState<Record<string, boolean>>({})
 
   // Question Banks archive: every quiz ever published for this lecturer's courses,
   // grouped by course, with the ability to preview or download a hardcopy of the
@@ -2482,15 +2486,42 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {publishedQuizzes.map(q => {
+                      {[...publishedQuizzes].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))).map((q, quizIndex, sortedQuizzes) => {
                         const draft = scheduleDrafts[q.id] || { openDate: '', closeDate: '' }
+                        const generatedDate = q.created_at ? new Date(q.created_at) : null
+                        const generatedDateKey = generatedDate && !Number.isNaN(generatedDate.valueOf()) ? generatedDate.toISOString().slice(0, 10) : 'unknown'
+                        const previousDate = quizIndex > 0 && sortedQuizzes[quizIndex - 1]?.created_at ? new Date(sortedQuizzes[quizIndex - 1].created_at) : null
+                        const previousDateKey = previousDate && !Number.isNaN(previousDate.valueOf()) ? previousDate.toISOString().slice(0, 10) : 'unknown'
+                        const showDateHeading = quizIndex === 0 || generatedDateKey !== previousDateKey
+                        const dateGroupKey = `${genCourse}:${generatedDateKey}`
+                        const isDateGroupOpen = openPublishedDateGroups[dateGroupKey] ?? false
+                        const dateGroupCount = sortedQuizzes.filter(candidate => {
+                          if (!candidate.created_at) return generatedDateKey === 'unknown'
+                          const date = new Date(candidate.created_at)
+                          return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === generatedDateKey
+                        }).length
+                        const generatedDateLabel = generatedDateKey === 'unknown'
+                          ? 'Generation date unavailable'
+                          : generatedDate!.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'long', day: 'numeric' })
                         const liveStatus = q.live_status || (q.is_locked ? 'scheduled' : q.is_closed ? 'closed' : 'available')
                         const badgeClass =
                           liveStatus === 'available' ? 'bg-success/10 text-success' :
                           liveStatus === 'closed'    ? 'bg-danger/10 text-danger' :
                           'bg-amber-500/10 text-amber-700'
                         return (
-                          <div key={q.id} className="border border-border rounded-xl p-4 space-y-3">
+                          <div key={q.id} className="space-y-2">
+                            {showDateHeading && (
+                              <button
+                                onClick={() => setOpenPublishedDateGroups(previous => ({ ...previous, [dateGroupKey]: !isDateGroupOpen }))}
+                                className="w-full flex items-center gap-2 rounded-xl border border-border bg-muted/40 px-4 py-3 text-left text-xs font-semibold text-foreground hover:bg-muted transition-colors"
+                              >
+                                <i className="fa-regular fa-calendar text-primary" />
+                                <span>Generated {generatedDateLabel}</span>
+                                <span className="rounded-full bg-primary/10 text-primary px-2 py-0.5">{dateGroupCount}</span>
+                                <i className={`fa-solid fa-chevron-${isDateGroupOpen ? 'up' : 'down'} ml-auto`} />
+                              </button>
+                            )}
+                            {isDateGroupOpen && <div className="border border-border rounded-xl p-4 space-y-3">
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-muted text-foreground">{q.tier || 'Foundational'}</span>
@@ -2546,6 +2577,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                 </button>
                               )}
                             </div>
+                            </div>}
                           </div>
                         )
                       })}
