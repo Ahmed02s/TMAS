@@ -10,6 +10,26 @@ CREATE TABLE IF NOT EXISTS public.course_enrollments (
   UNIQUE (course_id, student_id)
 );
 
+-- CREATE TABLE IF NOT EXISTS does not repair an older, partially defined table.
+-- Add columns introduced by this migration so it remains safe to rerun.
+ALTER TABLE public.course_enrollments
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE public.course_enrollments
+  ADD COLUMN IF NOT EXISTS enrolled_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'course_enrollments_status_check'
+      AND conrelid = 'public.course_enrollments'::regclass
+  ) THEN
+    ALTER TABLE public.course_enrollments
+      ADD CONSTRAINT course_enrollments_status_check
+      CHECK (status IN ('active', 'completed', 'withdrawn'));
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS public.course_lecturers (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   course_id BIGINT NOT NULL REFERENCES public.courses(id) ON DELETE CASCADE,
@@ -17,6 +37,16 @@ CREATE TABLE IF NOT EXISTS public.course_lecturers (
   assigned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (course_id, lecturer_id)
 );
+
+ALTER TABLE public.course_lecturers
+  ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+-- Older versions of these tables might not have their uniqueness constraints.
+-- Unique indexes also provide valid conflict targets for the backfill below.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_course_enrollments_course_student
+  ON public.course_enrollments(course_id, student_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_course_lecturers_course_lecturer
+  ON public.course_lecturers(course_id, lecturer_id);
 
 -- Preserve current behavior by turning existing level/program matches into real rows.
 INSERT INTO public.course_enrollments (course_id, student_id)
