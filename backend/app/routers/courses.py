@@ -156,7 +156,7 @@ def list_courses(
         q_resp = supabase.table('quizzes').select('id,course,status,is_published').execute()
         if not supabase_failed(q_resp):
             for q in q_resp.data or []:
-                if str(q.get('status') or '').lower() in {'draft', 'archived'} or q.get('is_published') is False:
+                if str(q.get('status') or '').lower() in {'draft', 'archived'}:
                     continue
                 code = _course_key(q.get('course', ''))
                 if code not in requested_course_keys:
@@ -221,6 +221,7 @@ def list_courses(
     # that nothing ever updates, instead of reflecting real student performance.
     class_avg_score_by_course: dict[str, float] = {}
     class_completed_by_course: dict[str, int] = {}
+    class_done_pairs: set[tuple[str, Any, Any]] = set()
     all_quiz_ids_flat = [qid for ids in quiz_ids_by_course.values() for qid in ids]
     if all_quiz_ids_flat:
         try:
@@ -236,7 +237,10 @@ def list_courses(
                     code = qid_to_course_class.get(att.get('quiz_id'), '')
                     if not code:
                         continue
-                    class_completed_by_course[code] = class_completed_by_course.get(code, 0) + 1
+                    pair = (code, att.get('student_id'), att.get('quiz_id'))
+                    if pair not in class_done_pairs:
+                        class_done_pairs.add(pair)
+                        class_completed_by_course[code] = class_completed_by_course.get(code, 0) + 1
                     if att.get('status') == 'completed':
                         class_scores_by_course.setdefault(code, []).append(float(att.get('score', 0)))
                 for code, scores in class_scores_by_course.items():
@@ -246,8 +250,9 @@ def list_courses(
 
     # 4. Student count per course (match by level + program, case-insensitive)
     students_by_course: dict[str, int] = {}
+    student_ids_by_course: dict[str, set[str]] = {}
     try:
-        stu_resp = supabase.table('users').select('level,program').eq('role', 'student').execute()
+        stu_resp = supabase.table('users').select('id,level,program').eq('role', 'student').execute()
         if not supabase_failed(stu_resp):
             for stu in stu_resp.data or []:
                 stu_level = str(stu.get('level') or '').strip().lower()
@@ -258,8 +263,24 @@ def list_courses(
                     if c_level and c_level == stu_level and (not c_program or c_program == stu_program):
                         code = _course_key(course.get('code', ''))
                         students_by_course[code] = students_by_course.get(code, 0) + 1
+                        student_ids_by_course.setdefault(code, set()).add(str(stu.get('id')))
     except Exception:
         logger.exception('list_courses: student-count enrichment failed')
+
+    class_reads_by_course: dict[str, int] = {}
+    try:
+        reads_resp = supabase.table('material_reads').select('student_id,material_id,course,completed').eq('completed', True).execute()
+        if not supabase_failed(reads_resp):
+            seen_class_reads: set[tuple[str, str, Any]] = set()
+            for row in reads_resp.data or []:
+                code = _course_key(row.get('course'))
+                sid = str(row.get('student_id'))
+                key = (code, sid, row.get('material_id'))
+                if sid in student_ids_by_course.get(code, set()) and key not in seen_class_reads:
+                    seen_class_reads.add(key)
+                    class_reads_by_course[code] = class_reads_by_course.get(code, 0) + 1
+    except Exception:
+        logger.exception('list_courses: class reading enrichment failed')
 
     # Apply enriched stats to each course
     for course in courses:
@@ -285,7 +306,12 @@ def list_courses(
             quizzes_total = course['quizzes_total']
             possible = student_count * quizzes_total
             completed = class_completed_by_course.get(code, 0)
-            course['progress'] = round(min(completed, possible) / possible * 100) if possible > 0 else 0
+            quiz_progress = _progress_percent(completed, possible)
+            material_possible = student_count * mat_count
+            reading_progress = _progress_percent(class_reads_by_course.get(code, 0), material_possible)
+            course['quiz_progress'] = quiz_progress
+            course['reading_progress'] = reading_progress
+            course['progress'] = _combined_progress(reading_progress, quiz_progress, mat_count, quizzes_total)
 
     return {'courses': courses}
 
@@ -386,7 +412,6 @@ def get_course_student_progress(
                 q for q in (r.data or [])
                 if _course_key(q.get('course')) == _course_key(course_code)
                 and str(q.get('status') or '').lower() not in {'draft', 'archived'}
-                and q.get('is_published') is not False
             ]
     except Exception:
         logger.exception('get_course_student_progress: quizzes fetch failed for course=%s', course_code)

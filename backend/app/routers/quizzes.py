@@ -1143,7 +1143,7 @@ def _course_generation_label(course_code: str, course_title: str | None) -> str:
 
 
 @router.post('/generate')
-def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     ensure_supabase_enabled()
     try:
         if payload.material_ids:
@@ -1340,7 +1340,7 @@ def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_
 
 
 @router.post('/publish')
-def publish_quiz(payload: PublishQuizRequest, _claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+def publish_quiz(payload: PublishQuizRequest, _claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     ensure_supabase_enabled()
 
     # If multiple quiz sets are provided (tiered generation), publish each separately
@@ -1389,6 +1389,7 @@ def publish_quiz(payload: PublishQuizRequest, _claims: dict = Depends(require_ro
                 'open_date': _format_datetime(open_dt) if open_dt else None,
                 'close_date': _format_datetime(close_dt),
                 'status': status,
+                'is_published': True,
                 'difficulty': q.get('difficulty', payload.difficulty),
                 'tier': normalized_tier,
                 'material_id': q.get('material_id') or payload.material_id,
@@ -1518,17 +1519,37 @@ def publish_quiz(payload: PublishQuizRequest, _claims: dict = Depends(require_ro
 
 
 @router.delete('/all')
-def delete_all_quizzes(_claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+def delete_all_quizzes(course: str, claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     """Archive quizzes without destroying questions, scores, or integrity history.
 
     The legacy route name is retained for frontend compatibility, but this operation is
     deliberately reversible at the data layer and preserves assessment audit records.
     """
     ensure_supabase_enabled()
+    requested_course = _clean_code_str(course)
+    if not requested_course:
+        raise HTTPException(status_code=400, detail='A course is required')
+    quizzes_response = supabase.table('quizzes').select('id,course,status').execute()
+    if supabase_failed(quizzes_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(quizzes_response, 'Failed to list quizzes for archiving'))
+    rows = [q for q in (quizzes_response.data or []) if str(q.get('status') or '').lower() != 'archived' and _clean_code_str(q.get('course')) == requested_course]
+    user_response = supabase.table('users').select('name').eq('id', claims.get('sub')).limit(1).execute()
+    if supabase_failed(user_response) or not user_response.data:
+        raise HTTPException(status_code=403, detail='Lecturer profile could not be verified')
+    lecturer_name = str(user_response.data[0].get('name') or '').strip()
+    courses_response = supabase.table('courses').select('code').ilike('lecturer', f'%{lecturer_name}%').execute()
+    if supabase_failed(courses_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(courses_response, 'Failed to verify lecturer courses'))
+    allowed_codes = {_clean_code_str(c.get('code')) for c in (courses_response.data or [])}
+    if requested_course not in allowed_codes:
+        raise HTTPException(status_code=403, detail='You can archive only quizzes assigned to your courses')
+    quiz_ids = [int(q['id']) for q in rows if q.get('id') is not None]
+    if not quiz_ids:
+        return {'message': 'No published quizzes were available to archive.'}
     quizzes_resp = supabase.table('quizzes').update({
         'status': 'archived',
         'is_published': False,
-    }).neq('status', 'archived').execute()
+    }).in_('id', quiz_ids).execute()
     if supabase_failed(quizzes_resp):
         raise HTTPException(status_code=502, detail=supabase_error_message(quizzes_resp, 'Failed to archive quizzes'))
 
@@ -1725,7 +1746,7 @@ def record_quiz_integrity_event(quiz_id: int, payload: QuizIntegrityEventRequest
 
 
 @router.get('/{quiz_id}/integrity-events')
-def list_quiz_integrity_events(quiz_id: int, student_id: str, _claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+def list_quiz_integrity_events(quiz_id: int, student_id: str, _claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     ensure_supabase_enabled()
     try:
         response = supabase.table('quiz_integrity_events').select('*').eq('quiz_id', quiz_id).eq('student_id', student_id).order('occurred_at').execute()
@@ -1749,7 +1770,7 @@ def _review_actions_for_quiz(quiz_id: int) -> list[dict[str, Any]]:
 
 
 @router.get('/{quiz_id}/attempt-reviews')
-def list_quiz_attempt_reviews(quiz_id: int, claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+def list_quiz_attempt_reviews(quiz_id: int, claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     ensure_supabase_enabled()
     quiz_response = supabase.table('quizzes').select('*').eq('id', quiz_id).limit(1).execute()
     if supabase_failed(quiz_response) or not quiz_response.data:
@@ -1812,7 +1833,7 @@ def list_quiz_attempt_reviews(quiz_id: int, claims: dict = Depends(require_roles
 
 
 @router.post('/attempts/{attempt_id}/review-note', status_code=201)
-def add_attempt_review_note(attempt_id: int, payload: QuizReviewNoteRequest, claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+def add_attempt_review_note(attempt_id: int, payload: QuizReviewNoteRequest, claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     ensure_supabase_enabled()
     attempt_response = supabase.table('quiz_attempts').select('*').eq('id', attempt_id).limit(1).execute()
     if supabase_failed(attempt_response) or not attempt_response.data:
@@ -1839,7 +1860,7 @@ def add_attempt_review_note(attempt_id: int, payload: QuizReviewNoteRequest, cla
 
 
 @router.post('/attempts/{attempt_id}/grant-retry', status_code=201)
-def grant_attempt_retry(attempt_id: int, payload: QuizGrantRetryRequest, claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+def grant_attempt_retry(attempt_id: int, payload: QuizGrantRetryRequest, claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     ensure_supabase_enabled()
     attempt_response = supabase.table('quiz_attempts').select('*').eq('id', attempt_id).limit(1).execute()
     if supabase_failed(attempt_response) or not attempt_response.data:
@@ -2099,7 +2120,7 @@ def get_quiz_stats() -> dict[str, Any]:
 
 
 @router.get('')
-def list_all_quizzes(course: str | None = None, lecturer: str | None = None, _claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+def list_all_quizzes(course: str | None = None, lecturer: str | None = None, _claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     """Lecturer-facing management listing: every quiz for a course (or all of a lecturer's
     courses), with a live-computed status so a stale DB 'status' column never misleads a
     lecturer trying to figure out why a quiz is still locked/closed."""
@@ -2148,7 +2169,7 @@ def list_all_quizzes(course: str | None = None, lecturer: str | None = None, _cl
 
 
 @router.get('/{quiz_id}/full')
-def get_quiz_full(quiz_id: int, _claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+def get_quiz_full(quiz_id: int, _claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     """Lecturer-only view of a quiz's complete question bank (including correct answers),
     with no lock/open-date restriction — used by the Question Banks archive to preview and
     export a hardcopy of what was generated, independent of whether students can see it yet."""
@@ -2168,6 +2189,28 @@ def get_quiz_full(quiz_id: int, _claims: dict = Depends(require_roles('lecturer'
     return {'quiz': quiz, 'questions': questions}
 
 
+@router.patch('/{quiz_id}/restore')
+def restore_archived_quiz(quiz_id: int, claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
+    """Restore an archived quiz without losing its questions or assessment history."""
+    ensure_supabase_enabled()
+    response = supabase.table('quizzes').select('*').eq('id', quiz_id).limit(1).execute()
+    if supabase_failed(response) or not response.data:
+        raise HTTPException(status_code=404, detail='Quiz not found')
+    quiz = _normalize_quiz_row(response.data[0])
+    _require_quiz_review_access(quiz, claims)
+    if str(quiz.get('status') or '').lower() != 'archived':
+        raise HTTPException(status_code=409, detail='Only archived quizzes can be restored')
+    restored_status = 'scheduled' if _quiz_is_locked(quiz, datetime.now(timezone.utc)) else 'published'
+    update_response = supabase.table('quizzes').update({
+        'status': restored_status,
+        'is_published': True,
+    }).eq('id', quiz_id).execute()
+    if supabase_failed(update_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(update_response, 'Failed to restore quiz'))
+    restored = (update_response.data or [None])[0] or {**quiz, 'status': restored_status, 'is_published': True}
+    return {'quiz': _normalize_quiz_row(restored)}
+
+
 class UpdateQuizScheduleRequest(BaseModel):
     open_date: str | None = None
     close_date: str | None = None
@@ -2177,7 +2220,7 @@ class UpdateQuizScheduleRequest(BaseModel):
 
 
 @router.patch('/{quiz_id}/schedule')
-def update_quiz_schedule(quiz_id: int, payload: UpdateQuizScheduleRequest, _claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+def update_quiz_schedule(quiz_id: int, payload: UpdateQuizScheduleRequest, _claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     """Lets a lecturer fix a quiz's open/close window (or duration/pass score/attempts)
     after it has already been published — e.g. to recover a quiz that got stuck 'scheduled'
     because of a bad date, without having to delete and regenerate the whole question bank."""
@@ -2268,7 +2311,7 @@ def list_available_quizzes(
         # Drafts are persisted the moment a lecturer generates a bank (so it shows up in
         # their Question Banks archive immediately), but haven't been through the schedule
         # step yet — students must never see them, not even as a locked/upcoming entry.
-        if str(quiz.get('status') or '').lower() in {'draft', 'archived'} or quiz.get('is_published') is False:
+        if str(quiz.get('status') or '').lower() in {'draft', 'archived'}:
             continue
 
         quiz_dict = dict(quiz)

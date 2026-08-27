@@ -119,6 +119,10 @@ function mapCourse(course: Record<string, any>): Course {
   }
 }
 
+function normalizeCourseCode(value: unknown): string {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
 function inferTier(quiz: Record<string, any>): string {
   const raw = String(quiz.tier || '').trim()
   if (['Foundational', 'Intermediate', 'Mastery'].includes(raw)) return raw
@@ -630,8 +634,31 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   }, [activeQuiz, studentProfile.level, studentProfile.program])
 
   const visibleCourses = useMemo(() => {
-    return courses
-  }, [courses])
+    const finalized = completedQuizzes.filter(quiz => ['completed', 'missed'].includes(String(quiz.status || 'completed')))
+    return courses.map(course => {
+      const key = normalizeCourseCode(course.code)
+      const courseAttempts = finalized.filter(quiz => normalizeCourseCode(quiz.course) === key)
+      const quizzesDone = new Set(courseAttempts.map(quiz => quiz.quizId).filter(id => id !== undefined)).size
+      const avgScore = courseAttempts.length
+        ? Math.round(courseAttempts.reduce((sum, quiz) => sum + Number(quiz.score || 0), 0) / courseAttempts.length)
+        : 0
+      const recordedReads = Object.entries(courseReadProgress).find(([code]) => normalizeCourseCode(code) === key)?.[1]
+      const materialsRead = Math.min(Number(recordedReads ?? course.materialsRead ?? 0), course.materials)
+      const readingProgress = course.materials > 0 ? Math.round((materialsRead / course.materials) * 100) : 0
+      const quizProgress = course.quizzesTotal > 0 ? Math.round((quizzesDone / course.quizzesTotal) * 100) : 0
+      const dimensions = [course.materials > 0 ? readingProgress : null, course.quizzesTotal > 0 ? quizProgress : null]
+        .filter((value): value is number => value !== null)
+      return {
+        ...course,
+        materialsRead,
+        readingProgress,
+        quizProgress,
+        quizzesDone,
+        avgScore,
+        progress: dimensions.length ? Math.round(dimensions.reduce((sum, value) => sum + value, 0) / dimensions.length) : 0,
+      }
+    })
+  }, [courses, completedQuizzes, courseReadProgress])
 
   const visibleQuizzes = useMemo(() => {
     return availableQuizzes

@@ -452,7 +452,8 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   // Splits "already published" from "still a draft awaiting review" instead of interleaving
   // them in one flat list — the two categories were getting visually indistinguishable as
   // the archive grew. Defaults to Published since that's what a lecturer browses most.
-  const [bankViewFilter, setBankViewFilter] = useState<'published' | 'pending'>('published')
+  const [bankViewFilter, setBankViewFilter] = useState<'published' | 'pending' | 'archived'>('published')
+  const [restoringQuizId, setRestoringQuizId] = useState<number | null>(null)
   const [downloadingBankId, setDownloadingBankId] = useState<number | null>(null)
   const [reviewQuizId, setReviewQuizId] = useState<number | null>(null)
   const [attemptReviewData, setAttemptReviewData] = useState<{ quiz?: any; attempts: any[] }>({ attempts: [] })
@@ -767,6 +768,23 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       setLoadingQuestionBanks(false)
     }
   }, [])
+
+  const restoreArchivedQuiz = async (quiz: any) => {
+    if (!window.confirm(`Restore "${quiz.title}"? It will become available according to its existing schedule.`)) return
+    setRestoringQuizId(quiz.id)
+    setQuestionBankError('')
+    try {
+      const response = await fetch(`${API_BASE}/api/quizzes/${quiz.id}/restore`, { method: 'PATCH' })
+      if (!response.ok) throw new Error(extractErrorMessage(await response.json().catch(() => ({})), 'Failed to restore quiz'))
+      await loadQuestionBanks(String(savedUser?.name || ''))
+      if (genCourse) await loadPublishedQuizzes(genCourse)
+    } catch (error) {
+      setQuestionBankError(error instanceof Error ? error.message : 'Failed to restore quiz')
+    } finally {
+      setRestoringQuizId(null)
+    }
+  }
+
 
   useEffect(() => {
     if (tab === 'quizreview' && savedUser?.name) {
@@ -1230,16 +1248,20 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   const [clearingQuizzes, setClearingQuizzes] = useState(false)
 
   async function handleClearAllQuizzes() {
-    if (!window.confirm('Archive all published quizzes? Students will no longer see them, but questions, scores, attempts, and integrity records will be preserved.')) return
+    if (!genCourse) {
+      alert('Select a course before archiving its quizzes.')
+      return
+    }
+    if (!window.confirm(`Archive all published quizzes for ${genCourse}? Quizzes from your other courses will not be affected, and all scores and assessment records will be preserved.`)) return
     setClearingQuizzes(true)
     try {
-      const res = await fetch(`${API_BASE}/api/quizzes/all`, { method: 'DELETE' })
+      const res = await fetch(`${API_BASE}/api/quizzes/all?course=${encodeURIComponent(genCourse)}`, { method: 'DELETE' })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }))
         alert(`Failed to clear quizzes: ${extractErrorMessage(err, res.statusText)}`)
         return
       }
-      alert('All quizzes were archived. Student scores and assessment records were preserved.')
+      alert(`Published quizzes for ${genCourse} were archived. Student scores and assessment records were preserved.`)
       setGenerated(false)
       setWizardStep(1)
       setGeneratedQuestionsByTier({ Foundational: [], Intermediate: [], Mastery: [] })
@@ -2359,7 +2381,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                     ) : (
                       <>
                         <i className="fa-solid fa-box-archive" />
-                        <span>Archive All Published Quizzes</span>
+                        <span>Archive Published Quizzes for Selected Course</span>
                       </>
                     )}
                   </button>
@@ -2788,7 +2810,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                   onChange={event => setReviewQuizId(event.target.value ? Number(event.target.value) : null)}
                   className="w-full px-4 py-3 bg-muted border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                 >
-                  <option value="">Select a published quiz to review</option>
+                  <option value="">Select a published or archived quiz to review</option>
                   {questionBankQuizzes.filter(quiz => quiz.status !== 'draft').map(quiz => (
                     <option key={quiz.id} value={quiz.id}>{quiz.course} — {quiz.title}</option>
                   ))}
@@ -2918,7 +2940,8 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
 
                 {(() => {
                   const pendingCount = questionBankQuizzes.filter(q => q.status === 'draft').length
-                  const publishedCount = questionBankQuizzes.length - pendingCount
+                  const archivedCount = questionBankQuizzes.filter(q => q.status === 'archived').length
+                  const publishedCount = questionBankQuizzes.length - pendingCount - archivedCount
                   return (
                     <div className="inline-flex items-center gap-1 bg-muted rounded-xl p-1 w-full sm:w-auto">
                       <button
@@ -2942,6 +2965,14 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                           </span>
                         )}
                       </button>
+                      <button
+                        onClick={() => setBankViewFilter('archived')}
+                        className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${
+                          bankViewFilter === 'archived' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        <i className="fa-solid fa-box-archive" /> Archived ({archivedCount})
+                      </button>
                     </div>
                   )
                 })()}
@@ -2955,7 +2986,11 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
               )}
 
               {(() => {
-                const filteredBankQuizzes = questionBankQuizzes.filter(q => (bankViewFilter === 'pending' ? q.status === 'draft' : q.status !== 'draft'))
+                const filteredBankQuizzes = questionBankQuizzes.filter(q => (
+                  bankViewFilter === 'pending' ? q.status === 'draft' :
+                  bankViewFilter === 'archived' ? q.status === 'archived' :
+                  !['draft', 'archived'].includes(q.status)
+                ))
                 if (loadingQuestionBanks) {
                   return (
                     <div className="flex items-center justify-center gap-3 py-14 text-muted-foreground text-sm">
@@ -2998,11 +3033,12 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                         const isExpanded = expandedBankQuizId === quiz.id
                         const isLoadingQuestions = loadingBankQuestionsId === quiz.id
                         const questions = bankQuestionsById[quiz.id] || []
-                        const displayStatus = quiz.status === 'draft' ? 'draft' : quiz.live_status
+                        const displayStatus = ['draft', 'archived'].includes(quiz.status) ? quiz.status : quiz.live_status
                         const statusBadge =
                           displayStatus === 'available' ? 'bg-success/10 text-success' :
                           displayStatus === 'closed' ? 'bg-danger/10 text-danger' :
                           displayStatus === 'draft' ? 'bg-muted text-muted-foreground' :
+                          displayStatus === 'archived' ? 'bg-slate-500/15 text-slate-700' :
                           'bg-amber-500/10 text-amber-700'
                         return (
                           <div key={quiz.id} className="bg-card border border-border rounded-2xl overflow-hidden">
@@ -3018,6 +3054,15 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                 <span className="text-xs text-muted-foreground">{quiz.questions ?? 0} questions</span>
                               </div>
                               <div className="flex items-center gap-2">
+                                {quiz.status === 'archived' && (
+                                  <button
+                                    onClick={() => restoreArchivedQuiz(quiz)}
+                                    disabled={restoringQuizId === quiz.id}
+                                    className="inline-flex items-center gap-1.5 bg-emerald-500/15 text-emerald-700 border border-emerald-500/30 text-xs font-semibold px-3 py-1.5 rounded-lg disabled:opacity-50"
+                                  >
+                                    <i className={`fa-solid ${restoringQuizId === quiz.id ? 'fa-spinner fa-spin' : 'fa-rotate-left'}`} /> Restore
+                                  </button>
+                                )}
                                 <button
                                   onClick={() => handleTogglePreviewBank(quiz.id)}
                                   className="text-xs font-semibold text-primary hover:underline px-2 py-1"
