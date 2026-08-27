@@ -1560,6 +1560,25 @@ class QuizStartRequest(BaseModel):
     student_id: str
 
 
+class QuizArchiveGroupRequest(BaseModel):
+    quiz_ids: list[int] = Field(min_length=1)
+
+
+def _record_assessment_started(quiz_id: int, student_id: str, resumed: bool = False) -> None:
+    """Best-effort server-side baseline event; browser telemetry adds later violations."""
+    try:
+        supabase.table('quiz_integrity_events').insert({
+            'quiz_id': quiz_id,
+            'student_id': student_id,
+            'event_type': 'assessment_started',
+            'violation_number': 0,
+            'details': {'resumed': resumed},
+            'occurred_at': datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception:
+        logger.exception('Could not record assessment start for quiz=%s student=%s', quiz_id, student_id)
+
+
 @router.post('/{quiz_id}/start')
 def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(get_current_claims)) -> dict[str, Any]:
     """Called the moment a student opens the quiz. Records an in-progress attempt
@@ -1670,6 +1689,7 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
         except Exception:
             pass
         updated_attempt = {**retry_attempt, **reset_payload}
+        _record_assessment_started(quiz_id, payload.student_id)
         expires_at = _format_datetime(now + timedelta(minutes=time_limit_minutes)) if time_limit_minutes else None
         return {
             'attempt': reset_response.data[0] if reset_response.data else updated_attempt,
@@ -1685,6 +1705,7 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
     insert_response = _safe_insert('quiz_attempts', attempt_record)
     if supabase_failed(insert_response):
         raise HTTPException(status_code=502, detail=supabase_error_message(insert_response, 'Supabase insert quiz attempt failed'))
+    _record_assessment_started(quiz_id, payload.student_id)
 
     expires_at = _format_datetime(now + timedelta(minutes=time_limit_minutes)) if time_limit_minutes else None
     return {
@@ -1824,7 +1845,7 @@ def list_quiz_attempt_reviews(quiz_id: int, claims: dict = Depends(require_roles
             **attempt,
             'student': students_by_id.get(student_id, {'id': student_id, 'name': 'Unknown student', 'email': ''}),
             'submission_reason': reason,
-            'answers_available': bool(attempt.get('answers_recorded')),
+            'answers_available': bool(attempt.get('answers_recorded')) or bool(answers),
             'answer_review': answer_review,
             'integrity_events': student_events,
             'review_actions': [action for action in review_actions if action.get('attempt_id') == attempt.get('id')],
@@ -1943,11 +1964,14 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
     if in_progress_attempt_id and time_limit_minutes:
         started_at = _parse_datetime(in_progress_attempts[0].get('attempted_at'))
         if started_at and (now - started_at).total_seconds() > time_limit_minutes * 60 + TIME_LIMIT_GRACE_SECONDS:
+            timed_out_answers = _load_answer_draft(quiz_id, payload.student_id)
             _safe_update('quiz_attempts', {
                 'status': 'missed',
                 'score': 0,
                 'grade': 'F',
                 'passed': False,
+                'answers': timed_out_answers,
+                'answers_recorded': bool(timed_out_answers),
                 'submission_reason': 'timeout',
                 'attempted_at': now.isoformat(),
             }, 'id', [in_progress_attempt_id])
@@ -2058,11 +2082,14 @@ def forfeit_quiz(quiz_id: int, payload: QuizForfeitRequest, claims: dict | None 
         return {'status': 'no_active_attempt'}
 
     attempt = in_progress[0]
+    saved_answers = _load_answer_draft(quiz_id, payload.student_id)
     update_resp = _safe_update('quiz_attempts', {
         'status': 'missed',
         'score': 0,
         'grade': 'F',
         'passed': False,
+        'answers': saved_answers,
+        'answers_recorded': bool(saved_answers),
         'submission_reason': 'left_assessment',
         'attempted_at': datetime.now(timezone.utc).isoformat(),
     }, 'id', [attempt['id']])
@@ -2187,6 +2214,47 @@ def get_quiz_full(quiz_id: int, _claims: dict = Depends(require_roles('lecturer'
 
     questions = [{**row, 'type': row.get('question_type') or row.get('type') or 'MCQ'} for row in (questions_response.data or [])]
     return {'quiz': quiz, 'questions': questions}
+
+
+@router.patch('/archive-group')
+def archive_quiz_group(payload: QuizArchiveGroupRequest, claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
+    """Archive a lecturer-owned group while preserving all related academic records."""
+    ensure_supabase_enabled()
+    unique_ids = list(dict.fromkeys(payload.quiz_ids))
+    response = supabase.table('quizzes').select('*').in_('id', unique_ids).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Failed to load quiz group'))
+    rows = response.data or []
+    if len(rows) != len(unique_ids):
+        raise HTTPException(status_code=404, detail='One or more quizzes were not found')
+    for quiz in rows:
+        _require_quiz_review_access(_normalize_quiz_row(quiz), claims)
+        if str(quiz.get('status') or '').lower() == 'draft':
+            raise HTTPException(status_code=409, detail='Draft question banks cannot be archived')
+    update_response = supabase.table('quizzes').update({'status': 'archived', 'is_published': False}).in_('id', unique_ids).execute()
+    if supabase_failed(update_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(update_response, 'Failed to archive quiz group'))
+    return {'message': f'{len(unique_ids)} quizzes archived.', 'quiz_ids': unique_ids}
+
+
+@router.patch('/{quiz_id}/archive')
+def archive_individual_quiz(quiz_id: int, claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
+    """Archive one lecturer-owned quiz without deleting its history."""
+    ensure_supabase_enabled()
+    response = supabase.table('quizzes').select('*').eq('id', quiz_id).limit(1).execute()
+    if supabase_failed(response) or not response.data:
+        raise HTTPException(status_code=404, detail='Quiz not found')
+    quiz = _normalize_quiz_row(response.data[0])
+    _require_quiz_review_access(quiz, claims)
+    status = str(quiz.get('status') or '').lower()
+    if status == 'draft':
+        raise HTTPException(status_code=409, detail='Draft question banks cannot be archived')
+    if status == 'archived':
+        return {'quiz': quiz}
+    update_response = supabase.table('quizzes').update({'status': 'archived', 'is_published': False}).eq('id', quiz_id).execute()
+    if supabase_failed(update_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(update_response, 'Failed to archive quiz'))
+    return {'quiz': _normalize_quiz_row((update_response.data or [quiz])[0])}
 
 
 @router.patch('/{quiz_id}/restore')

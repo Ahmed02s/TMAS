@@ -456,6 +456,9 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   // the archive grew. Defaults to Published since that's what a lecturer browses most.
   const [bankViewFilter, setBankViewFilter] = useState<'published' | 'pending' | 'archived'>('published')
   const [restoringQuizId, setRestoringQuizId] = useState<number | null>(null)
+  const [archivingQuizId, setArchivingQuizId] = useState<number | null>(null)
+  const [archivingGroupKey, setArchivingGroupKey] = useState<string | null>(null)
+  const [openQuestionBankGroups, setOpenQuestionBankGroups] = useState<Record<string, boolean>>({})
   const [downloadingBankId, setDownloadingBankId] = useState<number | null>(null)
   const [reviewQuizId, setReviewQuizId] = useState<number | null>(null)
   const [attemptReviewData, setAttemptReviewData] = useState<{ quiz?: any; attempts: any[] }>({ attempts: [] })
@@ -784,6 +787,44 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       setQuestionBankError(error instanceof Error ? error.message : 'Failed to restore quiz')
     } finally {
       setRestoringQuizId(null)
+    }
+  }
+
+  const archiveIndividualQuiz = async (quiz: any) => {
+    if (!window.confirm(`Archive "${quiz.title}"? Students will no longer be able to take it, but all results will be preserved.`)) return
+    setArchivingQuizId(quiz.id)
+    setQuestionBankError('')
+    try {
+      const response = await fetch(`${API_BASE}/api/quizzes/${quiz.id}/archive`, { method: 'PATCH' })
+      if (!response.ok) throw new Error(extractErrorMessage(await response.json().catch(() => ({})), 'Failed to archive quiz'))
+      await loadQuestionBanks(String(savedUser?.name || ''))
+      if (genCourse) await loadPublishedQuizzes(genCourse)
+    } catch (error) {
+      setQuestionBankError(error instanceof Error ? error.message : 'Failed to archive quiz')
+    } finally {
+      setArchivingQuizId(null)
+    }
+  }
+
+  const archiveQuizGroup = async (groupKey: string, quizzes: any[]) => {
+    const eligible = quizzes.filter(quiz => !['draft', 'archived'].includes(String(quiz.status || '').toLowerCase()))
+    if (!eligible.length) return
+    if (!window.confirm(`Archive all ${eligible.length} quizzes in this generated group? All student results will be preserved.`)) return
+    setArchivingGroupKey(groupKey)
+    setQuestionBankError('')
+    try {
+      const response = await fetch(`${API_BASE}/api/quizzes/archive-group`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ quiz_ids: eligible.map(quiz => quiz.id) }),
+      })
+      if (!response.ok) throw new Error(extractErrorMessage(await response.json().catch(() => ({})), 'Failed to archive quiz group'))
+      await loadQuestionBanks(String(savedUser?.name || ''))
+      if (genCourse) await loadPublishedQuizzes(genCourse)
+    } catch (error) {
+      setQuestionBankError(error instanceof Error ? error.message : 'Failed to archive quiz group')
+    } finally {
+      setArchivingGroupKey(null)
     }
   }
 
@@ -2872,7 +2913,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                       </p>
                                       <p className="text-success">Correct: {answer.correct_answer}</p>
                                     </div>
-                                  )) : <p className="text-xs text-muted-foreground">Answer details are unavailable for this legacy attempt.</p>}
+                                  )) : <p className="text-xs text-muted-foreground">This attempt predates answer tracking, so its submitted answers were never stored and cannot be reconstructed.</p>}
                                 </div>
 
                                 <div className="space-y-3">
@@ -2891,7 +2932,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                         <span className="text-foreground">{eventLabels[event.event_type] || event.event_type}{event.violation_number ? ` (${event.violation_number}/3)` : ''}</span>
                                       </div>
                                     )
-                                  }) : <p className="text-xs text-muted-foreground">No integrity events recorded.</p>}
+                                  }) : <p className="text-xs text-muted-foreground">No integrity telemetry was stored for this attempt. Older attempts created before integrity tracking will not have a timeline.</p>}
                                 </div>
                               </div>
 
@@ -3050,6 +3091,14 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                         const generatedDateLabel = generatedDateKey === 'unknown'
                           ? 'Generation date unavailable'
                           : generatedDate!.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'long', day: 'numeric' })
+                        const groupKey = `${courseCode}:${generatedDateKey}`
+                        const dateGroupQuizzes = sortedQuizzes.filter(candidate => {
+                          if (!candidate.created_at) return generatedDateKey === 'unknown'
+                          const candidateDate = new Date(candidate.created_at)
+                          return !Number.isNaN(candidateDate.valueOf()) && candidateDate.toISOString().slice(0, 10) === generatedDateKey
+                        })
+                        const isGroupOpen = openQuestionBankGroups[groupKey] ?? false
+                        const archivableGroupCount = dateGroupQuizzes.filter(candidate => !['draft', 'archived'].includes(String(candidate.status || '').toLowerCase())).length
                         const displayStatus = ['draft', 'archived'].includes(quiz.status) ? quiz.status : quiz.live_status
                         const statusBadge =
                           displayStatus === 'available' ? 'bg-success/10 text-success' :
@@ -3060,13 +3109,29 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                         return (
                           <div key={quiz.id} className="space-y-2">
                             {showDateHeading && (
-                              <div className="flex items-center gap-2 pt-2 text-xs font-semibold text-muted-foreground">
-                                <i className="fa-regular fa-calendar" />
-                                <span>Generated {generatedDateLabel}</span>
-                                <span className="h-px bg-border flex-1" />
+                              <div className="flex items-center gap-2 pt-2">
+                                <button
+                                  onClick={() => setOpenQuestionBankGroups(previous => ({ ...previous, [groupKey]: !isGroupOpen }))}
+                                  className="flex-1 flex items-center gap-2 rounded-xl border border-border bg-muted/40 px-4 py-3 text-left text-xs font-semibold text-foreground hover:bg-muted transition-colors"
+                                >
+                                  <i className="fa-regular fa-calendar text-primary" />
+                                  <span>Generated {generatedDateLabel}</span>
+                                  <span className="rounded-full bg-primary/10 text-primary px-2 py-0.5">{dateGroupQuizzes.length}</span>
+                                  <i className={`fa-solid fa-chevron-${isGroupOpen ? 'up' : 'down'} ml-auto`} />
+                                </button>
+                                {archivableGroupCount > 0 && (
+                                  <button
+                                    onClick={() => archiveQuizGroup(groupKey, dateGroupQuizzes)}
+                                    disabled={archivingGroupKey === groupKey}
+                                    className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-xs font-semibold text-amber-700 disabled:opacity-50"
+                                  >
+                                    <i className={`fa-solid ${archivingGroupKey === groupKey ? 'fa-spinner fa-spin' : 'fa-box-archive'}`} />
+                                    Archive Group
+                                  </button>
+                                )}
                               </div>
                             )}
-                            <div className="bg-card border border-border rounded-2xl overflow-hidden">
+                            {isGroupOpen && <div className="bg-card border border-border rounded-2xl overflow-hidden">
                             <div className="p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
@@ -3079,6 +3144,15 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                 <span className="text-xs text-muted-foreground">{quiz.questions ?? 0} questions</span>
                               </div>
                               <div className="flex items-center gap-2">
+                                {!['draft', 'archived'].includes(String(quiz.status || '').toLowerCase()) && (
+                                  <button
+                                    onClick={() => archiveIndividualQuiz(quiz)}
+                                    disabled={archivingQuizId === quiz.id}
+                                    className="inline-flex items-center gap-1.5 bg-amber-500/10 text-amber-700 border border-amber-500/30 text-xs font-semibold px-3 py-1.5 rounded-lg disabled:opacity-50"
+                                  >
+                                    <i className={`fa-solid ${archivingQuizId === quiz.id ? 'fa-spinner fa-spin' : 'fa-box-archive'}`} /> Archive
+                                  </button>
+                                )}
                                 {quiz.status === 'archived' && (
                                   <button
                                     onClick={() => restoreArchivedQuiz(quiz)}
@@ -3130,7 +3204,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                 )}
                               </div>
                             )}
-                            </div>
+                            </div>}
                           </div>
                         )
                       })}

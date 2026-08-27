@@ -578,17 +578,6 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
           ? startData.saved_answers as Record<number, string>
           : {}
 
-        fetch(`${API_BASE}/api/quizzes/${activeQuiz}/integrity-events`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            student_id: studentId,
-            event_type: 'assessment_started',
-            violation_number: 0,
-            details: { resumed: Boolean(startData?.already_started) },
-          }),
-        }).catch(() => {})
-
         // The server is the source of truth for when this attempt expires (start time +
         // time limit), so the countdown survives refreshes instead of resetting to the
         // full duration every time this component re-mounts.
