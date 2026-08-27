@@ -237,7 +237,7 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
             level: course.level ?? 'N/A',
             program: course.program ?? '',
             lecturer: course.lecturer ?? 'Unassigned',
-            enrolled: Number(course.student_count ?? course.enrolled ?? course.progress ?? 0),
+            enrolled: Number(course.student_count ?? course.enrolled ?? 0),
             status: course.status ?? 'active',
             avgScore: Number(course.avg_score ?? 0),
             progress: Number(course.progress ?? 0),
@@ -379,10 +379,11 @@ export default function Admin({ onNavigate }: { onNavigate: (v: AppView) => void
     return students.map(s => {
       const sLevel = String(s.level || '').trim().toLowerCase()
       const matchingCourses = sLevel ? allCourses.filter(c => String(c.level || '').trim().toLowerCase() === sLevel) : []
-      const avgCompletion = matchingCourses.length
-        ? Math.round(matchingCourses.reduce((sum, c) => sum + (c.progress || 0), 0) / matchingCourses.length)
-        : 0
-      return { ...s, courses: matchingCourses.length, completion: avgCompletion }
+      return {
+        ...s,
+        courses: Number(s.courses ?? matchingCourses.length),
+        completion: Number(s.completion ?? 0),
+      }
     })
   }, [students, allCourses])
 

@@ -662,7 +662,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       // navigating away mid-wizard, generating again before finishing) sits here forever
       // with no schedule, right alongside the real published quiz for the same tier —
       // which is exactly what looks like "the dates never saved."
-      const list = (data.quizzes || []).filter((q: any) => q.status !== 'draft')
+      const list = (data.quizzes || []).filter((q: any) => !['draft', 'archived'].includes(q.status))
       setPublishedQuizzes(list)
       setScheduleDrafts(prev => {
         const next = { ...prev }
@@ -1230,7 +1230,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
   const [clearingQuizzes, setClearingQuizzes] = useState(false)
 
   async function handleClearAllQuizzes() {
-    if (!window.confirm('⚠️ This will permanently delete ALL quizzes, questions, and student attempt records. This cannot be undone. Proceed?')) return
+    if (!window.confirm('Archive all published quizzes? Students will no longer see them, but questions, scores, attempts, and integrity records will be preserved.')) return
     setClearingQuizzes(true)
     try {
       const res = await fetch(`${API_BASE}/api/quizzes/all`, { method: 'DELETE' })
@@ -1239,7 +1239,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
         alert(`Failed to clear quizzes: ${extractErrorMessage(err, res.statusText)}`)
         return
       }
-      alert('✅ All quizzes, questions, and attempts have been cleared successfully.')
+      alert('All quizzes were archived. Student scores and assessment records were preserved.')
       setGenerated(false)
       setWizardStep(1)
       setGeneratedQuestionsByTier({ Foundational: [], Intermediate: [], Mastery: [] })
@@ -2354,12 +2354,12 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                     {clearingQuizzes ? (
                       <>
                         <span className="w-4 h-4 border-2 border-red-400/40 border-t-red-500 rounded-full animate-spin" />
-                        <span>Clearing All Quizzes...</span>
+                        <span>Archiving Quizzes...</span>
                       </>
                     ) : (
                       <>
-                        <i className="fa-solid fa-trash-can" />
-                        <span>Clear All Quizzes & Attempts</span>
+                        <i className="fa-solid fa-box-archive" />
+                        <span>Archive All Published Quizzes</span>
                       </>
                     )}
                   </button>

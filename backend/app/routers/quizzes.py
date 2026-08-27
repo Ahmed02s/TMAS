@@ -1519,32 +1519,20 @@ def publish_quiz(payload: PublishQuizRequest, _claims: dict = Depends(require_ro
 
 @router.delete('/all')
 def delete_all_quizzes(_claims: dict = Depends(require_roles('lecturer', 'admin', 'administrator'))) -> dict[str, Any]:
+    """Archive quizzes without destroying questions, scores, or integrity history.
+
+    The legacy route name is retained for frontend compatibility, but this operation is
+    deliberately reversible at the data layer and preserves assessment audit records.
+    """
     ensure_supabase_enabled()
-
-    # Delete all quiz attempts first (foreign key dependency)
-    try:
-        attempts_resp = supabase.table('quiz_attempts').delete().neq('id', 0).execute()
-        if supabase_failed(attempts_resp):
-            raise HTTPException(status_code=502, detail=supabase_error_message(attempts_resp, 'Failed to delete quiz attempts'))
-    except _postgrest_exceptions.APIError as exc:
-        if not _is_missing_table_error(exc):
-            raise HTTPException(status_code=502, detail=str(exc))
-
-    # Delete all quiz questions
-    try:
-        questions_resp = supabase.table('quiz_questions').delete().neq('id', 0).execute()
-        if supabase_failed(questions_resp):
-            raise HTTPException(status_code=502, detail=supabase_error_message(questions_resp, 'Failed to delete quiz questions'))
-    except _postgrest_exceptions.APIError as exc:
-        if not _is_missing_table_error(exc):
-            raise HTTPException(status_code=502, detail=str(exc))
-
-    # Delete all quizzes
-    quizzes_resp = supabase.table('quizzes').delete().neq('id', 0).execute()
+    quizzes_resp = supabase.table('quizzes').update({
+        'status': 'archived',
+        'is_published': False,
+    }).neq('status', 'archived').execute()
     if supabase_failed(quizzes_resp):
-        raise HTTPException(status_code=502, detail=supabase_error_message(quizzes_resp, 'Failed to delete quizzes'))
+        raise HTTPException(status_code=502, detail=supabase_error_message(quizzes_resp, 'Failed to archive quizzes'))
 
-    return {'message': 'All quizzes, questions, and attempts have been deleted successfully.'}
+    return {'message': 'Quizzes archived. Questions, scores, attempts, and integrity records were preserved.'}
 
 
 class QuizStartRequest(BaseModel):
@@ -2280,7 +2268,7 @@ def list_available_quizzes(
         # Drafts are persisted the moment a lecturer generates a bank (so it shows up in
         # their Question Banks archive immediately), but haven't been through the schedule
         # step yet — students must never see them, not even as a locked/upcoming entry.
-        if str(quiz.get('status') or '').lower() == 'draft':
+        if str(quiz.get('status') or '').lower() in {'draft', 'archived'} or quiz.get('is_published') is False:
             continue
 
         quiz_dict = dict(quiz)

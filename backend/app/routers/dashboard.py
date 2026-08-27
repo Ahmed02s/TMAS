@@ -87,6 +87,39 @@ def list_students(
             course_pairs = {(course.get('level'), course.get('program')) for course in (course_resp.data or [])}
             students = [student for student in students if (student.get('level'), student.get('program')) in course_pairs]
 
+    # Attach real per-student learning progress. Course eligibility follows the same
+    # level/program rules used throughout the system; completion combines reading and
+    # quiz completion and never borrows a class-wide percentage from another student.
+    try:
+        courses_query = supabase.table('courses').select('code,level,program,status')
+        if lecturer and lecturer.strip():
+            courses_query = courses_query.ilike('lecturer', f'%{lecturer.strip()}%')
+        courses_resp = courses_query.execute()
+        if not supabase_failed(courses_resp):
+            from app.routers.courses import get_course_student_progress
+
+            summaries: dict[str, list[int]] = {str(s.get('id')): [] for s in students}
+            enrolled: dict[str, int] = {str(s.get('id')): 0 for s in students}
+            for course in courses_resp.data or []:
+                if str(course.get('status') or 'active').lower() != 'active' or not course.get('code'):
+                    continue
+                result = get_course_student_progress(course['code'], course.get('level'), course.get('program'))
+                for progress_row in result.get('students', []):
+                    sid = str(progress_row.get('id'))
+                    if sid in summaries:
+                        enrolled[sid] += 1
+                        summaries[sid].append(int(progress_row.get('progress') or 0))
+            for student in students:
+                sid = str(student.get('id'))
+                values = summaries.get(sid, [])
+                student['courses'] = enrolled.get(sid, 0)
+                student['completion'] = round(sum(values) / len(values)) if values else 0
+    except Exception:
+        # User management must remain available if analytics enrichment temporarily fails.
+        for student in students:
+            student.setdefault('courses', 0)
+            student.setdefault('completion', 0)
+
     return {'students': [_strip_password(s) for s in students]}
 
 

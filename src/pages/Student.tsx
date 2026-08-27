@@ -21,6 +21,9 @@ type Course = {
   program: string
   lecturer: string
   progress: number
+  materialsRead: number
+  readingProgress: number
+  quizProgress: number
   materials: number
   quizzesTotal: number
   quizzesDone: number
@@ -104,6 +107,9 @@ function mapCourse(course: Record<string, any>): Course {
     program: course.program,
     lecturer: course.lecturer,
     progress: course.progress ?? 0,
+    materialsRead: course.materials_read ?? 0,
+    readingProgress: course.reading_progress ?? 0,
+    quizProgress: course.quiz_progress ?? 0,
     materials: course.materials ?? 0,
     quizzesTotal: course.quizzes_total ?? 0,
     quizzesDone: course.quizzes_done ?? 0,
