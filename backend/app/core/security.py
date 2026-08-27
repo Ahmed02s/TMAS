@@ -58,6 +58,28 @@ def create_access_token(*, user_id: str, email: str, role: str) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
+def create_attempt_token(*, quiz_id: int, student_id: str, lifetime_seconds: int) -> str:
+    """Short-lived capability used only by sendBeacon assessment-forfeit requests."""
+    now = int(time.time())
+    return jwt.encode({
+        'sub': str(student_id),
+        'quiz_id': int(quiz_id),
+        'purpose': 'quiz_attempt',
+        'iat': now,
+        'exp': now + max(60, int(lifetime_seconds)),
+    }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def verify_attempt_token(token: str, *, quiz_id: int, student_id: str) -> bool:
+    claims = decode_access_token(token)
+    return bool(
+        claims
+        and claims.get('purpose') == 'quiz_attempt'
+        and str(claims.get('sub') or '') == str(student_id)
+        and int(claims.get('quiz_id') or -1) == int(quiz_id)
+    )
+
+
 def decode_access_token(token: str) -> dict[str, Any] | None:
     try:
         return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])

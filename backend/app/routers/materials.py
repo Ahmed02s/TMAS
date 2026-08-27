@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.core.security import get_current_claims, get_current_claims_optional, require_roles
+from app.core.authorization import require_course_mutation_access
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 from app.core.rate_limit import rate_limiter
 from app.services import office_convert
@@ -477,13 +478,14 @@ async def upload_materials(
     course: str = Form(...),
     lecturer: str = Form(...),
     files: list[UploadFile] = File(...),
-    _claims: dict[str, Any] = Depends(require_roles('lecturer', 'admin', 'administrator')),
+    claims: dict[str, Any] = Depends(require_roles('lecturer', 'admin', 'administrator')),
 ) -> dict[str, Any]:
     ensure_supabase_enabled()
     lecturer = lecturer.strip()
     course = course.strip()
     if not course or not lecturer:
         raise HTTPException(status_code=400, detail='Course and lecturer are required')
+    require_course_mutation_access(claims, course, allow_admin=True)
 
     if not files:
         raise HTTPException(status_code=400, detail='No files uploaded')
@@ -580,7 +582,7 @@ async def upload_materials(
 @router.delete('/{material_id}')
 def delete_material(
     material_id: int,
-    _claims: dict[str, Any] = Depends(require_roles('lecturer', 'admin', 'administrator')),
+    claims: dict[str, Any] = Depends(require_roles('lecturer', 'admin', 'administrator')),
 ) -> dict[str, Any]:
     """Deletes a material the lecturer no longer wants students to see. Best-effort cleans
     up the underlying file (local disk + Supabase Storage) and any reading-progress rows,
@@ -592,6 +594,7 @@ def delete_material(
     if not response.data:
         raise HTTPException(status_code=404, detail='Material not found')
     material = response.data[0]
+    require_course_mutation_access(claims, material.get('course'), allow_admin=True)
 
     try:
         local_path = _resolve_material_path(material)
@@ -624,7 +627,7 @@ def delete_material(
 @router.post('/{material_id}/mark_processed')
 def mark_material_processed(
     material_id: int,
-    _claims: dict[str, Any] = Depends(require_roles('lecturer', 'admin', 'administrator')),
+    claims: dict[str, Any] = Depends(require_roles('lecturer', 'admin', 'administrator')),
 ):
     ensure_supabase_enabled()
     response = supabase.table('materials').select('*').eq('id', material_id).limit(1).execute()
@@ -632,6 +635,7 @@ def mark_material_processed(
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase get material failed'))
     if not response.data:
         raise HTTPException(status_code=404, detail='Material not found')
+    require_course_mutation_access(claims, response.data[0].get('course'), allow_admin=True)
 
     update_resp = supabase.table('materials').update({'status': 'Processed'}).eq('id', material_id).execute()
     if supabase_failed(update_resp):

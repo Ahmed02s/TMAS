@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.security import require_roles
+from app.core.authorization import require_course_mutation_access
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,18 @@ def list_courses(
     courses = response.data or []
     if level or program:
         courses = [course for course in courses if _course_matches_level_program(course, level, program)]
+
+    # Explicit enrollment becomes authoritative once the migration is available.
+    # Older deployments safely retain the legacy level/program behavior.
+    if student_id:
+        try:
+            enrollment_resp = supabase.table('course_enrollments').select('course_id,status') \
+                .eq('student_id', student_id).in_('status', ['active', 'completed']).execute()
+            if not supabase_failed(enrollment_resp):
+                enrolled_ids = {str(row.get('course_id')) for row in (enrollment_resp.data or [])}
+                courses = [course for course in courses if str(course.get('id')) in enrolled_ids]
+        except Exception:
+            logger.info('list_courses: course_enrollments unavailable; using legacy scope')
 
     if not courses:
         return {'courses': courses}
@@ -366,10 +379,11 @@ def get_course_student_progress(
     course_code: str,
     level: str | None = None,
     program: str | None = None,
-    _claims: dict = Depends(require_roles('admin', 'administrator', 'lecturer')),
+    claims: dict = Depends(require_roles('admin', 'administrator', 'lecturer')),
 ) -> dict[str, Any]:
     """Return each enrolled student with their quiz attempts and material count for this course."""
     ensure_supabase_enabled()
+    require_course_mutation_access(claims, course_code, allow_admin=True)
 
     # 1. Determine level + program — try DB lookup first, fall back to query params
     c_level   = str(level   or '').strip().lower()
@@ -406,6 +420,17 @@ def get_course_student_progress(
         if str(s.get('level') or '').strip().lower() == c_level
         and (not c_program or str(s.get('program') or '').strip().lower() == c_program)
     ]
+
+    try:
+        course_resp = supabase.table('courses').select('id').ilike('code', course_code).limit(1).execute()
+        if not supabase_failed(course_resp) and course_resp.data:
+            enrollment_resp = supabase.table('course_enrollments').select('student_id,status') \
+                .eq('course_id', course_resp.data[0]['id']).in_('status', ['active', 'completed']).execute()
+            if not supabase_failed(enrollment_resp):
+                enrolled_ids = {str(row.get('student_id')) for row in (enrollment_resp.data or [])}
+                students = [s for s in (stu_resp.data or []) if str(s.get('id')) in enrolled_ids]
+    except Exception:
+        logger.info('get_course_student_progress: course_enrollments unavailable; using legacy rules')
 
     if not students:
         return {'students': [], 'course': course_code, 'debug': {'c_level': c_level, 'c_program': c_program}}

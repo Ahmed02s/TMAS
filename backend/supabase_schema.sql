@@ -125,6 +125,28 @@ CREATE TABLE IF NOT EXISTS quiz_questions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS course_enrollments (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  course_id BIGINT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'withdrawn')),
+  enrolled_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (course_id, student_id)
+);
+
+CREATE TABLE IF NOT EXISTS course_lecturers (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  course_id BIGINT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  lecturer_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  assigned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (course_id, lecturer_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_course_enrollments_student
+  ON course_enrollments(student_id, status);
+CREATE INDEX IF NOT EXISTS idx_course_lecturers_lecturer
+  ON course_lecturers(lecturer_id);
+
 -- Existing deployments predate question_type. Without this column the backend's safe-write
 -- fallback drops every generated type and all questions reload as MCQ.
 ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS question_type TEXT NOT NULL DEFAULT 'MCQ';
@@ -147,6 +169,10 @@ CREATE TABLE IF NOT EXISTS quiz_attempts (
 ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS answers JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS answers_recorded BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS submission_reason TEXT NOT NULL DEFAULT 'normal';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_quiz_attempts_one_active
+  ON quiz_attempts(quiz_id, student_id)
+  WHERE status = 'in_progress';
 
 CREATE TABLE IF NOT EXISTS quiz_attempt_review_actions (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

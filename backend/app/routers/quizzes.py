@@ -13,7 +13,8 @@ from postgrest import exceptions as _postgrest_exceptions
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.core.security import get_current_claims, get_current_claims_optional, require_roles
+from app.core.security import create_attempt_token, get_current_claims, get_current_claims_optional, require_roles, verify_attempt_token
+from app.core.authorization import lecturer_course_codes as assigned_lecturer_course_codes, normalize_course_code, require_lecturer_course
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 from app.core.config import QROK_API_KEY, QROK_API_URL
 
@@ -78,18 +79,7 @@ def _verify_acting_as_self_if_authenticated(claims: dict[str, Any] | None, stude
 
 def _require_quiz_review_access(quiz: dict[str, Any], claims: dict[str, Any]) -> None:
     """Lecturers may review only quizzes belonging to courses assigned to them."""
-    if str(claims.get('role') or '').lower() in ('admin', 'administrator'):
-        return
-    user_response = supabase.table('users').select('name').eq('id', claims.get('sub')).limit(1).execute()
-    if supabase_failed(user_response) or not user_response.data:
-        raise HTTPException(status_code=403, detail='Lecturer profile could not be verified')
-    lecturer_name = str(user_response.data[0].get('name') or '').strip()
-    course_code = str(quiz.get('course') or '').strip()
-    if not lecturer_name or not course_code:
-        raise HTTPException(status_code=403, detail='Quiz ownership could not be verified')
-    course_response = supabase.table('courses').select('id').eq('code', course_code).ilike('lecturer', f'%{lecturer_name}%').limit(1).execute()
-    if supabase_failed(course_response) or not course_response.data:
-        raise HTTPException(status_code=403, detail='You can review only quizzes assigned to your courses')
+    require_lecturer_course(claims, quiz.get('course'))
 
 
 def _clean_material_title(title: str) -> str:
@@ -655,7 +645,7 @@ def _finalize_overdue_attempts(quizzes: list[dict[str, Any]], student_id: str) -
             supabase.table('quiz_attempts').update({
                 'status': 'missed',
                 'attempted_at': datetime.now(timezone.utc).isoformat(),
-            }).eq('id', attempt['id']).execute()
+            }).eq('id', attempt['id']).eq('status', 'in_progress').execute()
 
     # Insert missed records for overdue quizzes with no attempt at all
     missing = [quiz for quiz in quizzes if quiz.get('id') not in existing_any and quiz.get('id') in overdue_quiz_ids]
@@ -746,7 +736,7 @@ def _finalize_in_progress_attempts(student_id: str, now: datetime) -> None:
                     'grade': 'F',
                     'passed': False,
                     'attempted_at': now.isoformat(),
-                }).eq('id', attempt['id']).execute()
+                }).eq('id', attempt['id']).eq('status', 'in_progress').execute()
             except Exception:
                 logger.exception('_finalize_in_progress_attempts: failed to mark attempt id=%s as missed', attempt.get('id'))
                 continue
@@ -773,11 +763,14 @@ def _finalize_never_attempted_expired_quizzes(student_id: str, now: datetime) ->
         return
 
     try:
-        allowed_codes = set(_fetch_allowed_course_codes(student_level, student_program)) if student_level else set()
+        explicit_codes = _fetch_enrolled_course_codes(student_id)
+        allowed_codes = explicit_codes if explicit_codes is not None else (
+            set(_fetch_allowed_course_codes(student_level, student_program)) if student_level else set()
+        )
     except Exception:
         logger.exception('_finalize_never_attempted_expired_quizzes: failed to resolve allowed course codes for student_id=%s', student_id)
         return
-    target_digit = _extract_level_digit(student_level) if student_level else None
+    target_digit = _extract_level_digit(student_level) if student_level and explicit_codes is None else None
 
     expired_eligible: dict[int, dict[str, Any]] = {}
     for quiz in _normalize_quiz_rows(all_quizzes_resp.data):
@@ -789,7 +782,7 @@ def _finalize_never_attempted_expired_quizzes(student_id: str, now: datetime) ->
         if qid is None:
             continue
 
-        if student_level:
+        if student_level or explicit_codes is not None:
             course_code = str(quiz.get('course') or '')
             title = str(quiz.get('title') or '')
             clean_q = _clean_code_str(course_code)
@@ -1087,6 +1080,27 @@ def _fetch_allowed_course_codes(level: str | None, program: str | None) -> list[
     return list(allowed_codes)
 
 
+def _fetch_enrolled_course_codes(student_id: str | None) -> set[str] | None:
+    """Return explicit enrolled course codes, or None before the migration exists."""
+    if not student_id:
+        return None
+    try:
+        response = supabase.table('course_enrollments').select('course_id,status').eq('student_id', student_id).execute()
+        if supabase_failed(response):
+            return None
+        course_ids = [row.get('course_id') for row in (response.data or []) if row.get('status') in ('active', 'completed')]
+        if not course_ids:
+            return set()
+        courses_response = supabase.table('courses').select('code').in_('id', course_ids).execute()
+        if supabase_failed(courses_response):
+            raise HTTPException(status_code=502, detail=supabase_error_message(courses_response, 'Supabase fetch enrolled courses failed'))
+        return {_clean_code_str(course.get('code')) for course in (courses_response.data or []) if course.get('code')}
+    except HTTPException:
+        raise
+    except Exception:
+        return None
+
+
 def _student_level_program(student_id: str) -> tuple[str | None, str | None]:
     response = supabase.table('users').select('level,program,role').eq('id', student_id).limit(1).execute()
     if supabase_failed(response):
@@ -1099,7 +1113,10 @@ def _student_level_program(student_id: str) -> tuple[str | None, str | None]:
     return student.get('level'), student.get('program')
 
 
-def _is_course_allowed_for_student(course_code: str, level: str | None, program: str | None, quiz_title: str = '') -> bool:
+def _is_course_allowed_for_student(course_code: str, level: str | None, program: str | None, quiz_title: str = '', student_id: str | None = None) -> bool:
+    enrolled_codes = _fetch_enrolled_course_codes(student_id)
+    if enrolled_codes is not None:
+        return _clean_code_str(course_code) in enrolled_codes
     if not level:
         return True
     allowed_codes = set(_fetch_allowed_course_codes(level, program))
@@ -1143,8 +1160,9 @@ def _course_generation_label(course_code: str, course_title: str | None) -> str:
 
 
 @router.post('/generate')
-def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
+def generate_quiz(payload: GenerateQuizRequest, claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     ensure_supabase_enabled()
+    require_lecturer_course(claims, payload.course)
     try:
         if payload.material_ids:
             response = supabase.table('materials').select('*').in_('id', payload.material_ids).execute()
@@ -1340,14 +1358,16 @@ def generate_quiz(payload: GenerateQuizRequest, _claims: dict = Depends(require_
 
 
 @router.post('/publish')
-def publish_quiz(payload: PublishQuizRequest, _claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
+def publish_quiz(payload: PublishQuizRequest, claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     ensure_supabase_enabled()
+    require_lecturer_course(claims, payload.course)
 
     # If multiple quiz sets are provided (tiered generation), publish each separately
     if payload.quizzes:
         published: list[dict[str, Any]] = []
         all_questions: dict[int, list[dict[str, Any]]] = {}
         for q in payload.quizzes:
+            require_lecturer_course(claims, q.get('course') or payload.course)
             due_dt = _parse_datetime(q.get('due_date'))
             if due_dt is None:
                 raise HTTPException(status_code=400, detail='Quiz due date must be a valid ISO datetime string')
@@ -1594,7 +1614,7 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
     quiz = _normalize_quiz_row(response.data[0])
 
     student_level, student_program = _student_level_program(payload.student_id)
-    if not _is_course_allowed_for_student(quiz.get('course', ''), student_level, student_program):
+    if not _is_course_allowed_for_student(quiz.get('course', ''), student_level, student_program, student_id=payload.student_id):
         raise HTTPException(status_code=403, detail='Student is not allowed to access this quiz')
 
     now = datetime.now(timezone.utc)
@@ -1613,6 +1633,11 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
         raise HTTPException(status_code=403, detail='No attempts remaining for this quiz')
 
     time_limit_minutes = int(quiz.get('time_limit') or 0)
+    attempt_token = create_attempt_token(
+        quiz_id=quiz_id,
+        student_id=payload.student_id,
+        lifetime_seconds=max(3600, time_limit_minutes * 60 + TIME_LIMIT_GRACE_SECONDS + 300),
+    )
 
     # Already has an in-progress attempt — return it (idempotent), unless its
     # personal time limit has already elapsed, in which case it is finalized as missed.
@@ -1627,7 +1652,7 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
                 'grade': 'F',
                 'passed': False,
                 'attempted_at': now.isoformat(),
-            }).eq('id', existing['id']).execute()
+            }).eq('id', existing['id']).eq('status', 'in_progress').execute()
             raise HTTPException(status_code=403, detail='Time limit exceeded for your previous attempt; it has been recorded as missed.')
 
         expires_at = _format_datetime(started_at + timedelta(minutes=time_limit_minutes)) if (time_limit_minutes and started_at) else None
@@ -1638,6 +1663,7 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
             'started_at': existing.get('attempted_at'),
             'expires_at': expires_at,
             'saved_answers': _load_answer_draft(quiz_id, payload.student_id),
+            'attempt_token': attempt_token,
         }
 
     # Fetch total question count
@@ -1699,11 +1725,28 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
             'started_at': started_at_iso,
             'expires_at': expires_at,
             'saved_answers': {},
+            'attempt_token': attempt_token,
         }
 
     # First attempt: record an in-progress row with score 0 immediately.
     insert_response = _safe_insert('quiz_attempts', attempt_record)
     if supabase_failed(insert_response):
+        # A partial unique index permits only one active attempt. If two start
+        # requests race, return the winning row as an idempotent response.
+        raced_attempts = _get_student_attempts(quiz_id, payload.student_id)
+        raced_active = next((row for row in raced_attempts if row.get('status') == 'in_progress'), None)
+        if raced_active:
+            raced_started_at = _parse_datetime(raced_active.get('attempted_at'))
+            expires_at = _format_datetime(raced_started_at + timedelta(minutes=time_limit_minutes)) if (time_limit_minutes and raced_started_at) else None
+            return {
+                'attempt': raced_active,
+                'already_started': True,
+                'time_limit': time_limit_minutes,
+                'started_at': raced_active.get('attempted_at'),
+                'expires_at': expires_at,
+                'saved_answers': _load_answer_draft(quiz_id, payload.student_id),
+                'attempt_token': attempt_token,
+            }
         raise HTTPException(status_code=502, detail=supabase_error_message(insert_response, 'Supabase insert quiz attempt failed'))
     _record_assessment_started(quiz_id, payload.student_id)
 
@@ -1715,6 +1758,7 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
         'started_at': started_at_iso,
         'expires_at': expires_at,
         'saved_answers': {},
+        'attempt_token': attempt_token,
     }
 
 
@@ -1931,7 +1975,7 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
     quiz = _normalize_quiz_row(response.data[0])
 
     student_level, student_program = _student_level_program(payload.student_id)
-    if not _is_course_allowed_for_student(quiz.get('course', ''), student_level, student_program):
+    if not _is_course_allowed_for_student(quiz.get('course', ''), student_level, student_program, student_id=payload.student_id):
         raise HTTPException(status_code=403, detail='Student is not allowed to access this quiz')
 
     now = datetime.now(timezone.utc)
@@ -1965,7 +2009,7 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
         started_at = _parse_datetime(in_progress_attempts[0].get('attempted_at'))
         if started_at and (now - started_at).total_seconds() > time_limit_minutes * 60 + TIME_LIMIT_GRACE_SECONDS:
             timed_out_answers = _load_answer_draft(quiz_id, payload.student_id)
-            _safe_update('quiz_attempts', {
+            timeout_resp = supabase.table('quiz_attempts').update({
                 'status': 'missed',
                 'score': 0,
                 'grade': 'F',
@@ -1974,7 +2018,9 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
                 'answers_recorded': bool(timed_out_answers),
                 'submission_reason': 'timeout',
                 'attempted_at': now.isoformat(),
-            }, 'id', [in_progress_attempt_id])
+            }).eq('id', in_progress_attempt_id).eq('status', 'in_progress').execute()
+            if supabase_failed(timeout_resp):
+                raise HTTPException(status_code=502, detail=supabase_error_message(timeout_resp, 'Supabase timeout finalization failed'))
             raise HTTPException(status_code=403, detail='Time limit exceeded. Your attempt has been recorded as missed with a score of 0.')
 
     saved_answers = _load_answer_draft(quiz_id, payload.student_id)
@@ -2026,7 +2072,7 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
 
     if in_progress_attempt_id:
         # Update the existing in-progress record to completed
-        update_resp = _safe_update('quiz_attempts', {
+        update_resp = supabase.table('quiz_attempts').update({
             'score': score,
             'out_of': total_questions,
             'grade': grade,
@@ -2036,9 +2082,11 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
             'answers_recorded': True,
             'submission_reason': payload.submission_reason,
             'attempted_at': datetime.now(timezone.utc).isoformat(),
-        }, 'id', [in_progress_attempt_id])
+        }).eq('id', in_progress_attempt_id).eq('status', 'in_progress').execute()
         if supabase_failed(update_resp):
             raise HTTPException(status_code=502, detail=supabase_error_message(update_resp, 'Supabase update quiz attempt failed'))
+        if not update_resp.data:
+            raise HTTPException(status_code=409, detail='This quiz attempt has already been finalized')
     else:
         # Legacy path: no in-progress record, insert directly
         insert_response = _safe_insert('quiz_attempts', attempt_record)
@@ -2056,6 +2104,7 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
 
 class QuizForfeitRequest(BaseModel):
     student_id: str
+    attempt_token: str | None = None
 
 
 @router.post('/{quiz_id}/forfeit')
@@ -2071,6 +2120,8 @@ def forfeit_quiz(quiz_id: int, payload: QuizForfeitRequest, claims: dict | None 
     """
     if claims is not None:
         _verify_acting_as_self(claims, payload.student_id)
+    elif not payload.attempt_token or not verify_attempt_token(payload.attempt_token, quiz_id=quiz_id, student_id=payload.student_id):
+        raise HTTPException(status_code=401, detail='A valid attempt token is required')
     ensure_supabase_enabled()
     if not payload.student_id:
         raise HTTPException(status_code=400, detail='student_id is required')
@@ -2083,7 +2134,7 @@ def forfeit_quiz(quiz_id: int, payload: QuizForfeitRequest, claims: dict | None 
 
     attempt = in_progress[0]
     saved_answers = _load_answer_draft(quiz_id, payload.student_id)
-    update_resp = _safe_update('quiz_attempts', {
+    update_resp = supabase.table('quiz_attempts').update({
         'status': 'missed',
         'score': 0,
         'grade': 'F',
@@ -2092,9 +2143,11 @@ def forfeit_quiz(quiz_id: int, payload: QuizForfeitRequest, claims: dict | None 
         'answers_recorded': bool(saved_answers),
         'submission_reason': 'left_assessment',
         'attempted_at': datetime.now(timezone.utc).isoformat(),
-    }, 'id', [attempt['id']])
+    }).eq('id', attempt['id']).eq('status', 'in_progress').execute()
     if supabase_failed(update_resp):
         raise HTTPException(status_code=502, detail=supabase_error_message(update_resp, 'Supabase forfeit quiz attempt failed'))
+    if not update_resp.data:
+        return {'status': 'no_active_attempt'}
 
     return {'status': 'forfeited', 'quiz_id': quiz_id}
 
@@ -2147,11 +2200,14 @@ def get_quiz_stats() -> dict[str, Any]:
 
 
 @router.get('')
-def list_all_quizzes(course: str | None = None, lecturer: str | None = None, _claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
+def list_all_quizzes(course: str | None = None, lecturer: str | None = None, claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     """Lecturer-facing management listing: every quiz for a course (or all of a lecturer's
     courses), with a live-computed status so a stale DB 'status' column never misleads a
     lecturer trying to figure out why a quiz is still locked/closed."""
     ensure_supabase_enabled()
+    allowed_course_codes = assigned_lecturer_course_codes(claims)
+    if course:
+        require_lecturer_course(claims, course)
     query = supabase.table('quizzes').select('*')
     lecturer_course_codes: set[str] | None = None
     if course:
@@ -2182,6 +2238,8 @@ def list_all_quizzes(course: str | None = None, lecturer: str | None = None, _cl
     now = datetime.now(timezone.utc)
     quizzes = []
     for quiz in _normalize_quiz_rows(response.data):
+        if normalize_course_code(quiz.get('course')) not in allowed_course_codes:
+            continue
         if lecturer_course_codes is not None and _clean_code_str(quiz.get('course')) not in lecturer_course_codes:
             continue
         q = dict(quiz)
@@ -2196,7 +2254,7 @@ def list_all_quizzes(course: str | None = None, lecturer: str | None = None, _cl
 
 
 @router.get('/{quiz_id}/full')
-def get_quiz_full(quiz_id: int, _claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
+def get_quiz_full(quiz_id: int, claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     """Lecturer-only view of a quiz's complete question bank (including correct answers),
     with no lock/open-date restriction — used by the Question Banks archive to preview and
     export a hardcopy of what was generated, independent of whether students can see it yet."""
@@ -2246,6 +2304,7 @@ def archive_individual_quiz(quiz_id: int, claims: dict = Depends(require_roles('
         raise HTTPException(status_code=404, detail='Quiz not found')
     quiz = _normalize_quiz_row(response.data[0])
     _require_quiz_review_access(quiz, claims)
+    _require_quiz_review_access(quiz, claims)
     status = str(quiz.get('status') or '').lower()
     if status == 'draft':
         raise HTTPException(status_code=409, detail='Draft question banks cannot be archived')
@@ -2288,7 +2347,7 @@ class UpdateQuizScheduleRequest(BaseModel):
 
 
 @router.patch('/{quiz_id}/schedule')
-def update_quiz_schedule(quiz_id: int, payload: UpdateQuizScheduleRequest, _claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
+def update_quiz_schedule(quiz_id: int, payload: UpdateQuizScheduleRequest, claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     """Lets a lecturer fix a quiz's open/close window (or duration/pass score/attempts)
     after it has already been published — e.g. to recover a quiz that got stuck 'scheduled'
     because of a bad date, without having to delete and regenerate the whole question bank."""
@@ -2299,6 +2358,7 @@ def update_quiz_schedule(quiz_id: int, payload: UpdateQuizScheduleRequest, _clai
     if not response.data:
         raise HTTPException(status_code=404, detail='Quiz not found')
     quiz = _normalize_quiz_row(response.data[0])
+    _require_quiz_review_access(quiz, claims)
 
     open_dt = _parse_datetime(payload.open_date) if payload.open_date is not None else _parse_datetime(quiz.get('open_date'))
     if payload.open_date is not None and open_dt is None:
@@ -2365,7 +2425,8 @@ def list_available_quizzes(
 
     all_quizzes = _normalize_quiz_rows(response.data)
     target_digit = _extract_level_digit(level) if level else None
-    allowed_codes = set(_fetch_allowed_course_codes(level, program)) if level else set()
+    enrolled_codes = _fetch_enrolled_course_codes(student_id)
+    allowed_codes = enrolled_codes if enrolled_codes is not None else (set(_fetch_allowed_course_codes(level, program)) if level else set())
 
     attempts_by_quiz: dict[int, int] = {}
     if student_id:
@@ -2398,13 +2459,13 @@ def list_available_quizzes(
             if quiz_id is not None and attempts_by_quiz.get(quiz_id, 0) >= 1:
                 continue
 
-        if level:
+        if level or enrolled_codes is not None:
             quiz_course = str(quiz_dict.get('course') or '')
             quiz_title = str(quiz_dict.get('title') or '')
             clean_q = _clean_code_str(quiz_course)
             q_digit = _extract_level_digit(quiz_course) or _extract_level_digit(quiz_title)
 
-            matches_level = (
+            matches_level = clean_q in allowed_codes if enrolled_codes is not None else (
                 quiz_course in allowed_codes
                 or clean_q in allowed_codes
                 or (target_digit is not None and q_digit is not None and target_digit == q_digit)
@@ -2512,7 +2573,7 @@ def list_completed_quizzes(
         quiz = quizzes_by_id.get(quiz_id)
         if not quiz:
             continue
-        if level and not _is_course_allowed_for_student(quiz.get('course', ''), level, program, quiz.get('title', '')):
+        if (level or student_id) and not _is_course_allowed_for_student(quiz.get('course', ''), level, program, quiz.get('title', ''), student_id):
             continue
         completed.append({
             'quiz_id': quiz_id,
@@ -2555,7 +2616,7 @@ def get_quiz_details(
         raise HTTPException(status_code=403, detail=f"Quiz is locked until {open_dt_str}")
 
     if level:
-        if not _is_course_allowed_for_student(quiz.get('course', ''), level, program, quiz.get('title', '')):
+        if not _is_course_allowed_for_student(quiz.get('course', ''), level, program, quiz.get('title', ''), student_id):
             raise HTTPException(status_code=403, detail='Quiz is not available for this student level/program')
 
     questions_response = supabase.table('quiz_questions').select('*').eq('quiz_id', quiz_id).execute()

@@ -298,6 +298,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
   const [focusViolationMessage, setFocusViolationMessage] = useState('')
   const [answerSaveStatus, setAnswerSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'offline'>('idle')
   const quizAnswersRef = useRef<Record<number, string>>({})
+  const attemptTokenRef = useRef<string>('')
   const fullscreenRequiredRef = useRef(false)
   const lastFocusViolationAtRef = useRef(0)
 
@@ -579,6 +580,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
           throw new Error(extractErrorMessage(startErr, 'You have already used your attempt for this quiz.'))
         }
         const startData = await startRes.json().catch(() => ({}))
+        attemptTokenRef.current = String(startData?.attempt_token || '')
         const restoredAnswers = startData?.saved_answers && typeof startData.saved_answers === 'object'
           ? startData.saved_answers as Record<number, string>
           : {}
@@ -811,7 +813,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     isAutoSubmittingRef.current = true
 
     const student = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('tmas-user') || 'null') : null
-    const payload = JSON.stringify({ student_id: student?.id || '' })
+    const payload = JSON.stringify({ student_id: student?.id || '', attempt_token: attemptTokenRef.current })
     const url = `${API_BASE}/api/quizzes/${activeQuiz}/forfeit`
     try {
       const blob = new Blob([payload], { type: 'application/json' })

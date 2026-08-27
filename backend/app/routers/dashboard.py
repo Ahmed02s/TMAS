@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, field_validator
 
 from app.core.security import require_roles
+from app.core.authorization import lecturer_course_codes, normalize_course_code
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 
 router = APIRouter(prefix='/api/dashboard', tags=['dashboard'])
@@ -80,11 +81,15 @@ def list_students(
             # courses (e.g. "SAAKA AHMED, Med Saaka") — an exact ilike (no wildcards) only
             # matches when a course has exactly one lecturer and it matches verbatim, so any
             # co-taught course was silently excluded. The wildcard makes this a substring match.
-            course_resp = supabase.table('courses').select('level,program').ilike('lecturer', f'%{lecturer}%').execute()
+            course_resp = supabase.table('courses').select('code,level,program').execute()
             if supabase_failed(course_resp):
                 raise HTTPException(status_code=502, detail=supabase_error_message(course_resp, 'Supabase list lecturer courses failed'))
 
-            course_pairs = {(course.get('level'), course.get('program')) for course in (course_resp.data or [])}
+            allowed_codes = lecturer_course_codes(_claims) if str(_claims.get('role') or '').lower() == 'lecturer' else None
+            course_pairs = {
+                (course.get('level'), course.get('program')) for course in (course_resp.data or [])
+                if allowed_codes is None or normalize_course_code(course.get('code')) in allowed_codes
+            }
             students = [student for student in students if (student.get('level'), student.get('program')) in course_pairs]
 
     # Attach real per-student learning progress. Course eligibility follows the same
@@ -92,7 +97,8 @@ def list_students(
     # quiz completion and never borrows a class-wide percentage from another student.
     try:
         courses_query = supabase.table('courses').select('code,level,program,status')
-        if lecturer and lecturer.strip():
+        caller_is_lecturer = str(_claims.get('role') or '').lower() == 'lecturer'
+        if lecturer and lecturer.strip() and not caller_is_lecturer:
             courses_query = courses_query.ilike('lecturer', f'%{lecturer.strip()}%')
         courses_resp = courses_query.execute()
         if not supabase_failed(courses_resp):
@@ -100,10 +106,13 @@ def list_students(
 
             summaries: dict[str, list[int]] = {str(s.get('id')): [] for s in students}
             enrolled: dict[str, int] = {str(s.get('id')): 0 for s in students}
+            caller_course_codes = lecturer_course_codes(_claims) if caller_is_lecturer else None
             for course in courses_resp.data or []:
+                if caller_course_codes is not None and normalize_course_code(course.get('code')) not in caller_course_codes:
+                    continue
                 if str(course.get('status') or 'active').lower() != 'active' or not course.get('code'):
                     continue
-                result = get_course_student_progress(course['code'], course.get('level'), course.get('program'))
+                result = get_course_student_progress(course['code'], course.get('level'), course.get('program'), _claims)
                 for progress_row in result.get('students', []):
                     sid = str(progress_row.get('id'))
                     if sid in summaries:
@@ -162,10 +171,15 @@ def lecturer_analytics(lecturer: str, _claims: dict = Depends(require_roles('adm
     if not lecturer:
         return empty
 
-    courses_resp = supabase.table('courses').select('*').ilike('lecturer', f'%{lecturer}%').execute()
+    courses_resp = supabase.table('courses').select('*').execute()
     if supabase_failed(courses_resp):
         raise HTTPException(status_code=502, detail=supabase_error_message(courses_resp, 'Supabase list lecturer courses failed'))
     courses = courses_resp.data or []
+    if str(_claims.get('role') or '').lower() == 'lecturer':
+        allowed_codes = lecturer_course_codes(_claims)
+        courses = [course for course in courses if normalize_course_code(course.get('code')) in allowed_codes]
+    else:
+        courses = [course for course in courses if lecturer.lower() in str(course.get('lecturer') or '').lower()]
     if not courses:
         return empty
 
@@ -183,7 +197,7 @@ def lecturer_analytics(lecturer: str, _claims: dict = Depends(require_roles('adm
         if not code:
             continue
         try:
-            result = get_course_student_progress(code, course.get('level'), course.get('program'))
+            result = get_course_student_progress(code, course.get('level'), course.get('program'), _claims)
         except HTTPException:
             continue
 
