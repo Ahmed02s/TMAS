@@ -241,6 +241,8 @@ function mapLecturerCourse(course: Record<string, any>) {
     completion: course.progress ?? course.completion ?? 0,
     avgScore: course.avg_score ?? course.avgScore ?? 0,
     students: course.student_count ?? course.students ?? 0,
+    activeQuizzes: course.active_quizzes_total ?? course.quizzes_total ?? 0,
+    archivedQuizzes: course.archived_quizzes_total ?? 0,
   }
 }
 
@@ -1733,7 +1735,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                         {[
                           { label: 'Students', val: (c as any).student_count ?? 0 },
                           { label: 'Materials', val: c.materials ?? 0 },
-                          { label: 'Quizzes', val: (c as any).quizzes_total ?? 0 },
+                          { label: `${c.activeQuizzes} active · ${c.archivedQuizzes} archived`, val: (c as any).quizzes_total ?? 0 },
                         ].map((stat, j) => (
                           <div key={j} className="text-center bg-muted/50 rounded-xl py-2">
                             <p className="text-lg font-bold font-mono text-foreground">{stat.val}</p>
@@ -1840,6 +1842,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                             <div className="bg-muted/50 rounded-xl py-3 text-center">
                               <p className="text-xl font-bold font-mono text-foreground">{course.quizzes_total ?? 0}</p>
                               <p className="text-xs text-muted-foreground mt-0.5">Quizzes</p>
+                              <p className="text-[10px] text-muted-foreground">{course.active_quizzes_total ?? 0} active · {course.archived_quizzes_total ?? 0} archived</p>
                             </div>
                           </div>
 
@@ -3029,10 +3032,24 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                       <span className="text-xs text-muted-foreground">{quizzes.length} question bank{quizzes.length === 1 ? '' : 's'}</span>
                     </div>
                     <div className="space-y-3">
-                      {quizzes.map((quiz: any) => {
+                      {[...quizzes].sort((a: any, b: any) => String(b.created_at || '').localeCompare(String(a.created_at || ''))).map((quiz: any, quizIndex: number, sortedQuizzes: any[]) => {
                         const isExpanded = expandedBankQuizId === quiz.id
                         const isLoadingQuestions = loadingBankQuestionsId === quiz.id
                         const questions = bankQuestionsById[quiz.id] || []
+                        const generatedDate = quiz.created_at ? new Date(quiz.created_at) : null
+                        const generatedDateKey = generatedDate && !Number.isNaN(generatedDate.valueOf())
+                          ? generatedDate.toISOString().slice(0, 10)
+                          : 'unknown'
+                        const previousDate = quizIndex > 0 && sortedQuizzes[quizIndex - 1]?.created_at
+                          ? new Date(sortedQuizzes[quizIndex - 1].created_at)
+                          : null
+                        const previousDateKey = previousDate && !Number.isNaN(previousDate.valueOf())
+                          ? previousDate.toISOString().slice(0, 10)
+                          : 'unknown'
+                        const showDateHeading = quizIndex === 0 || generatedDateKey !== previousDateKey
+                        const generatedDateLabel = generatedDateKey === 'unknown'
+                          ? 'Generation date unavailable'
+                          : generatedDate!.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'long', day: 'numeric' })
                         const displayStatus = ['draft', 'archived'].includes(quiz.status) ? quiz.status : quiz.live_status
                         const statusBadge =
                           displayStatus === 'available' ? 'bg-success/10 text-success' :
@@ -3041,7 +3058,15 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                           displayStatus === 'archived' ? 'bg-slate-500/15 text-slate-700' :
                           'bg-amber-500/10 text-amber-700'
                         return (
-                          <div key={quiz.id} className="bg-card border border-border rounded-2xl overflow-hidden">
+                          <div key={quiz.id} className="space-y-2">
+                            {showDateHeading && (
+                              <div className="flex items-center gap-2 pt-2 text-xs font-semibold text-muted-foreground">
+                                <i className="fa-regular fa-calendar" />
+                                <span>Generated {generatedDateLabel}</span>
+                                <span className="h-px bg-border flex-1" />
+                              </div>
+                            )}
+                            <div className="bg-card border border-border rounded-2xl overflow-hidden">
                             <div className="p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
@@ -3105,6 +3130,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
                                 )}
                               </div>
                             )}
+                            </div>
                           </div>
                         )
                       })}

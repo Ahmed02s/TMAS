@@ -26,6 +26,8 @@ type Course = {
   quizProgress: number
   materials: number
   quizzesTotal: number
+  activeQuizzesTotal: number
+  archivedQuizzesTotal: number
   quizzesDone: number
   avgScore: number
   studentCount: number
@@ -112,6 +114,8 @@ function mapCourse(course: Record<string, any>): Course {
     quizProgress: course.quiz_progress ?? 0,
     materials: course.materials ?? 0,
     quizzesTotal: course.quizzes_total ?? 0,
+    activeQuizzesTotal: course.active_quizzes_total ?? course.quizzes_total ?? 0,
+    archivedQuizzesTotal: course.archived_quizzes_total ?? 0,
     quizzesDone: course.quizzes_done ?? 0,
     avgScore: course.avg_score ?? 0,
     studentCount: course.student_count ?? 0,
@@ -1699,6 +1703,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                       <div className="bg-muted/50 rounded-xl py-2.5 text-center">
                         <p className="text-base font-bold font-mono text-foreground">{c.quizzesTotal}</p>
                         <p className="text-xs text-muted-foreground">Quizzes</p>
+                        <p className="text-[10px] text-muted-foreground">{c.activeQuizzesTotal} active · {c.archivedQuizzesTotal} archived</p>
                       </div>
                     </div>
                     {/* Avg score row */}
@@ -1706,7 +1711,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                       <span className="text-muted-foreground font-medium">Quizzes done:</span>
                       <span className="font-mono font-bold text-foreground">{c.quizzesDone}/{c.quizzesTotal}</span>
                       <span className="text-muted-foreground font-medium ml-4">Avg Score:</span>
-                      <span className="font-mono font-bold text-foreground">{c.avgScore > 0 ? `${c.avgScore}%` : '—'}</span>
+                      <span className="font-mono font-bold text-foreground">{c.quizzesDone > 0 ? `${c.avgScore}%` : '—'}</span>
                     </div>
                     {(() => {
                       // Use API course_progress for accuracy; fall back to materials-list if reader is open

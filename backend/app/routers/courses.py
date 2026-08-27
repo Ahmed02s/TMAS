@@ -151,18 +151,25 @@ def list_courses(
 
     # 2. Quiz stats per course (total quizzes published)
     quizzes_total_by_course: dict[str, int] = {}
+    active_quizzes_by_course: dict[str, int] = {}
+    archived_quizzes_by_course: dict[str, int] = {}
     quiz_ids_by_course: dict[str, list[int]] = {}
     try:
         q_resp = supabase.table('quizzes').select('id,course,status,is_published').execute()
         if not supabase_failed(q_resp):
             for q in q_resp.data or []:
-                if str(q.get('status') or '').lower() in {'draft', 'archived'}:
+                quiz_status = str(q.get('status') or '').lower()
+                if quiz_status == 'draft':
                     continue
                 code = _course_key(q.get('course', ''))
                 if code not in requested_course_keys:
                     continue
                 qid = q.get('id')
                 quizzes_total_by_course[code] = quizzes_total_by_course.get(code, 0) + 1
+                if quiz_status == 'archived':
+                    archived_quizzes_by_course[code] = archived_quizzes_by_course.get(code, 0) + 1
+                else:
+                    active_quizzes_by_course[code] = active_quizzes_by_course.get(code, 0) + 1
                 if qid is not None:
                     quiz_ids_by_course.setdefault(code, []).append(qid)
     except Exception:
@@ -288,6 +295,8 @@ def list_courses(
         mat_count = materials_by_course.get(code, course.get('materials', 0))
         course['materials'] = mat_count
         course['quizzes_total'] = quizzes_total_by_course.get(code, course.get('quizzes_total', 0))
+        course['active_quizzes_total'] = active_quizzes_by_course.get(code, 0)
+        course['archived_quizzes_total'] = archived_quizzes_by_course.get(code, 0)
         course['student_count'] = students_by_course.get(code, 0)
         if student_id:
             course['quizzes_done'] = quizzes_done_by_course.get(code, 0)
@@ -411,7 +420,7 @@ def get_course_student_progress(
             quizzes = [
                 q for q in (r.data or [])
                 if _course_key(q.get('course')) == _course_key(course_code)
-                and str(q.get('status') or '').lower() not in {'draft', 'archived'}
+                and str(q.get('status') or '').lower() != 'draft'
             ]
     except Exception:
         logger.exception('get_course_student_progress: quizzes fetch failed for course=%s', course_code)
