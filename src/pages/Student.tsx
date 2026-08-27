@@ -127,6 +127,11 @@ function normalizeCourseCode(value: unknown): string {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
+function clampPercent(value: unknown): number {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? Math.min(100, Math.max(0, numeric)) : 0
+}
+
 function inferTier(quiz: Record<string, any>): string {
   const raw = String(quiz.tier || '').trim()
   if (['Foundational', 'Intermediate', 'Mastery'].includes(raw)) return raw
@@ -1757,7 +1762,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                               <span className="text-xs font-mono font-bold text-foreground">{overall}%</span>
                             </div>
                             <div className="h-2 bg-muted rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full bg-linear-to-r ${c.color} transition-all duration-700`} style={{ width: `${overall}%` }} />
+                              <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${clampPercent(overall)}%` }} />
                             </div>
                           </div>
                         </div>
@@ -2113,7 +2118,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
                           <span className="text-sm text-foreground truncate">{c.title}</span>
                         </div>
                         <div className="h-2 bg-muted rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full bg-linear-to-r ${c.color}`} style={{ width: `${c.avgScore}%` }} />
+                          <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${clampPercent(c.avgScore)}%` }} />
                         </div>
                       </div>
                       <div className="text-right shrink-0">
