@@ -813,32 +813,35 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
     isAutoSubmittingRef.current = true
 
     const student = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('tmas-user') || 'null') : null
-    const payload = JSON.stringify({ student_id: student?.id || '', attempt_token: attemptTokenRef.current })
-    const url = `${API_BASE}/api/quizzes/${activeQuiz}/forfeit`
-    try {
-      const blob = new Blob([payload], { type: 'application/json' })
-      if (!navigator.sendBeacon(url, blob)) {
-        fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload, keepalive: true }).catch(() => {})
-      }
-    } catch {
-      fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload, keepalive: true }).catch(() => {})
-    }
-
-    const forfeitRecord: CompletedQuiz = {
-      quizId: activeQuiz,
-      title: selectedQuiz?.title ?? 'Quiz Attempt',
-      course: selectedQuiz?.course ?? '',
-      score: 0,
-      outOf: quizQuestions.length,
-      date: new Date().toISOString(),
-      grade: 'F',
-      passed: false,
-    }
-    setLastAttempt(forfeitRecord)
-    setCompletedQuizzes(prev => {
-      const filtered = prev.filter(q => q.quizId !== activeQuiz)
-      return [forfeitRecord, ...filtered]
+    const payload = JSON.stringify({
+      student_id: student?.id || '',
+      attempt_token: attemptTokenRef.current,
+      answers: quizAnswersRef.current,
     })
+    const url = `${API_BASE}/api/quizzes/${activeQuiz}/forfeit`
+    fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload, keepalive: true })
+      .then(async response => {
+        if (!response.ok) throw new Error('Automatic submission failed')
+        const result = await response.json()
+        const forfeitRecord: CompletedQuiz = {
+          quizId: activeQuiz,
+          title: selectedQuiz?.title ?? 'Quiz Attempt',
+          course: selectedQuiz?.course ?? '',
+          score: Number(result.score ?? 0),
+          outOf: Number(result.out_of ?? quizQuestions.length),
+          date: new Date().toISOString(),
+          grade: String(result.grade ?? 'F'),
+          passed: Boolean(result.passed),
+        }
+        setLastAttempt(forfeitRecord)
+        setCompletedQuizzes(prev => [forfeitRecord, ...prev.filter(q => q.quizId !== activeQuiz)])
+      })
+      .catch(() => {
+        // sendBeacon is the last-resort transport when the browser is already unloading.
+        try {
+          navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }))
+        } catch {}
+      })
     setQuizForfeited(true)
     setQuizSubmitted(true)
   }, [activeQuiz, quizSubmitted, selectedQuiz, quizQuestions.length])
@@ -1125,7 +1128,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
             </div>
             <button
               onClick={() => {
-                if (window.confirm('Leaving now will forfeit this quiz and record a score of 0. Are you sure you want to exit?')) {
+                if (window.confirm('Leaving now will automatically submit and grade the answers you have completed. Are you sure you want to exit?')) {
                   forfeitQuizForLeaving()
                 }
               }}
@@ -1291,11 +1294,11 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
         <div className="w-full max-w-xl text-center space-y-6">
           <div className="bg-card border border-border rounded-3xl p-6 sm:p-10 shadow-2xl">
             <div className="text-5xl mb-4">{quizTimedOut || quizForfeited ? <Icon name="timer" size={48} /> : score >= 60 ? <Icon name="celebrate" size={48} /> : <Icon name="book" size={48} />}</div>
-            <h2 className="font-display text-2xl sm:text-3xl text-foreground mb-2">{quizForfeited ? 'Attempt Forfeited' : quizTimedOut ? 'Time Limit Exceeded' : score >= 60 ? 'Quiz Passed!' : 'Keep Studying'}</h2>
+            <h2 className="font-display text-2xl sm:text-3xl text-foreground mb-2">{quizForfeited ? 'Attempt Auto-submitted' : quizTimedOut ? 'Time Limit Exceeded' : score >= 60 ? 'Quiz Passed!' : 'Keep Studying'}</h2>
             <p className="text-muted-foreground text-sm mb-6">{selectedQuiz?.title ?? 'Quiz Attempt'} <i className="fa-solid fa-circle-dot text-[8px] mx-1 opacity-40" /> {selectedQuiz?.course ?? 'Course'}</p>
             {quizForfeited && (
               <div className="mb-6 rounded-xl bg-danger/10 border border-danger/30 text-danger text-sm px-4 py-3 text-left">
-                You left the assessment screen while this quiz was in progress, so it has been forfeited and recorded with a score of 0%. Contact your lecturer if you believe this is an error.
+                You left the assessment while it was in progress. Your completed answers were automatically submitted and graded; unanswered questions were counted as incorrect.
               </div>
             )}
             {quizTimedOut && !quizForfeited && (
@@ -1308,7 +1311,7 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
             </div>
             <div className="grid grid-cols-3 gap-3 mb-6">
               {[
-                { label: 'Correct', val: `${correct}/${outOf}` },
+                { label: 'Correct', val: quizForfeited ? '—' : `${correct}/${outOf}` },
                 { label: 'Score', val: `${score}%` },
                 { label: 'Result', val: score >= 60 ? 'PASS' : 'FAIL' },
               ].map((s, i) => (

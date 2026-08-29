@@ -12,6 +12,7 @@ from app.routers.quizzes import (
     _normalize_single_question_type,
     _ordered_questions_for_student,
     _question_type_seconds,
+    _score_quiz_answers,
 )
 
 
@@ -25,6 +26,16 @@ def test_submission_answers_recover_server_draft_without_overriding_final_client
         {'0': 'saved zero', '1': 'old answer'},
         {'1': 'final answer', '2': 'new answer'},
     ) == {'0': 'saved zero', '1': 'final answer', '2': 'new answer'}
+
+
+def test_partial_exit_score_uses_full_quiz_and_treats_unanswered_as_incorrect():
+    questions = [
+        {'correct': 'Paris', 'type': 'MCQ'},
+        {'correct': 'True', 'type': 'True/False'},
+        {'correct': 'Mitosis', 'type': 'Short Answer'},
+        {'correct': 'Four', 'type': 'MCQ'},
+    ]
+    assert _score_quiz_answers(questions, {'0': 'Paris', '1': 'False', '2': 'Mitosis'}) == (2, 4, 50)
 
 
 def test_attempt_review_reconstructs_same_stable_question_order():

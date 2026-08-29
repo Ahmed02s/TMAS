@@ -7,6 +7,7 @@ backend/.pytest_cache/
 backend/.pytest_cache_local/
 backend/.pytest_tmp/
 .env*
+backend/railway-variables.json
 .vite/
 vite.config.*.timestamp-*
 *.tsbuildinfo

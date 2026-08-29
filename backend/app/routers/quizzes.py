@@ -976,6 +976,22 @@ def _merge_submission_answers(saved_answers: dict[str, str], submitted_answers: 
     return {**saved_answers, **submitted_answers}
 
 
+def _score_quiz_answers(questions: list[dict[str, Any]], answers: dict[str, str]) -> tuple[int, int, int]:
+    """Grade the current snapshot against the full quiz; unanswered items are incorrect."""
+    correct = sum(
+        1
+        for index, question in enumerate(questions)
+        if _answers_match(
+            str(question.get('correct') or ''),
+            str(answers.get(str(index)) or ''),
+            str(question.get('type') or question.get('question_type') or 'MCQ'),
+        )
+    )
+    total = len(questions)
+    score = round((correct / total) * 100) if total else 0
+    return correct, total, score
+
+
 def _ordered_questions_for_student(raw_questions: list[dict[str, Any]], quiz_id: int, student_id: str) -> list[dict[str, Any]]:
     """Reproduce the exact stable question/option order used during the student's attempt."""
     import hashlib
@@ -2105,6 +2121,7 @@ def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Dep
 class QuizForfeitRequest(BaseModel):
     student_id: str
     attempt_token: str | None = None
+    answers: dict[str, str] = Field(default_factory=dict)
 
 
 @router.post('/{quiz_id}/forfeit')
@@ -2112,7 +2129,8 @@ def forfeit_quiz(quiz_id: int, payload: QuizForfeitRequest, claims: dict | None 
     """Called the instant a student navigates away from / backgrounds an in-progress
     attempt (tab switch, app switch, closing the window). Leaving the assessment screen
     is how a student would copy questions out to a third-party solver, so the attempt is
-    finalized immediately as a 0-score miss rather than left open for them to resume.
+    finalized immediately using the answers completed so far rather than left open for
+    them to resume. Unanswered questions count as incorrect against the full quiz total.
 
     Identity is only checked when a token IS present: this is fired via
     `navigator.sendBeacon` on the frontend, which cannot attach an Authorization header by
@@ -2134,13 +2152,31 @@ def forfeit_quiz(quiz_id: int, payload: QuizForfeitRequest, claims: dict | None 
 
     attempt = in_progress[0]
     saved_answers = _load_answer_draft(quiz_id, payload.student_id)
+    current_answers = _merge_submission_answers(saved_answers, payload.answers)
+
+    quiz_response = supabase.table('quizzes').select('passing_score').eq('id', quiz_id).limit(1).execute()
+    if supabase_failed(quiz_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(quiz_response, 'Supabase get quiz failed'))
+    if not quiz_response.data:
+        raise HTTPException(status_code=404, detail='Quiz not found')
+
+    questions_response = supabase.table('quiz_questions').select('*').eq('quiz_id', quiz_id).execute()
+    if supabase_failed(questions_response):
+        raise HTTPException(status_code=502, detail=supabase_error_message(questions_response, 'Supabase get quiz questions failed'))
+    questions = _ordered_questions_for_student(questions_response.data or [], quiz_id, payload.student_id)
+    _, total_questions, score = _score_quiz_answers(questions, current_answers)
+    passing_score = int(quiz_response.data[0].get('passing_score') or 0)
+    passed = score >= passing_score
+    grade = _grade_from_score(score)
+
     update_resp = supabase.table('quiz_attempts').update({
-        'status': 'missed',
-        'score': 0,
-        'grade': 'F',
-        'passed': False,
-        'answers': saved_answers,
-        'answers_recorded': bool(saved_answers),
+        'status': 'completed',
+        'score': score,
+        'out_of': total_questions,
+        'grade': grade,
+        'passed': passed,
+        'answers': current_answers,
+        'answers_recorded': bool(current_answers),
         'submission_reason': 'left_assessment',
         'attempted_at': datetime.now(timezone.utc).isoformat(),
     }).eq('id', attempt['id']).eq('status', 'in_progress').execute()
@@ -2149,7 +2185,14 @@ def forfeit_quiz(quiz_id: int, payload: QuizForfeitRequest, claims: dict | None 
     if not update_resp.data:
         return {'status': 'no_active_attempt'}
 
-    return {'status': 'forfeited', 'quiz_id': quiz_id}
+    return {
+        'status': 'auto_submitted',
+        'quiz_id': quiz_id,
+        'score': score,
+        'out_of': total_questions,
+        'grade': grade,
+        'passed': passed,
+    }
 
 
 def _quiz_open_close_dates(quiz: dict[str, Any]) -> tuple[datetime | None, datetime | None]:
