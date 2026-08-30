@@ -5,6 +5,7 @@ from pydantic import BaseModel, EmailStr, field_validator
 
 from app.core.security import require_roles
 from app.core.authorization import lecturer_course_codes, normalize_course_code
+from app.core.course_assignments import sync_student_enrollments
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 
 router = APIRouter(prefix='/api/dashboard', tags=['dashboard'])
@@ -81,16 +82,30 @@ def list_students(
             # courses (e.g. "SAAKA AHMED, Med Saaka") — an exact ilike (no wildcards) only
             # matches when a course has exactly one lecturer and it matches verbatim, so any
             # co-taught course was silently excluded. The wildcard makes this a substring match.
-            course_resp = supabase.table('courses').select('code,level,program').execute()
+            course_resp = supabase.table('courses').select('id,code,level,program').execute()
             if supabase_failed(course_resp):
                 raise HTTPException(status_code=502, detail=supabase_error_message(course_resp, 'Supabase list lecturer courses failed'))
 
             allowed_codes = lecturer_course_codes(_claims) if str(_claims.get('role') or '').lower() == 'lecturer' else None
-            course_pairs = {
-                (course.get('level'), course.get('program')) for course in (course_resp.data or [])
+            allowed_courses = [
+                course for course in (course_resp.data or [])
                 if allowed_codes is None or normalize_course_code(course.get('code')) in allowed_codes
-            }
-            students = [student for student in students if (student.get('level'), student.get('program')) in course_pairs]
+            ]
+            used_explicit_enrollment = False
+            if allowed_codes is not None:
+                try:
+                    course_ids = [course.get('id') for course in allowed_courses if course.get('id') is not None]
+                    enrollment_resp = supabase.table('course_enrollments').select('student_id,status') \
+                        .in_('course_id', course_ids).in_('status', ['active', 'completed']).execute()
+                    if not supabase_failed(enrollment_resp):
+                        enrolled_ids = {str(row.get('student_id')) for row in (enrollment_resp.data or [])}
+                        students = [student for student in students if str(student.get('id')) in enrolled_ids]
+                        used_explicit_enrollment = True
+                except Exception:
+                    pass
+            if not used_explicit_enrollment:
+                course_pairs = {(course.get('level'), course.get('program')) for course in allowed_courses}
+                students = [student for student in students if (student.get('level'), student.get('program')) in course_pairs]
 
     # Attach real per-student learning progress. Course eligibility follows the same
     # level/program rules used throughout the system; completion combines reading and
@@ -251,5 +266,8 @@ def update_student(student_id: str, payload: UpdateStudentRequest, _claims: dict
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase update student failed'))
     if response.data:
-        return {'student': _strip_password(response.data[0])}
+        student = response.data[0]
+        if 'level' in record or 'program' in record:
+            sync_student_enrollments(student['id'], student.get('level'), student.get('program'))
+        return {'student': _strip_password(student)}
     raise HTTPException(status_code=404, detail='Student not found')

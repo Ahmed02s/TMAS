@@ -86,3 +86,17 @@ def test_frontend_email_urls_strip_trailing_slash(monkeypatch):
 
     assert 'https://tmas.example.com/forgot-password?token=reset-token' in reset_payload['content'][0]['value']
     assert 'https://tmas.example.com/verify-email?verify_token=verify-token' in verify_payload['content'][0]['value']
+
+
+def test_verification_email_uses_clickable_html_button_and_escapes_name(monkeypatch):
+    monkeypatch.setattr(email_core, 'FRONTEND_URL', 'https://tmas.example.com')
+    payload = email_core._build_verification_email_payload(
+        'student@example.edu', '<script>alert(1)</script>', 'verify-token'
+    )
+
+    assert [part['type'] for part in payload['content']] == ['text/html']
+    html = payload['content'][0]['value']
+    assert '>Verify Email Address</a>' in html
+    assert 'href="https://tmas.example.com/verify-email?verify_token=verify-token"' in html
+    assert '<script>' not in html
+    assert '&lt;script&gt;' in html

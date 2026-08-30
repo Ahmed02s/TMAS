@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.core.security import require_roles
 from app.core.authorization import require_course_mutation_access
+from app.core.course_assignments import sync_course_enrollments, sync_course_lecturers
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 
 logger = logging.getLogger(__name__)
@@ -239,6 +240,41 @@ def list_courses(
     # score and completion rate across ALL enrolled students, not just one). Without this,
     # a lecturer's "Avg Quiz Score" / course completion bar just echoed a static DB column
     # that nothing ever updates, instead of reflecting real student performance.
+    # Explicit course enrollment is authoritative for aggregate analytics. Fall back to
+    # the legacy academic match only while the migration table is unavailable.
+    students_by_course: dict[str, int] = {}
+    student_ids_by_course: dict[str, set[str]] = {}
+    explicit_enrollments_available = False
+    try:
+        course_id_to_code = {
+            course.get('id'): _course_key(course.get('code'))
+            for course in courses if course.get('id') is not None
+        }
+        enrollment_resp = supabase.table('course_enrollments').select('course_id,student_id,status') \
+            .in_('course_id', list(course_id_to_code)).in_('status', ['active', 'completed']).execute()
+        if not supabase_failed(enrollment_resp):
+            explicit_enrollments_available = True
+            for enrollment in enrollment_resp.data or []:
+                code = course_id_to_code.get(enrollment.get('course_id'))
+                student = enrollment.get('student_id')
+                if code and student is not None:
+                    student_ids_by_course.setdefault(code, set()).add(str(student))
+    except Exception:
+        logger.info('list_courses: course_enrollments unavailable; using legacy student population')
+
+    if not explicit_enrollments_available:
+        try:
+            stu_resp = supabase.table('users').select('id,level,program').eq('role', 'student').execute()
+            if not supabase_failed(stu_resp):
+                for student in stu_resp.data or []:
+                    for course in courses:
+                        if _course_matches_level_program(course, student.get('level'), student.get('program')):
+                            code = _course_key(course.get('code'))
+                            student_ids_by_course.setdefault(code, set()).add(str(student.get('id')))
+        except Exception:
+            logger.exception('list_courses: legacy student-count enrichment failed')
+    students_by_course = {code: len(ids) for code, ids in student_ids_by_course.items()}
+
     class_avg_score_by_course: dict[str, float] = {}
     class_completed_by_course: dict[str, int] = {}
     class_done_pairs: set[tuple[str, Any, Any]] = set()
@@ -257,6 +293,8 @@ def list_courses(
                     code = qid_to_course_class.get(att.get('quiz_id'), '')
                     if not code:
                         continue
+                    if str(att.get('student_id')) not in student_ids_by_course.get(code, set()):
+                        continue
                     pair = (code, att.get('student_id'), att.get('quiz_id'))
                     if pair not in class_done_pairs:
                         class_done_pairs.add(pair)
@@ -268,25 +306,7 @@ def list_courses(
         except Exception:
             logger.exception('list_courses: class-wide quiz attempt enrichment failed')
 
-    # 4. Student count per course (match by level + program, case-insensitive)
-    students_by_course: dict[str, int] = {}
-    student_ids_by_course: dict[str, set[str]] = {}
-    try:
-        stu_resp = supabase.table('users').select('id,level,program').eq('role', 'student').execute()
-        if not supabase_failed(stu_resp):
-            for stu in stu_resp.data or []:
-                stu_level = str(stu.get('level') or '').strip().lower()
-                stu_program = str(stu.get('program') or '').strip().lower()
-                for course in courses:
-                    c_level = str(course.get('level') or '').strip().lower()
-                    c_program = str(course.get('program') or '').strip().lower()
-                    if c_level and c_level == stu_level and (not c_program or c_program == stu_program):
-                        code = _course_key(course.get('code', ''))
-                        students_by_course[code] = students_by_course.get(code, 0) + 1
-                        student_ids_by_course.setdefault(code, set()).add(str(stu.get('id')))
-    except Exception:
-        logger.exception('list_courses: student-count enrichment failed')
-
+    # 4. Count only completed reads belonging to the resolved course population.
     class_reads_by_course: dict[str, int] = {}
     try:
         reads_resp = supabase.table('material_reads').select('student_id,material_id,course,completed').eq('completed', True).execute()
@@ -346,7 +366,10 @@ def create_course(payload: CreateCourseRequest, _claims: dict = Depends(require_
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase create course failed'))
     if response.data:
-        return {'course': response.data[0]}
+        course = response.data[0]
+        sync_course_enrollments(course)
+        sync_course_lecturers(course)
+        return {'course': course}
     raise HTTPException(status_code=502, detail='Supabase create course returned no course')
 
 
@@ -361,7 +384,12 @@ def update_course(course_id: str, payload: UpdateCourseRequest, _claims: dict = 
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase update course failed'))
     if response.data:
-        return {'course': response.data[0]}
+        course = response.data[0]
+        if 'level' in record or 'program' in record:
+            sync_course_enrollments(course)
+        if 'lecturer' in record:
+            sync_course_lecturers(course)
+        return {'course': course}
     raise HTTPException(status_code=404, detail='Course not found')
 
 

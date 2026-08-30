@@ -18,6 +18,7 @@ from app.core.security import (
 )
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_error_message, supabase_failed
 from app.core.email import send_password_reset_email, send_verification_email
+from app.core.course_assignments import sync_student_enrollments
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix='/api/auth', tags=['auth'])
@@ -171,6 +172,8 @@ def register(payload: AuthRegisterRequest, _rl: None = Depends(rate_limiter('reg
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase register failed'))
     if response.data:
         user = response.data[0]
+        if user.get('role') == 'student':
+            sync_student_enrollments(user['id'], user.get('level'), user.get('program'))
         verification_email_sent = _start_email_verification(user['id'], user['email'], user.get('name', user['email']))
         token = create_access_token(user_id=user['id'], email=user['email'], role=user.get('role', 'student'))
         return {

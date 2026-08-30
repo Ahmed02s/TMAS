@@ -95,15 +95,26 @@ def _build_verification_email_payload(to_email: str, to_name: str, verify_token:
     from_name = EMAIL_FROM_NAME.strip() or 'TMAS'
     from_email = EMAIL_FROM.strip()
     reply_to = EMAIL_REPLY_TO.strip() or from_email
+    safe_name = escape(to_name or 'Student')
+    safe_verify_url = escape(verify_url, quote=True)
 
     html_body = _wrap_html_document(
-        f'<p>Hi {to_name},</p>'
-        f'<p>Welcome to TMAS! Please confirm your email address to activate your account.</p>'
-        f'<p><a href="{verify_url}" target="_blank" rel="noopener noreferrer">Click here to verify your email</a></p>'
-        f'<p>If that does not work, copy and paste this link into your browser:</p>'
-        f'<p><a href="{verify_url}" target="_blank" rel="noopener noreferrer">{verify_url}</a></p>'
-        '<p>If you did not create this account, you can safely ignore this message.</p>'
-        '<p>Thanks,<br/>TMAS Team</p>'
+        '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">'
+        '<tr><td align="center">'
+        '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" '
+        'style="max-width:560px;background:#ffffff;border:1px solid #e5e7eb;border-radius:16px;padding:32px">'
+        f'<tr><td><h1 style="margin:0 0 20px;color:#3b0764;font-size:26px">Verify your TMAS account</h1>'
+        f'<p style="margin:0 0 16px">Hi {safe_name},</p>'
+        '<p style="margin:0 0 24px;line-height:1.6">Welcome to TMAS. Confirm your email address to activate your account.</p>'
+        '<p style="margin:0 0 28px;text-align:center">'
+        f'<a href="{safe_verify_url}" target="_blank" style="display:inline-block;background:#5b21b6;color:#ffffff;'
+        'text-decoration:none;font-weight:700;padding:14px 24px;border-radius:10px">Verify Email Address</a></p>'
+        '<p style="margin:0 0 8px;color:#6b7280;font-size:13px">If the button does not work, open this link:</p>'
+        f'<p style="margin:0 0 24px;word-break:break-all"><a href="{safe_verify_url}" target="_blank" '
+        f'style="color:#5b21b6;text-decoration:underline">{safe_verify_url}</a></p>'
+        '<p style="margin:0;color:#6b7280;font-size:13px;line-height:1.5">If you did not create this account, you can safely ignore this message.</p>'
+        '<p style="margin:24px 0 0">Thanks,<br/><strong>TMAS Team</strong></p>'
+        '</td></tr></table></td></tr></table>'
     )
 
     return {
@@ -115,23 +126,9 @@ def _build_verification_email_payload(to_email: str, to_name: str, verify_token:
         ],
         'from': {'email': from_email, 'name': from_name},
         'reply_to': {'email': reply_to, 'name': from_name},
-        'content': [
-            {
-                'type': 'text/plain',
-                'value': (
-                    f'Hi {to_name},\n\n'
-                    'Welcome to TMAS! Please confirm your email address to activate your account.\n\n'
-                    f'Click here to verify your email: {verify_url}\n\n'
-                    'If you did not create this account, you can safely ignore this message.\n\n'
-                    'Thanks,\n'
-                    'TMAS Team'
-                ),
-            },
-            {
-                'type': 'text/html',
-                'value': html_body,
-            },
-        ],
+        # A single HTML body prevents gateways from choosing the plain-text alternative
+        # and presenting the call-to-action as an unclickable-looking line of text.
+        'content': [{'type': 'text/html', 'value': html_body}],
     }
 
 
