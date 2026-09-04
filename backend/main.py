@@ -19,10 +19,11 @@ from app.routers.notifications import router as notifications_router
 
 app = FastAPI(title='TMAS API')
 
-# No cookies are used for auth (the session token travels in the Authorization header), so
-# allow_credentials stays False — but the origin list is still narrowed from '*' to known
-# frontends as defense in depth. Add any additional deployed frontend URL via the
-# CORS_ORIGINS env var (comma-separated) rather than widening this list.
+# Session auth uses the Authorization header rather than cookies, but final reading-progress
+# and quiz-exit updates use navigator.sendBeacon. Browsers send cross-origin beacons in
+# credentials mode "include", so their preflight requires Access-Control-Allow-Credentials.
+# This remains safe because origins are restricted to known frontends rather than '*'. Add
+# deployed frontend URLs through CORS_ORIGINS instead of widening that policy.
 DEFAULT_CORS_ORIGINS = [
     'http://localhost:5173',
     'http://localhost:8443',
@@ -35,7 +36,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[*DEFAULT_CORS_ORIGINS, *EXTRA_CORS_ORIGINS],
     allow_origin_regex=r'https://.*\.vercel\.app',
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
 )
