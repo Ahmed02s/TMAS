@@ -1264,7 +1264,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
       const res = await fetch(`${API_BASE}/api/quizzes/publish`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ quizzes: quizzesToPublish }),
+        body: JSON.stringify({ course: genCourse, quizzes: quizzesToPublish }),
       })
 
       if (!res.ok) throw new Error(extractErrorMessage(await res.json(), res.statusText))

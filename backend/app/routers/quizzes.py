@@ -1376,7 +1376,6 @@ def generate_quiz(payload: GenerateQuizRequest, claims: dict = Depends(require_r
 @router.post('/publish')
 def publish_quiz(payload: PublishQuizRequest, claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     ensure_supabase_enabled()
-    require_lecturer_course(claims, payload.course)
 
     # If multiple quiz sets are provided (tiered generation), publish each separately
     if payload.quizzes:
@@ -1481,6 +1480,10 @@ def publish_quiz(payload: PublishQuizRequest, claims: dict = Depends(require_rol
         return {'quizzes': published, 'questions': all_questions}
 
     # Single-quiz publish (backwards compatible)
+    # Tiered requests carry their course on each quiz and are authorized in the loop above.
+    # Checking the optional top-level course before that loop incorrectly rejected every
+    # valid tiered request whose payload was simply {"quizzes": [...] }.
+    require_lecturer_course(claims, payload.course)
     raw_due = payload.due_date or payload.close_date or (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
     due_dt = _parse_datetime(raw_due) or (datetime.now(timezone.utc) + timedelta(days=7))
 
