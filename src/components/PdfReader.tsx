@@ -47,6 +47,12 @@ export default function PdfReader({ materialId, arrayBuffer, studentId, initialP
   const readPagesRef = useRef<Set<number>>(new Set())
   const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const completedRef = useRef(false)
+  const progressSyncInFlightRef = useRef(false)
+  const onCompletedRef = useRef(onCompleted)
+
+  useEffect(() => {
+    onCompletedRef.current = onCompleted
+  }, [onCompleted])
 
   // Load the PDF document once from the already-downloaded bytes (MaterialViewer owns the
   // network fetch + its own loading/error states — this component only renders).
@@ -175,29 +181,35 @@ export default function PdfReader({ materialId, arrayBuffer, studentId, initialP
   const syncProgress = useCallback((final: boolean) => {
     if (!studentId || !numPages) return
     const delta = activeSecondsRef.current
-    if (delta <= 0 && !final) return
+    if (delta <= 0 || (!final && progressSyncInFlightRef.current)) return
     activeSecondsRef.current = 0
     const scrollPercent = Math.min(100, Math.round((maxPageReachedRef.current / numPages) * 100))
     const payload = JSON.stringify({ student_id: studentId, scroll_percent: scrollPercent, time_spent_delta: delta })
     const url = `${API_BASE}/api/materials/${materialId}/progress`
     if (final) {
+      let queued = false
       try {
-        navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }))
-      } catch {
+        queued = navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }))
+      } catch {}
+      if (!queued) {
         fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload, keepalive: true }).catch(() => {})
       }
       return
     }
+    progressSyncInFlightRef.current = true
     fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload })
       .then(r => (r.ok ? r.json() : null))
       .then(data => {
         if (data?.completed && !completedRef.current) {
           completedRef.current = true
-          onCompleted?.()
+          onCompletedRef.current?.()
         }
       })
       .catch(() => {})
-  }, [materialId, studentId, numPages, onCompleted])
+      .finally(() => {
+        progressSyncInFlightRef.current = false
+      })
+  }, [materialId, studentId, numPages])
 
   useEffect(() => {
     if (!studentId) return

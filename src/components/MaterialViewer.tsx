@@ -334,11 +334,17 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
   const scrollPercentRef = useRef(0)
   const activeSecondsRef = useRef(0)
   const completedRef = useRef(false)
+  const progressSyncInFlightRef = useRef(false)
+  const onCompletedRef = useRef(onCompleted)
+
+  useEffect(() => {
+    onCompletedRef.current = onCompleted
+  }, [onCompleted])
 
   const syncProgress = useCallback((final: boolean) => {
     if (!studentId || isPdf) return
     const delta = activeSecondsRef.current
-    if (delta <= 0 && !final) return
+    if (delta <= 0 || (!final && progressSyncInFlightRef.current)) return
     activeSecondsRef.current = 0
     const payload = JSON.stringify({
       student_id: studentId,
@@ -347,23 +353,29 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
     })
     const url = `${API_BASE}/api/materials/${materialId}/progress`
     if (final) {
+      let queued = false
       try {
-        navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }))
-      } catch {
+        queued = navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }))
+      } catch {}
+      if (!queued) {
         fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload, keepalive: true }).catch(() => {})
       }
       return
     }
+    progressSyncInFlightRef.current = true
     fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload })
       .then(r => (r.ok ? r.json() : null))
       .then(data => {
         if (data?.completed && !completedRef.current) {
           completedRef.current = true
-          onCompleted?.()
+          onCompletedRef.current?.()
         }
       })
       .catch(() => {})
-  }, [materialId, studentId, onCompleted])
+      .finally(() => {
+        progressSyncInFlightRef.current = false
+      })
+  }, [materialId, studentId, isPdf])
 
   useEffect(() => {
     scrollPercentRef.current = 0
