@@ -5,6 +5,15 @@ import { API_BASE } from '../config'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl
 
+// PDF.js does not bundle its standard Type 1/TrueType font data into the worker. Without
+// this URL, PDFs that rely on fonts such as Symbol or the base PDF fonts produce warnings
+// and can render missing or substituted glyphs. These files are copied from
+// pdfjs-dist/standard_fonts into public so they are served from the same origin as TMAS.
+const standardFontDataUrl = new URL(
+  `${import.meta.env.BASE_URL}pdfjs-standard-fonts/`,
+  window.location.origin,
+).toString()
+
 type PdfReaderProps = {
   materialId: number
   arrayBuffer: ArrayBuffer
@@ -59,7 +68,10 @@ export default function PdfReader({ materialId, arrayBuffer, studentId, initialP
   useEffect(() => {
     let cancelled = false
     setRenderError('')
-    pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise.then(doc => {
+    pdfjsLib.getDocument({
+      data: arrayBuffer.slice(0),
+      standardFontDataUrl,
+    }).promise.then(doc => {
       if (cancelled) return
       setPdfDoc(doc)
       setNumPages(doc.numPages)
