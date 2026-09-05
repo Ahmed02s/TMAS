@@ -28,6 +28,7 @@ CONTACT_EMAIL = os.getenv('CONTACT_EMAIL', 'medsa0206@gmail.com')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://tmas-dusky.vercel.app')
 QROK_API_KEY = os.getenv('QROK_API_KEY', os.getenv('GROQ_API_KEY', ''))
 QROK_API_URL = os.getenv('QROK_API_URL', os.getenv('GROQ_API_URL', 'https://api.groq.com/openai/v1/chat/completions'))
+QROK_MODEL = os.getenv('QROK_MODEL', os.getenv('GROQ_MODEL', 'qwen/qwen3.6-27b'))
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 

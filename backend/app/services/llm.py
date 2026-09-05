@@ -7,7 +7,7 @@ import logging
 
 import httpx
 
-from app.core.config import GEMINI_API_KEY, OPENAI_API_KEY, QROK_API_KEY, QROK_API_URL
+from app.core.config import GEMINI_API_KEY, OPENAI_API_KEY, QROK_API_KEY, QROK_API_URL, QROK_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ def call_llm(
             api_url = QROK_API_URL or 'https://api.groq.com/openai/v1/chat/completions'
             headers = {'Authorization': f'Bearer {QROK_API_KEY}', 'Content-Type': 'application/json'}
             body: dict = {
-                'model': 'Qwen3.6 27B',
+                'model': QROK_MODEL,
                 'messages': [
                     {'role': 'system', 'content': system},
                     {'role': 'user', 'content': user},
@@ -37,12 +37,17 @@ def call_llm(
                 'temperature': temperature,
                 'max_tokens': max_tokens,
             }
+            # Qwen reasoning models otherwise place internal reasoning inside <think> tags
+            # in message.content. Students should receive only the final tutor response.
+            if QROK_MODEL.startswith('qwen/'):
+                body['reasoning_format'] = 'hidden'
             if json_mode:
                 body['response_format'] = {'type': 'json_object'}
             with httpx.Client(timeout=timeout) as client:
                 resp = client.post(api_url, headers=headers, json=body)
                 if resp.status_code == 200:
                     return resp.json()['choices'][0]['message']['content']
+                logger.error('call_llm: Groq returned status=%s body=%s', resp.status_code, resp.text[:500])
         except Exception:
             logger.exception('call_llm: Groq request failed')
 
