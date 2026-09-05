@@ -52,6 +52,16 @@ class AuthRegisterRequest(BaseModel):
             raise ValueError('Password must be at least 6 characters')
         return v
 
+    @field_validator('index_number')
+    @classmethod
+    def _valid_student_index_number(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = v.strip().upper()
+        if not re.fullmatch(r'UEB\d{7}', normalized):
+            raise ValueError('Index number must be UEB followed by exactly 7 digits')
+        return normalized
+
 
 class AuthLoginRequest(BaseModel):
     email: EmailStr

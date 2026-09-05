@@ -11,7 +11,7 @@ const programOptions = ['Computer Science', 'Mathematics', 'Engineering', 'Busin
 
 // ── Validation helpers ─────────────────────────────────────────────────────
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
-const STUDENT_ID_RE = /^[A-Z]{3}\d{7}$/
+const STUDENT_ID_RE = /^UEB\d{7}$/
 
 function validateEmail(val: string) {
   if (!val.trim()) return 'Email address is required.'
@@ -22,7 +22,7 @@ function validateEmail(val: string) {
 function validateStudentId(val: string) {
   if (!val.trim()) return 'Student Index Number is required.'
   if (!STUDENT_ID_RE.test(val.trim().toUpperCase()))
-    return 'Index must be 3 uppercase letters followed by 7 digits (e.g. UEB3512822).'
+    return 'Enter exactly 7 digits after UEB (e.g. UEB3512822).'
   return ''
 }
 
@@ -672,18 +672,23 @@ export default function Login({
                           <span className="ml-2 text-xs text-muted-foreground font-normal">(e.g. UEB3512822)</span>
                         </label>
                         <div className="relative">
-                          <i className="fa-solid fa-id-card absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-sm pointer-events-none" />
+                          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-bold text-primary pointer-events-none">
+                            UEB
+                          </span>
                           <input
                             type="text"
-                            value={studentIndexNumber}
+                            value={studentIndexNumber.replace(/^UEB/, '')}
                             onChange={e => {
-                              setStudentIndexNumber(e.target.value.toUpperCase())
+                              const digits = e.target.value.replace(/\D/g, '').slice(0, 7)
+                              setStudentIndexNumber(digits ? `UEB${digits}` : '')
                               setStudentIdErr('')
                             }}
                             onBlur={() => setStudentIdErr(validateStudentId(studentIndexNumber))}
-                            placeholder="UEB3512822"
-                            maxLength={10}
-                            className={`${inputCls(!!studentIdErr)} pl-11`}
+                            placeholder="3512822"
+                            inputMode="numeric"
+                            pattern="\d{7}"
+                            maxLength={7}
+                            className={`${inputCls(!!studentIdErr)} pl-16`}
                           />
                         </div>
                         <FieldError msg={studentIdErr} />

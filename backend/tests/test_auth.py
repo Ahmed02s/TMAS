@@ -1,7 +1,39 @@
 import importlib
 import os
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
+
+from app.routers.auth import AuthRegisterRequest
+
+
+def test_student_index_number_requires_fixed_ueb_prefix_and_seven_digits():
+    request = AuthRegisterRequest(
+        name='Ada Lovelace',
+        email='ada@example.edu',
+        password='secret123',
+        role='student',
+        level='Level 300',
+        program='Computer Science',
+        index_number='ueb3512822',
+    )
+
+    assert request.index_number == 'UEB3512822'
+
+
+@pytest.mark.parametrize('index_number', ['ABC3512822', 'UEB351282', 'UEB35128222', 'UEB35A2822'])
+def test_student_index_number_rejects_wrong_prefix_or_digit_count(index_number):
+    with pytest.raises(ValidationError):
+        AuthRegisterRequest(
+            name='Ada Lovelace',
+            email='ada@example.edu',
+            password='secret123',
+            role='student',
+            level='Level 300',
+            program='Computer Science',
+            index_number=index_number,
+        )
 
 
 def test_auth_routes_require_supabase_env(monkeypatch):
