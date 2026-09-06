@@ -45,6 +45,15 @@ def call_llm(
                 body['response_format'] = {'type': 'json_object'}
             with httpx.Client(timeout=timeout) as client:
                 resp = client.post(api_url, headers=headers, json=body)
+                # Groq reserves the requested completion budget against the account's
+                # output-token-per-minute limit. On small plans a 700-token request can be
+                # rejected even when the model would only have produced a short answer.
+                # A rejected 429 has generated no completion, so retrying once with a
+                # smaller budget is safe and lets interactive tutor requests degrade
+                # gracefully instead of surfacing as a generic 502.
+                if resp.status_code == 429 and max_tokens > 256:
+                    body['max_tokens'] = 256
+                    resp = client.post(api_url, headers=headers, json=body)
                 if resp.status_code == 200:
                     return resp.json()['choices'][0]['message']['content']
                 logger.error('call_llm: Groq returned status=%s body=%s', resp.status_code, resp.text[:500])

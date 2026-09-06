@@ -974,7 +974,10 @@ def ai_tutor(
     )
 
     try:
-        answer = call_llm(system_prompt, user_prompt, max_tokens=700, temperature=0.4, timeout=20.0)
+        # Keep the reservation comfortably below Groq's output-token-per-minute limit.
+        # The provider charges the requested maximum against that limit up front, even
+        # when the actual tutor answer is much shorter.
+        answer = call_llm(system_prompt, user_prompt, max_tokens=400, temperature=0.4, timeout=20.0)
     except Exception:
         logger.exception('ai_tutor: LLM call raised for material_id=%s action=%s', material_id, action)
         answer = None
