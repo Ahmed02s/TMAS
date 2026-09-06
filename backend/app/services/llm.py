@@ -41,6 +41,10 @@ def call_llm(
             # in message.content. Students should receive only the final tutor response.
             if QROK_MODEL.startswith('qwen/'):
                 body['reasoning_format'] = 'hidden'
+            elif QROK_MODEL.startswith('openai/gpt-oss-'):
+                # These requests are short tutoring/quiz tasks; low effort reduces latency
+                # and output-token usage while preserving adequate answer quality.
+                body['reasoning_effort'] = 'low'
             if json_mode:
                 body['response_format'] = {'type': 'json_object'}
             with httpx.Client(timeout=timeout) as client:
