@@ -2,6 +2,7 @@ import importlib
 import os
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -34,6 +35,47 @@ def test_student_index_number_rejects_wrong_prefix_or_digit_count(index_number):
             program='Computer Science',
             index_number=index_number,
         )
+
+
+def test_student_registration_rejects_non_computer_science_program(monkeypatch):
+    import app.routers.auth as auth_router
+
+    monkeypatch.setattr(auth_router, 'ensure_supabase_enabled', lambda: None)
+    request = AuthRegisterRequest(
+        name='Ada Lovelace',
+        email='ada@example.edu',
+        password='secret123',
+        role='student',
+        level='Level 300',
+        program='Mathematics',
+        index_number='UEB3512822',
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        auth_router.register(request)
+
+    assert exc_info.value.status_code == 400
+    assert 'Computer Science' in exc_info.value.detail
+
+
+def test_lecturer_registration_rejects_non_computer_science_department(monkeypatch):
+    import app.routers.auth as auth_router
+
+    monkeypatch.setattr(auth_router, 'ensure_supabase_enabled', lambda: None)
+    request = AuthRegisterRequest(
+        name='Grace Hopper',
+        email='grace@example.edu',
+        password='secret123',
+        role='lecturer',
+        program='Engineering',
+        department='Engineering',
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        auth_router.register(request)
+
+    assert exc_info.value.status_code == 400
+    assert 'Computer Science' in exc_info.value.detail
 
 
 def test_auth_routes_require_supabase_env(monkeypatch):

@@ -7,7 +7,8 @@ import { clearEmailVerificationUrl, getEmailVerificationIntent } from '../utils/
 import { extractErrorMessage } from '../utils/apiError'
 
 const fallbackLevelOptions = ['Level 100', 'Level 200', 'Level 300', 'Level 400']
-const programOptions = ['Computer Science', 'Mathematics', 'Engineering', 'Business']
+const programOptions = ['Computer Science']
+const registrationProgram = 'Computer Science'
 
 // ── Validation helpers ─────────────────────────────────────────────────────
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
@@ -69,8 +70,7 @@ export default function Login({
   const [showRegisterPassword, setShowRegisterPassword] = useState(false)
   const [studentIndexNumber, setStudentIndexNumber] = useState('')
   const [studentLevel, setStudentLevel] = useState(fallbackLevelOptions[0])
-  const [studentProgram, setStudentProgram] = useState('Computer Science')
-  const [department, setDepartment] = useState('')
+  const [studentProgram, setStudentProgram] = useState(registrationProgram)
 
   // ── Register inline errors ────────────────────────────────────────────────
   const [firstNameErr, setFirstNameErr] = useState('')
@@ -272,7 +272,6 @@ export default function Login({
     setRegisterEmail('')
     setRegisterPassword('')
     setStudentIndexNumber('')
-    setDepartment('')
     setFirstNameErr('')
     setLastNameErr('')
     setRegEmailErr('')
@@ -361,7 +360,7 @@ export default function Login({
           role,
           ...(role === 'student'
             ? { level: studentLevel, program: studentProgram, index_number: studentIndexNumber.trim().toUpperCase() }
-            : { department: department || 'Computer Science', program: department || 'Computer Science' }),
+            : { department: registrationProgram, program: registrationProgram }),
         }),
       })
       const data = await response.json()
@@ -726,15 +725,15 @@ export default function Login({
                       </div>
                     </>
                   ) : (
-                    /* Lecturer-only field */
+                    /* Lecturer-only fixed department */
                     <div>
                       <label className="block text-sm font-medium text-foreground mb-1.5">Department / Faculty</label>
                       <input
                         type="text"
-                        value={department}
-                        onChange={e => setDepartment(e.target.value)}
-                        placeholder="e.g. Computer Science"
-                        className={inputCls(false)}
+                        value={registrationProgram}
+                        readOnly
+                        aria-readonly="true"
+                        className={`${inputCls(false)} cursor-not-allowed opacity-80`}
                       />
                     </div>
                   )}

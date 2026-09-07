@@ -25,6 +25,7 @@ router = APIRouter(prefix='/api/auth', tags=['auth'])
 
 PASSWORD_RESET_EXPIRY_MINUTES = 30
 EMAIL_VERIFICATION_EXPIRY_HOURS = 48
+REGISTRATION_PROGRAM = 'Computer Science'
 
 
 class AuthRegisterRequest(BaseModel):
@@ -135,11 +136,18 @@ def register(payload: AuthRegisterRequest, _rl: None = Depends(rate_limiter('reg
     if payload.role == 'student' and (not payload.level or not payload.program or not payload.index_number):
         raise HTTPException(status_code=400, detail='Student registration requires index number, level, and program.')
 
+    if payload.role == 'student' and payload.program.strip().casefold() != REGISTRATION_PROGRAM.casefold():
+        raise HTTPException(status_code=400, detail='Student registration is currently limited to Computer Science.')
+
     # Public self-registration may only create student or lecturer accounts. Administrator
     # accounts must be created directly in the database by an existing administrator —
     # otherwise anyone could POST role="admin" here and grant themselves full system access.
     if payload.role not in {'student', 'lecturer'}:
         raise HTTPException(status_code=400, detail='Invalid role supplied.')
+
+    supplied_affiliations = [value for value in (payload.program, payload.department) if value and value.strip()]
+    if any(value.strip().casefold() != REGISTRATION_PROGRAM.casefold() for value in supplied_affiliations):
+        raise HTTPException(status_code=400, detail='Registration is currently limited to Computer Science.')
 
     user_id = str(uuid.uuid4())
     email = payload.email.strip().lower()
@@ -153,8 +161,8 @@ def register(payload: AuthRegisterRequest, _rl: None = Depends(rate_limiter('reg
         'role': payload.role,
         'status': 'pending' if payload.role == 'lecturer' else 'active',
         'level': payload.level,
-        'program': payload.program or payload.department,
-        'department': payload.department or payload.program,
+        'program': REGISTRATION_PROGRAM,
+        'department': REGISTRATION_PROGRAM,
         'email_verified': False,
     }
 
