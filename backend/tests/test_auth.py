@@ -23,6 +23,22 @@ def test_student_index_number_requires_fixed_ueb_prefix_and_seven_digits():
     assert request.index_number == 'UEB3512822'
 
 
+@pytest.mark.parametrize('domain', ['gmail.co', 'gmail.con', 'gamil.com', 'gmial.com'])
+def test_registration_rejects_likely_gmail_domain_typo(domain):
+    with pytest.raises(ValidationError) as exc_info:
+        AuthRegisterRequest(
+            name='Ada Lovelace',
+            email=f'saakamed3@{domain}',
+            password='secret123',
+            role='student',
+            level='Level 300',
+            program='Computer Science',
+            index_number='UEB3512822',
+        )
+
+    assert 'saakamed3@gmail.com' in str(exc_info.value)
+
+
 @pytest.mark.parametrize('index_number', ['ABC3512822', 'UEB351282', 'UEB35128222', 'UEB35A2822'])
 def test_student_index_number_rejects_wrong_prefix_or_digit_count(index_number):
     with pytest.raises(ValidationError):

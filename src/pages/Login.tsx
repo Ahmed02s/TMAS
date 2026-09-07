@@ -13,10 +13,26 @@ const registrationProgram = 'Computer Science'
 // ── Validation helpers ─────────────────────────────────────────────────────
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
 const STUDENT_ID_RE = /^UEB\d{7}$/
+const EMAIL_DOMAIN_CORRECTIONS: Record<string, string> = {
+  'gmail.co': 'gmail.com',
+  'gmail.con': 'gmail.com',
+  'gamil.com': 'gmail.com',
+  'gmial.com': 'gmail.com',
+}
 
 function validateEmail(val: string) {
   if (!val.trim()) return 'Email address is required.'
   if (!EMAIL_RE.test(val.trim())) return 'Enter a valid email address (e.g. you@gmail.com).'
+  return ''
+}
+
+function validateRegistrationEmail(val: string) {
+  const formatError = validateEmail(val)
+  if (formatError) return formatError
+
+  const [localPart, domain = ''] = val.trim().toLowerCase().split('@')
+  const correctedDomain = EMAIL_DOMAIN_CORRECTIONS[domain]
+  if (correctedDomain) return `Did you mean ${localPart}@${correctedDomain}?`
   return ''
 }
 
@@ -329,7 +345,7 @@ export default function Login({
     // Run all validations
     const fnErr = !firstName.trim() ? 'First name is required.' : ''
     const lnErr = !lastName.trim() ? 'Last name is required.' : ''
-    const reErr = validateEmail(registerEmail)
+    const reErr = validateRegistrationEmail(registerEmail)
     const rpErr = !registerPassword ? 'Password is required.' : registerPassword.length < 6 ? 'Password must be at least 6 characters.' : ''
     const siErr = role === 'student' ? validateStudentId(studentIndexNumber) : ''
 
@@ -628,7 +644,7 @@ export default function Login({
                         type="email"
                         value={registerEmail}
                         onChange={e => { setRegisterEmail(e.target.value); setRegEmailErr('') }}
-                        onBlur={() => setRegEmailErr(validateEmail(registerEmail))}
+                        onBlur={() => setRegEmailErr(validateRegistrationEmail(registerEmail))}
                         placeholder="you@university.edu"
                         className={`${inputCls(!!regEmailErr)} pl-11`}
                       />

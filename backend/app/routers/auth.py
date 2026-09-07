@@ -26,6 +26,12 @@ router = APIRouter(prefix='/api/auth', tags=['auth'])
 PASSWORD_RESET_EXPIRY_MINUTES = 30
 EMAIL_VERIFICATION_EXPIRY_HOURS = 48
 REGISTRATION_PROGRAM = 'Computer Science'
+EMAIL_DOMAIN_CORRECTIONS = {
+    'gmail.co': 'gmail.com',
+    'gmail.con': 'gmail.com',
+    'gamil.com': 'gmail.com',
+    'gmial.com': 'gmail.com',
+}
 
 
 class AuthRegisterRequest(BaseModel):
@@ -37,6 +43,15 @@ class AuthRegisterRequest(BaseModel):
     program: str | None = None
     department: str | None = None
     index_number: str | None = None
+
+    @field_validator('email')
+    @classmethod
+    def _reject_likely_email_domain_typo(cls, v: EmailStr) -> EmailStr:
+        local_part, domain = str(v).lower().rsplit('@', 1)
+        corrected_domain = EMAIL_DOMAIN_CORRECTIONS.get(domain)
+        if corrected_domain:
+            raise ValueError(f'Did you mean {local_part}@{corrected_domain}?')
+        return v
 
     @field_validator('name')
     @classmethod
