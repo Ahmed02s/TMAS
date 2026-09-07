@@ -1390,8 +1390,10 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
         return cLevel && cLevel === sLevel && (!cProgram || cProgram === sProgram)
       }),
     }))
-    // Use API student_count (enriched by backend) as primary, fall back to filtered list
-    const uniqueStudentCount = myCoursesState.reduce((s, c) => s + ((c as any).student_count ?? 0), 0) || new Set(studentsState.map(s => s.id)).size
+    // The lecturer dashboard gets a unique student list from /api/dashboard/students.
+    // Summing per-course student_count values double-counts the same student when they
+    // are enrolled in multiple assigned courses, so use the unique ID set as the source of truth.
+    const uniqueStudentCount = new Set(studentsState.map(student => student.id).filter(Boolean)).size
     const totalStudents = uniqueStudentCount
     const studentHeadcount = studentsByCourse.reduce((s, entry) => s + entry.students.length, 0)
     const avgQuizScore = myCoursesState.length ? Math.round(myCoursesState.reduce((s, c) => s + (c.avgScore || 0), 0) / myCoursesState.length) : null
