@@ -642,6 +642,8 @@ export default function Login({
                       <i className="fa-solid fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-sm pointer-events-none" />
                       <input
                         type="email"
+                        name="tmas-registration-email"
+                        autoComplete="off"
                         value={registerEmail}
                         onChange={e => { setRegisterEmail(e.target.value); setRegEmailErr('') }}
                         onBlur={() => setRegEmailErr(validateRegistrationEmail(registerEmail))}
@@ -659,6 +661,8 @@ export default function Login({
                       <i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-sm pointer-events-none" />
                       <input
                         type={showRegisterPassword ? 'text' : 'password'}
+                        name="tmas-registration-new-password"
+                        autoComplete="new-password"
                         value={registerPassword}
                         onChange={e => { setRegisterPassword(e.target.value); setRegPasswordErr('') }}
                         onBlur={() => setRegPasswordErr(!registerPassword ? 'Password is required.' : registerPassword.length < 6 ? 'At least 6 characters.' : '')}
