@@ -3,6 +3,7 @@ import type { AppView } from '../App'
 import { API_BASE } from '../config'
 import LegalModal from '../components/LegalModal'
 import { extractErrorMessage } from '../utils/apiError'
+import { formatPlatformStat, usePlatformStats } from '../hooks/usePlatformStats'
 
 const features = [
   { iconClass: 'fa-solid fa-robot text-primary', tint: 'bg-primary/10', title: 'AI-Powered Quiz Generation', desc: 'Upload PDFs, slides, or documents and our AI extracts topics, identifies learning objectives, and generates a comprehensive question bank — ready for lecturer review.' },
@@ -59,6 +60,7 @@ const roleCards = [
 ]
 
 export default function Landing({ onNavigate }: { onNavigate: (v: AppView) => void }) {
+  const platformStats = usePlatformStats()
   const [openFaq, setOpenFaq] = useState<number | null>(null)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [form, setForm] = useState({ name: '', email: '', message: '' })
@@ -203,10 +205,10 @@ export default function Landing({ onNavigate }: { onNavigate: (v: AppView) => vo
       <section className="bg-linear-to-r from-primary via-primary to-blue-950 py-12">
         <div className="max-w-7xl mx-auto px-6 grid grid-cols-2 lg:grid-cols-4 gap-8 text-center">
           {[
-            { val: '2,847+', label: 'Active Students' },
-            { val: '180+', label: 'Courses Available' },
-            { val: '98%', label: 'Quiz Accuracy Rate' },
-            { val: '12', label: 'Institutions Served' },
+            { val: formatPlatformStat(platformStats?.registered_students), label: 'Registered Students' },
+            { val: formatPlatformStat(platformStats?.active_courses), label: 'Active Courses' },
+            { val: formatPlatformStat(platformStats?.average_quiz_score, '%'), label: 'Average Quiz Score' },
+            { val: formatPlatformStat(platformStats?.institutions_represented), label: 'Institutions Represented' },
           ].map((s, i) => (
             <div key={i}>
               <p className="text-3xl font-bold font-mono text-accent">{s.val}</p>

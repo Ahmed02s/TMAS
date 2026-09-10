@@ -16,6 +16,7 @@ from app.routers.quizzes import router as quizzes_router
 from app.routers.materials import router as materials_router
 from app.routers.seed_admin import router as seed_admin_router
 from app.routers.notifications import router as notifications_router
+from app.routers.public import router as public_router
 
 app = FastAPI(title='TMAS API')
 
@@ -65,6 +66,7 @@ app.include_router(dashboard_router)
 app.include_router(materials_router)
 app.include_router(seed_admin_router)
 app.include_router(notifications_router)
+app.include_router(public_router)
 
 
 @app.get('/health')

@@ -5,6 +5,7 @@ import LegalModal from '../components/LegalModal'
 import { clearPasswordResetUrl, getPasswordResetIntent } from '../utils/passwordReset'
 import { clearEmailVerificationUrl, getEmailVerificationIntent } from '../utils/emailVerification'
 import { extractErrorMessage } from '../utils/apiError'
+import { formatPlatformStat, usePlatformStats } from '../hooks/usePlatformStats'
 
 const fallbackLevelOptions = ['Level 100', 'Level 200', 'Level 300', 'Level 400']
 const programOptions = ['Computer Science']
@@ -68,6 +69,7 @@ export default function Login({
   onNavigate: (v: AppView) => void
   initialTab?: 'login' | 'register'
 }) {
+  const platformStats = usePlatformStats()
   const [tab, setTab] = useState<'login' | 'register'>(initialTab)
   const [role, setRole] = useState<'student' | 'lecturer'>('student')
 
@@ -434,16 +436,16 @@ export default function Login({
             Empowering<br />education<br />through <span className="text-accent">intelligence.</span>
           </h1>
           <p className="text-sidebar-foreground/55 text-base leading-relaxed max-w-xs">
-            Join thousands of students and educators using TMAS to transform the higher education experience.
+            Join students and educators using TMAS to transform the higher education experience.
           </p>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
           {[
-            { val: '2,847', label: 'Students' },
-            { val: '94', label: 'Active Courses' },
-            { val: '87%', label: 'Completion Rate' },
-            { val: '14k+', label: 'Quizzes Generated' },
+            { val: formatPlatformStat(platformStats?.registered_students), label: 'Registered Students' },
+            { val: formatPlatformStat(platformStats?.active_courses), label: 'Active Courses' },
+            { val: formatPlatformStat(platformStats?.average_quiz_score, '%'), label: 'Average Quiz Score' },
+            { val: formatPlatformStat(platformStats?.institutions_represented), label: 'Institutions' },
           ].map((s, i) => (
             <div key={i} className="bg-white/5 border border-white/8 rounded-xl p-4">
               <p className="text-accent text-xl font-bold font-mono">{s.val}</p>
