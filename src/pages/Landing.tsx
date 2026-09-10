@@ -354,8 +354,8 @@ export default function Landing({ onNavigate }: { onNavigate: (v: AppView) => vo
             <div className="space-y-5">
               {[
                 { icon: '📧', label: 'Email', val: 'medsa0206@gmail.com' },
-                { icon: '📞', label: 'Phone', val: '+1 (555) 234-5678' },
-                { icon: '📍', label: 'Address', val: '123 Academic Avenue, Innovation Hub, Tech City' },
+                { icon: '📞', label: 'Phone', val: '0592346676' },
+                { icon: '📍', label: 'Address', val: '118 Block B, New Dormaa, Sunyani' },
               ].map((item, i) => (
                 <div key={i} className="flex items-start gap-4">
                   <div className="text-xl mt-0.5">{item.icon}</div>
