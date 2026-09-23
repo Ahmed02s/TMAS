@@ -353,13 +353,7 @@ export default function MaterialViewer({ materialId, materialName, downloadUrl, 
     })
     const url = `${API_BASE}/api/materials/${materialId}/progress`
     if (final) {
-      let queued = false
-      try {
-        queued = navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }))
-      } catch {}
-      if (!queued) {
-        fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload, keepalive: true }).catch(() => {})
-      }
+      fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload, keepalive: true }).catch(() => {})
       return
     }
     progressSyncInFlightRef.current = true

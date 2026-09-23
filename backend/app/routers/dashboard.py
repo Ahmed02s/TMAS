@@ -72,6 +72,8 @@ def list_students(
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase list students failed'))
 
     students = response.data or []
+    if str(_claims.get('role') or '').lower() == 'lecturer':
+        lecturer = str(_claims.get('name') or lecturer or '').strip()
     if program:
         normalized_program = program.strip().lower()
         students = [student for student in students if not str(student.get('program') or '').strip() or str(student.get('program') or '').strip().lower() == normalized_program]

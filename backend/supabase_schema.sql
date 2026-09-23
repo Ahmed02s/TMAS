@@ -11,8 +11,11 @@ CREATE TABLE IF NOT EXISTS users (
   level TEXT,
   program TEXT,
   institution TEXT,
+  auth_version INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_version INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS password_resets (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -122,6 +125,20 @@ CREATE TABLE IF NOT EXISTS quiz_questions (
   options JSONB NOT NULL DEFAULT '[]',
   correct TEXT NOT NULL,
   question_type TEXT NOT NULL DEFAULT 'MCQ',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  notification_type TEXT NOT NULL DEFAULT 'info',
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  related_entity_id BIGINT,
+  related_entity_type TEXT,
+  is_read BOOLEAN NOT NULL DEFAULT FALSE,
+  read_at TIMESTAMPTZ,
+  sent_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -255,6 +272,7 @@ CREATE TABLE IF NOT EXISTS material_page_reads (
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+CREATE INDEX IF NOT EXISTS idx_notification_reads_user ON notification_reads(user_id, read_at DESC);
 CREATE INDEX IF NOT EXISTS idx_levels_order ON levels("order");
 CREATE INDEX IF NOT EXISTS idx_courses_level_program ON courses(level, program);
 CREATE INDEX IF NOT EXISTS idx_materials_course ON materials(course);

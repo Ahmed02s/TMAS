@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from app.core.security import require_roles
+from app.core.security import get_current_principal, require_roles
 from app.core.authorization import require_course_mutation_access
 from app.core.course_assignments import sync_course_enrollments, sync_course_lecturers
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
@@ -111,7 +111,17 @@ def list_courses(
     lecturer: str | None = None,
     status: str | None = None,
     student_id: str | None = None,
+    claims: dict = Depends(get_current_principal),
 ) -> dict[str, Any]:
+    role = str(claims.get('role') or '').lower()
+    if role == 'student':
+        if student_id and str(student_id) != str(claims.get('sub')):
+            raise HTTPException(status_code=403, detail='You can only view your own courses')
+        student_id = str(claims.get('sub'))
+        level = str(claims.get('level') or level or '') or None
+        program = str(claims.get('program') or program or '') or None
+    elif role == 'lecturer':
+        lecturer = str(claims.get('name') or lecturer or '') or None
     ensure_supabase_enabled()
     query = supabase.table('courses').select('*')
     if level:

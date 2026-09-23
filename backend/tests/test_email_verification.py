@@ -1,5 +1,6 @@
 import app.routers.auth as auth_router
 from app.core import email as email_core
+import hashlib
 
 
 class _RaisingTable:
@@ -100,3 +101,25 @@ def test_verification_email_uses_clickable_html_button_and_escapes_name(monkeypa
     assert 'href="https://tmas.example.com/verify-email?verify_token=verify-token"' in html
     assert '<script>' not in html
     assert '&lt;script&gt;' in html
+
+
+def test_verification_token_is_hashed_at_rest_but_raw_value_is_emailed(monkeypatch):
+    stored = {}
+    emailed = {}
+
+    class _CaptureTable:
+        def insert(self, record):
+            stored.update(record)
+            return self
+        def execute(self): return None
+
+    monkeypatch.setattr(auth_router, 'supabase', type('S', (), {'table': lambda *_args: _CaptureTable()})())
+    monkeypatch.setattr(
+        auth_router,
+        'send_verification_email',
+        lambda _email, _name, token: emailed.update(token=token),
+    )
+
+    assert auth_router._start_email_verification('user-1', 'student@example.edu', 'Student') is True
+    assert stored['token'] != emailed['token']
+    assert stored['token'] == hashlib.sha256(emailed['token'].encode('utf-8')).hexdigest()

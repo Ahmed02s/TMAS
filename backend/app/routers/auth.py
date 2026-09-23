@@ -1,4 +1,5 @@
 import logging
+import hashlib
 import re
 import secrets
 import uuid
@@ -11,9 +12,8 @@ from pydantic import BaseModel, EmailStr, field_validator
 from app.core.rate_limit import rate_limiter
 from app.core.security import (
     create_access_token,
-    get_current_claims,
+    get_current_principal,
     hash_password,
-    is_bcrypt_hash,
     verify_password,
 )
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_error_message, supabase_failed
@@ -64,8 +64,8 @@ class AuthRegisterRequest(BaseModel):
     @field_validator('password')
     @classmethod
     def _password_min_length(cls, v: str) -> str:
-        if len(v) < 6:
-            raise ValueError('Password must be at least 6 characters')
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters')
         return v
 
     @field_validator('index_number')
@@ -103,8 +103,8 @@ class ResetPasswordRequest(BaseModel):
     @field_validator('new_password')
     @classmethod
     def _password_min_length(cls, v: str) -> str:
-        if len(v) < 6:
-            raise ValueError('Password must be at least 6 characters')
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters')
         return v
 
 
@@ -128,10 +128,11 @@ def _start_email_verification(user_id: str, email: str, name: str, *, raise_on_f
     resend can opt into a clear error so delivery failures don't look like success."""
     try:
         verify_token = secrets.token_urlsafe(32)
+        token_digest = hashlib.sha256(verify_token.encode('utf-8')).hexdigest()
         expires_at = (datetime.now(timezone.utc) + timedelta(hours=EMAIL_VERIFICATION_EXPIRY_HOURS)).isoformat()
         supabase.table('email_verifications').insert({
             'user_id': user_id,
-            'token': verify_token,
+            'token': token_digest,
             'expires_at': expires_at,
             'used': False,
         }).execute()
@@ -142,6 +143,23 @@ def _start_email_verification(user_id: str, email: str, name: str, *, raise_on_f
         if raise_on_failure:
             raise
         return False
+
+
+def _notify_admin_of_pending_lecturer(user: dict[str, Any]) -> None:
+    """Trusted server-side event; registration no longer receives a token to self-notify."""
+    try:
+        admins = supabase.table('users').select('id,role').execute()
+        records = [{
+            'user_id': admin['id'],
+            'notification_type': 'warning',
+            'title': 'New Lecturer Registration Pending',
+            'message': f"{user.get('name', 'A lecturer')} ({user.get('email', '')}) is awaiting administrator approval.",
+            'created_at': datetime.now(timezone.utc).isoformat(),
+        } for admin in (admins.data or []) if str(admin.get('role') or '').lower() in {'admin', 'administrator'}]
+        if records:
+            supabase.table('notifications').insert(records).execute()
+    except Exception:
+        logger.exception('register: could not create pending-lecturer notification')
 
 
 @router.post('/register', status_code=201)
@@ -207,12 +225,14 @@ def register(payload: AuthRegisterRequest, _rl: None = Depends(rate_limiter('reg
         user = response.data[0]
         if user.get('role') == 'student':
             sync_student_enrollments(user['id'], user.get('level'), user.get('program'))
+        elif user.get('role') == 'lecturer':
+            _notify_admin_of_pending_lecturer(user)
         verification_email_sent = _start_email_verification(user['id'], user['email'], user.get('name', user['email']))
-        token = create_access_token(user_id=user['id'], email=user['email'], role=user.get('role', 'student'))
         return {
             'user': _build_user_payload(user),
-            'token': token,
             'verification_email_sent': verification_email_sent,
+            'authentication_required': True,
+            'next_action': 'verify_email_and_login' if user.get('role') == 'student' else 'verify_email_and_await_approval',
         }
     raise HTTPException(status_code=502, detail='Supabase register returned no user')
 
@@ -235,17 +255,6 @@ def login(payload: AuthLoginRequest, _rl: None = Depends(rate_limiter('login', 1
     if not verify_password(payload.password, stored_password):
         raise HTTPException(status_code=401, detail='Invalid credentials')
 
-    # Transparently upgrade legacy plaintext accounts to a bcrypt hash on successful login —
-    # old credentials keep working, but the stored value is secured from this point on.
-    if not is_bcrypt_hash(stored_password):
-        try:
-            supabase.table('users').update({'password': hash_password(payload.password)}).eq('id', user['id']).execute()
-        except Exception:
-            # Non-fatal — login still succeeds even if the upgrade write fails — but still
-            # worth knowing about, since a repeatedly-failing upgrade means this account
-            # stays on plaintext indefinitely.
-            logger.exception('login: failed to upgrade legacy plaintext password for user_id=%s', user['id'])
-
     role = str(user.get('role', 'student')).lower()
     status = str(user.get('status', 'active')).lower()
     if status == 'suspended':
@@ -260,12 +269,15 @@ def login(payload: AuthLoginRequest, _rl: None = Depends(rate_limiter('login', 1
             raise HTTPException(status_code=403, detail='Lecturer account is pending administrator approval.')
         raise HTTPException(status_code=403, detail='Lecturer account is not approved.')
 
-    token = create_access_token(user_id=user['id'], email=user['email'], role=user.get('role', 'student'))
+    token = create_access_token(
+        user_id=user['id'], email=user['email'], role=user.get('role', 'student'),
+        auth_version=int(user.get('auth_version') or 0),
+    )
     return {'user': _build_user_payload(user), 'token': token}
 
 
 @router.get('/me')
-def me(claims: dict[str, Any] = Depends(get_current_claims)) -> dict[str, Any]:
+def me(claims: dict[str, Any] = Depends(get_current_principal)) -> dict[str, Any]:
     ensure_supabase_enabled()
     user_id = claims.get('sub')
     if not user_id:
@@ -301,12 +313,13 @@ def forgot_password(payload: ForgotPasswordRequest, _rl: None = Depends(rate_lim
 
     user = response.data[0]
     reset_token = secrets.token_urlsafe(32)
+    token_digest = hashlib.sha256(reset_token.encode('utf-8')).hexdigest()
     expires_at = (datetime.now(timezone.utc) + timedelta(minutes=PASSWORD_RESET_EXPIRY_MINUTES)).isoformat()
 
     try:
         supabase.table('password_resets').insert({
             'user_id': user['id'],
-            'token': reset_token,
+            'token': token_digest,
             'expires_at': expires_at,
             'used': False,
         }).execute()
@@ -325,7 +338,10 @@ def forgot_password(payload: ForgotPasswordRequest, _rl: None = Depends(rate_lim
 def reset_password(payload: ResetPasswordRequest) -> dict[str, Any]:
     ensure_supabase_enabled()
 
-    response = supabase.table('password_resets').select('*').eq('token', payload.token).eq('used', False).limit(1).execute()
+    token_digest = hashlib.sha256(payload.token.encode('utf-8')).hexdigest()
+    response = supabase.table('password_resets').select('*').eq('token', token_digest).eq('used', False).limit(1).execute()
+    if not response.data and not supabase_failed(response):
+        response = supabase.table('password_resets').select('*').eq('token', payload.token).eq('used', False).limit(1).execute()
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase lookup failed'))
     if not response.data:
@@ -344,7 +360,16 @@ def reset_password(payload: ResetPasswordRequest) -> dict[str, Any]:
             pass
 
     user_id = reset_row.get('user_id')
-    update_resp = supabase.table('users').update({'password': hash_password(payload.new_password)}).eq('id', user_id).execute()
+    try:
+        current_user = supabase.table('users').select('auth_version').eq('id', user_id).limit(1).execute()
+        next_auth_version = int(((current_user.data or [{}])[0]).get('auth_version') or 0) + 1
+        update_resp = supabase.table('users').update({
+            'password': hash_password(payload.new_password),
+            'auth_version': next_auth_version,
+        }).eq('id', user_id).execute()
+    except Exception:
+        # Compatibility until the additive security migration has been applied.
+        update_resp = supabase.table('users').update({'password': hash_password(payload.new_password)}).eq('id', user_id).execute()
     if supabase_failed(update_resp):
         raise HTTPException(status_code=502, detail=supabase_error_message(update_resp, 'Supabase password update failed'))
 
@@ -360,7 +385,10 @@ def reset_password(payload: ResetPasswordRequest) -> dict[str, Any]:
 def verify_email(payload: VerifyEmailRequest) -> dict[str, Any]:
     ensure_supabase_enabled()
 
-    response = supabase.table('email_verifications').select('*').eq('token', payload.token).eq('used', False).limit(1).execute()
+    token_digest = hashlib.sha256(payload.token.encode('utf-8')).hexdigest()
+    response = supabase.table('email_verifications').select('*').eq('token', token_digest).eq('used', False).limit(1).execute()
+    if not response.data and not supabase_failed(response):
+        response = supabase.table('email_verifications').select('*').eq('token', payload.token).eq('used', False).limit(1).execute()
     if supabase_failed(response):
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase lookup failed'))
     if not response.data:

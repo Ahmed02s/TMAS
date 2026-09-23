@@ -11,6 +11,8 @@ backend/railway-variables.json
 .vite/
 vite.config.*.timestamp-*
 *.tsbuildinfo
+test-results/
+playwright-report/
 *-debug.log*
 logs/
 *.log

@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
-from app.core.config import EXTRA_CORS_ORIGINS
+from app.core.config import APP_ENV, EXTRA_CORS_ORIGINS, FRONTEND_URL
 from app.routers.auth import router as auth_router
 from app.routers.contact import router as contact_router
 from app.routers.courses import router as courses_router
@@ -25,22 +25,39 @@ app = FastAPI(title='TMAS API')
 # credentials mode "include", so their preflight requires Access-Control-Allow-Credentials.
 # This remains safe because origins are restricted to known frontends rather than '*'. Add
 # deployed frontend URLs through CORS_ORIGINS instead of widening that policy.
-DEFAULT_CORS_ORIGINS = [
+LOCAL_CORS_ORIGINS = [
     'http://localhost:5173',
     'http://localhost:8443',
     'http://127.0.0.1:5173',
     'http://127.0.0.1:8443',
-    'https://tmas-dusky.vercel.app',
 ]
+
+allowed_origins = [FRONTEND_URL, *EXTRA_CORS_ORIGINS]
+if APP_ENV in {'development', 'dev', 'test', 'testing'}:
+    allowed_origins.extend(LOCAL_CORS_ORIGINS)
+# Preserve order while removing blanks and duplicates. Wildcards are intentionally rejected
+# because allow_credentials=True and authenticated API responses must never be exposed broadly.
+allowed_origins = list(dict.fromkeys(origin.rstrip('/') for origin in allowed_origins if origin.startswith(('http://', 'https://'))))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[*DEFAULT_CORS_ORIGINS, *EXTRA_CORS_ORIGINS],
-    allow_origin_regex=r'https://.*\.vercel\.app',
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+
+@app.middleware('http')
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    # The API serves JSON, not executable pages. This CSP is deliberately stricter than the SPA.
+    response.headers['Content-Security-Policy'] = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+    return response
 
 # An unhandled exception anywhere in a route (a missing DB table, a bad query, anything not
 # already wrapped in its own try/except) crashes hard enough to bypass CORSMiddleware —

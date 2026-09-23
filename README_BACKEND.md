@@ -1,11 +1,7 @@
-# TMAS backend foundation
+# TMAS architecture
 
-## What is included
-- Simple Node.js HTTP API with JSON storage
-- Authentication endpoints for register/login
-- Admin-only level CRUD endpoints
-- A test covering registration, login, and level creation
+The earlier Node/JSON backend described by this file is obsolete. TMAS is a React and
+TypeScript SPA backed by FastAPI, PostgreSQL/Supabase, and Supabase Storage.
 
-## Run it
-- Start server: `node server/index.js`
-- Run tests: `npm run test:server`
+See `backend/README.md` for local setup, authentication, authorization, environment variables,
+tests, storage security, and migration instructions.

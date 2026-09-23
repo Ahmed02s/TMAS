@@ -55,3 +55,44 @@ def require_course_mutation_access(claims: dict[str, Any], course_code: Any, *, 
     if allow_admin and str(claims.get('role') or '').lower() in ('admin', 'administrator'):
         return
     require_lecturer_course(claims, course_code)
+
+
+def require_course_access(principal: dict[str, Any], course_code: Any) -> None:
+    """Authorize access to course-owned content using the authoritative principal."""
+    role = str(principal.get('role') or '').lower()
+    if role in ('admin', 'administrator'):
+        return
+    if role == 'lecturer':
+        require_lecturer_course(principal, course_code)
+        return
+    if role != 'student':
+        raise HTTPException(status_code=403, detail='You do not have access to this course')
+
+    normalized = normalize_course_code(course_code)
+    course_response = supabase.table('courses').select('id,code,level,program').execute()
+    if supabase_failed(course_response):
+        raise HTTPException(status_code=502, detail='Failed to verify course access')
+    course = next(
+        (row for row in (course_response.data or []) if normalize_course_code(row.get('code')) == normalized),
+        None,
+    )
+    if not course:
+        raise HTTPException(status_code=404, detail='Course not found')
+    try:
+        enrollment = supabase.table('course_enrollments').select('id').eq(
+            'course_id', course['id']
+        ).eq('student_id', principal.get('sub')).in_('status', ['active', 'completed']).limit(1).execute()
+        if not supabase_failed(enrollment):
+            if enrollment.data:
+                return
+            raise HTTPException(status_code=403, detail='You are not enrolled in this course')
+    except HTTPException:
+        raise
+    except Exception:
+        # Compatibility for deployments awaiting the explicit-enrollment migration.
+        same_level = str(principal.get('level') or '').strip().lower() == str(course.get('level') or '').strip().lower()
+        course_program = str(course.get('program') or '').strip().lower()
+        same_program = not course_program or course_program == str(principal.get('program') or '').strip().lower()
+        if same_level and same_program:
+            return
+    raise HTTPException(status_code=403, detail='You are not enrolled in this course')

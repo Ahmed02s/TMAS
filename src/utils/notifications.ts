@@ -136,6 +136,7 @@ export async function dispatchPushNotification(
     target_role?: 'all' | 'student' | 'lecturer' | 'admin'
     user_id?: string
     type?: 'info' | 'success' | 'warning' | 'danger'
+    course?: string
   },
   /** Explicit bearer token for the one call site (lecturer registration) that fires before
    * any session is stored in localStorage, so the global fetch-auth patch has nothing to

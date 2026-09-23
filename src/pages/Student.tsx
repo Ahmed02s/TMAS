@@ -759,15 +759,6 @@ export default function Student({ onNavigate }: { onNavigate: (v: AppView) => vo
           const filtered = prev.filter(q => q.quizId !== activeQuiz)
           return [attemptRecord, ...filtered]
         })
-        try {
-          const { dispatchPushNotification } = await import('../utils/notifications')
-          await dispatchPushNotification({
-            title: 'Student Quiz Submission',
-            message: `${savedUser?.name || 'A student'} submitted ${selectedQuiz?.title || 'a quiz'} (${attemptRecord.score}% score).`,
-            target_role: 'lecturer',
-            type: 'info',
-          })
-        } catch {}
         await loadStudentData()
       } else if (res.status === 403) {
         // The server enforces the time limit / open-close window independently of the

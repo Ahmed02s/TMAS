@@ -32,9 +32,8 @@ def is_bcrypt_hash(value: str) -> bool:
 
 
 def verify_password(plain_password: str, stored_password: str) -> bool:
-    """True if `plain_password` matches `stored_password`, whether the latter is a bcrypt
-    hash (current format) or legacy plaintext (pre-existing accounts)."""
-    if not stored_password:
+    """Verify a bcrypt password hash; plaintext database values are always rejected."""
+    if not stored_password or not is_bcrypt_hash(stored_password):
         return False
     if is_bcrypt_hash(stored_password):
         try:
@@ -43,15 +42,16 @@ def verify_password(plain_password: str, stored_password: str) -> bool:
             return False
     # Legacy plaintext account — constant-time-ish compare is unnecessary here since this
     # path only exists for migration and disappears the moment the account is upgraded.
-    return plain_password == stored_password
+    return False
 
 
-def create_access_token(*, user_id: str, email: str, role: str) -> str:
+def create_access_token(*, user_id: str, email: str, role: str, auth_version: int = 0) -> str:
     now = int(time.time())
     payload = {
         'sub': str(user_id),
         'email': email,
         'role': role,
+        'auth_version': int(auth_version),
         'iat': now,
         'exp': now + JWT_EXPIRES_MINUTES * 60,
     }
@@ -120,11 +120,47 @@ def get_current_claims_optional(authorization: str | None = Header(default=None)
     return decode_access_token(token)
 
 
+def _load_authoritative_user(user_id: str) -> dict[str, Any] | None:
+    from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed
+
+    ensure_supabase_enabled()
+    try:
+        response = supabase.table('users').select(
+            'id,name,email,role,status,email_verified,level,program,auth_version'
+        ).eq('id', user_id).limit(1).execute()
+    except Exception:
+        response = None
+    if response is None or supabase_failed(response):
+        response = supabase.table('users').select(
+            'id,name,email,role,status,email_verified,level,program'
+        ).eq('id', user_id).limit(1).execute()
+    if supabase_failed(response) or not response.data:
+        return None
+    return response.data[0]
+
+
+def get_current_principal(claims: dict[str, Any] = Depends(get_current_claims)) -> dict[str, Any]:
+    """Reload current account state so stale JWT role/status claims cannot grant access."""
+    user_id = str(claims.get('sub') or '')
+    if not user_id:
+        raise HTTPException(status_code=401, detail='Invalid session')
+    user = _load_authoritative_user(user_id)
+    if not user:
+        raise HTTPException(status_code=401, detail='Account no longer exists')
+    if str(user.get('status') or '').lower() != 'active':
+        raise HTTPException(status_code=403, detail='Account is not active')
+    if user.get('email_verified', True) is False:
+        raise HTTPException(status_code=403, detail='Email verification is required')
+    if int(user.get('auth_version') or 0) != int(claims.get('auth_version') or 0):
+        raise HTTPException(status_code=401, detail='Session has been revoked')
+    return {**claims, **user, 'sub': str(user['id']), 'role': str(user.get('role') or '').lower()}
+
+
 def require_roles(*roles: str):
     """Dependency factory: `Depends(require_roles('admin', 'administrator'))`."""
     normalized = {r.lower() for r in roles}
 
-    def dependency(claims: dict[str, Any] = Depends(get_current_claims)) -> dict[str, Any]:
+    def dependency(claims: dict[str, Any] = Depends(get_current_principal)) -> dict[str, Any]:
         if str(claims.get('role', '')).lower() not in normalized:
             raise HTTPException(status_code=403, detail='You do not have permission to perform this action')
         return claims

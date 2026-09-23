@@ -13,7 +13,7 @@ from postgrest import exceptions as _postgrest_exceptions
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.core.security import create_attempt_token, get_current_claims, get_current_claims_optional, require_roles, verify_attempt_token
+from app.core.security import create_attempt_token, get_current_principal, get_current_claims_optional, require_roles, verify_attempt_token
 from app.core.authorization import lecturer_course_codes as assigned_lecturer_course_codes, normalize_course_code, require_lecturer_course
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 from app.core.config import QROK_API_KEY, QROK_API_URL
@@ -1619,7 +1619,7 @@ def _record_assessment_started(quiz_id: int, student_id: str, resumed: bool = Fa
 
 
 @router.post('/{quiz_id}/start')
-def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(get_current_claims)) -> dict[str, Any]:
+def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(get_current_principal)) -> dict[str, Any]:
     """Called the moment a student opens the quiz. Records an in-progress attempt
     with score=0 immediately, so that even if the student closes without submitting
     a score of 0 is persisted."""
@@ -1782,7 +1782,7 @@ def start_quiz(quiz_id: int, payload: QuizStartRequest, claims: dict = Depends(g
 
 
 @router.post('/{quiz_id}/autosave')
-def autosave_quiz_answers(quiz_id: int, payload: QuizAutosaveRequest, claims: dict = Depends(get_current_claims)) -> dict[str, Any]:
+def autosave_quiz_answers(quiz_id: int, payload: QuizAutosaveRequest, claims: dict = Depends(get_current_principal)) -> dict[str, Any]:
     _verify_acting_as_self(claims, payload.student_id)
     ensure_supabase_enabled()
     attempts = _get_student_attempts(quiz_id, payload.student_id)
@@ -1807,7 +1807,7 @@ def autosave_quiz_answers(quiz_id: int, payload: QuizAutosaveRequest, claims: di
 
 
 @router.post('/{quiz_id}/integrity-events', status_code=201)
-def record_quiz_integrity_event(quiz_id: int, payload: QuizIntegrityEventRequest, claims: dict = Depends(get_current_claims)) -> dict[str, Any]:
+def record_quiz_integrity_event(quiz_id: int, payload: QuizIntegrityEventRequest, claims: dict = Depends(get_current_principal)) -> dict[str, Any]:
     _verify_acting_as_self(claims, payload.student_id)
     ensure_supabase_enabled()
     record = {
@@ -1830,8 +1830,12 @@ def record_quiz_integrity_event(quiz_id: int, payload: QuizIntegrityEventRequest
 
 
 @router.get('/{quiz_id}/integrity-events')
-def list_quiz_integrity_events(quiz_id: int, student_id: str, _claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
+def list_quiz_integrity_events(quiz_id: int, student_id: str, claims: dict = Depends(require_roles('lecturer'))) -> dict[str, Any]:
     ensure_supabase_enabled()
+    quiz_response = supabase.table('quizzes').select('*').eq('id', quiz_id).limit(1).execute()
+    if supabase_failed(quiz_response) or not quiz_response.data:
+        raise HTTPException(status_code=404, detail='Quiz not found')
+    _require_quiz_review_access(_normalize_quiz_row(quiz_response.data[0]), claims)
     try:
         response = supabase.table('quiz_integrity_events').select('*').eq('quiz_id', quiz_id).eq('student_id', student_id).order('occurred_at').execute()
     except Exception as exc:
@@ -1983,7 +1987,7 @@ def grant_attempt_retry(attempt_id: int, payload: QuizGrantRetryRequest, claims:
 
 
 @router.post('/{quiz_id}/submit')
-def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Depends(get_current_claims)) -> dict[str, Any]:
+def submit_quiz(quiz_id: int, payload: QuizSubmissionRequest, claims: dict = Depends(get_current_principal)) -> dict[str, Any]:
     _verify_acting_as_self(claims, payload.student_id)
     ensure_supabase_enabled()
     response = supabase.table('quizzes').select('*').eq('id', quiz_id).limit(1).execute()
@@ -2223,7 +2227,7 @@ def _quiz_is_locked(quiz: dict[str, Any], now: datetime) -> bool:
 
 
 @router.get('/stats')
-def get_quiz_stats() -> dict[str, Any]:
+def get_quiz_stats(_claims: dict = Depends(require_roles('admin', 'administrator'))) -> dict[str, Any]:
     """Institution-wide quiz completion snapshot for the admin dashboard. `/completed`
     is per-student (requires student_id) so it always returned empty for admin callers —
     this is the aggregate equivalent: how many of all published quizzes have received at
@@ -2454,8 +2458,15 @@ def list_available_quizzes(
     level: str | None = None,
     program: str | None = None,
     student_id: str | None = None,
-    claims: dict | None = Depends(get_current_claims_optional),
+    claims: dict = Depends(get_current_principal),
 ) -> dict[str, Any]:
+    caller_role = str(claims.get('role') or '').lower()
+    if caller_role == 'student':
+        if student_id and str(student_id) != str(claims.get('sub')):
+            raise HTTPException(status_code=403, detail='You can only view your own assessments')
+        student_id = str(claims.get('sub'))
+        level = str(claims.get('level') or level or '') or None
+        program = str(claims.get('program') or program or '') or None
     # No student_id at all is a legitimate admin-dashboard aggregate call (see Admin.tsx),
     # and admins/lecturers already have broader student-visibility elsewhere (dashboard.py,
     # course student-progress) — only enforce identity for a student-role caller who passed
@@ -2481,6 +2492,9 @@ def list_available_quizzes(
     now = datetime.now(timezone.utc)
     quizzes: list[dict[str, Any]] = []
     for quiz in all_quizzes:
+        if caller_role == 'lecturer':
+            if normalize_course_code(quiz.get('course')) not in assigned_lecturer_course_codes(claims):
+                continue
         if _quiz_is_expired(quiz, now):
             continue
         # Drafts are persisted the moment a lecturer generates a bank (so it shows up in
@@ -2557,8 +2571,17 @@ def list_completed_quizzes(
     student_id: str | None = None,
     level: str | None = None,
     program: str | None = None,
-    claims: dict | None = Depends(get_current_claims_optional),
+    claims: dict = Depends(get_current_principal),
 ) -> dict[str, Any]:
+    caller_role = str(claims.get('role') or '').lower()
+    if caller_role == 'student':
+        if student_id and str(student_id) != str(claims.get('sub')):
+            raise HTTPException(status_code=403, detail='You can only view your own results')
+        student_id = str(claims.get('sub'))
+        level = str(claims.get('level') or level or '') or None
+        program = str(claims.get('program') or program or '') or None
+    elif caller_role == 'lecturer' and student_id:
+        raise HTTPException(status_code=403, detail='Use assigned-course attempt review for student results')
     ensure_supabase_enabled()
     if not student_id:
         return {'quizzes': []}
@@ -2642,8 +2665,15 @@ def get_quiz_details(
     level: str | None = None,
     program: str | None = None,
     student_id: str | None = None,
-    claims: dict | None = Depends(get_current_claims_optional),
+    claims: dict = Depends(get_current_principal),
 ) -> dict[str, Any]:
+    caller_role = str(claims.get('role') or '').lower()
+    if caller_role == 'student':
+        if student_id and str(student_id) != str(claims.get('sub')):
+            raise HTTPException(status_code=403, detail='You can only view your own quiz data')
+        student_id = str(claims.get('sub'))
+        level = str(claims.get('level') or level or '') or None
+        program = str(claims.get('program') or program or '') or None
     if student_id and claims is not None and str(claims.get('role') or '') not in ('admin', 'administrator', 'lecturer'):
         _verify_acting_as_self_if_authenticated(claims, student_id)
     ensure_supabase_enabled()
@@ -2654,6 +2684,8 @@ def get_quiz_details(
         raise HTTPException(status_code=404, detail='Quiz not found')
 
     quiz = _normalize_quiz_row(response.data[0])
+    if caller_role == 'lecturer':
+        require_lecturer_course(claims, quiz.get('course'))
     now = datetime.now(timezone.utc)
     if _quiz_is_expired(quiz, now):
         raise HTTPException(status_code=403, detail='Quiz deadline has passed')

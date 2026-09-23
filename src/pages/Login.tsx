@@ -348,7 +348,7 @@ export default function Login({
     const fnErr = !firstName.trim() ? 'First name is required.' : ''
     const lnErr = !lastName.trim() ? 'Last name is required.' : ''
     const reErr = validateRegistrationEmail(registerEmail)
-    const rpErr = !registerPassword ? 'Password is required.' : registerPassword.length < 6 ? 'Password must be at least 6 characters.' : ''
+    const rpErr = !registerPassword ? 'Password is required.' : registerPassword.length < 8 ? 'Password must be at least 8 characters.' : ''
     const siErr = role === 'student' ? validateStudentId(studentIndexNumber) : ''
 
     setFirstNameErr(fnErr)
@@ -388,21 +388,6 @@ export default function Login({
       setVerificationSendFailed(data.verification_email_sent === false)
 
       if (role === 'lecturer') {
-        try {
-          const { dispatchPushNotification } = await import('../utils/notifications')
-          // Not logged in yet at this point (no token in localStorage), so the freshly
-          // issued registration token is passed explicitly — the backend now requires
-          // authentication on this endpoint.
-          await dispatchPushNotification(
-            {
-              title: 'New Lecturer Registration Pending',
-              message: `${name} (${trimmedEmail}) has registered and is awaiting administrator approval.`,
-              target_role: 'admin',
-              type: 'warning',
-            },
-            data.token,
-          )
-        } catch {}
         // A new lecturer needs BOTH admin approval AND email verification before they can
         // log in (login()'s email_verified gate is checked before the pending-approval
         // check) — track the address so the modal below can tell them that up front.

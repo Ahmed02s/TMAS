@@ -1,22 +1,24 @@
 [
   {
-    "id": "user-1",
-    "name": "Ahmed",
-    "email": "saakaahmed2002@gmail.com",
+    "id": "fixture-student",
+    "name": "Test Student",
+    "email": "student.fixture@example.invalid",
     "role": "student",
-    "password": "123456789",
-    "level": "Level 400",
+    "password": "$2b$12$YbRMICRA2tpHJ4zelfEyiOis9bTDcQdAuy6RtqbmW0gtsWSpPG1EK",
+    "level": "Level 100",
     "program": "Computer Science",
-    "status": "active"
+    "status": "active",
+    "email_verified": true
   },
   {
-    "id": "user-2",
-    "name": "Ahmed",
-    "email": "saakamed3@gmail.com",
+    "id": "fixture-lecturer",
+    "name": "Test Lecturer",
+    "email": "lecturer.fixture@example.invalid",
     "role": "lecturer",
-    "password": "123456789",
+    "password": "$2b$12$YbRMICRA2tpHJ4zelfEyiOis9bTDcQdAuy6RtqbmW0gtsWSpPG1EK",
     "level": null,
-    "program": null,
-    "status": "pending"
+    "program": "Computer Science",
+    "status": "pending",
+    "email_verified": false
   }
 ]

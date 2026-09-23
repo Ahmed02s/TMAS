@@ -1079,6 +1079,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
           message: `${lecturerName} uploaded new course materials for ${selectedCourse}.`,
           target_role: 'student',
           type: 'info',
+          course: selectedCourse,
         })
       } catch {}
 
@@ -1276,6 +1277,7 @@ export default function Lecturer({ onNavigate }: { onNavigate: (v: AppView) => v
           message: `3 Quiz Tiers (Foundational, Intermediate, Mastery) published for ${genCourse}.`,
           target_role: 'student',
           type: 'info',
+          course: genCourse,
         })
       } catch {}
 

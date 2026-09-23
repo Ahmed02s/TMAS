@@ -26,6 +26,7 @@ CONTACT_EMAIL = os.getenv('CONTACT_EMAIL', 'medsa0206@gmail.com')
 # a link back to the sender's own machine instead of the live site — set FRONTEND_URL on
 # Render to the real deployed frontend origin (no trailing slash) to override this default.
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://tmas-dusky.vercel.app')
+APP_ENV = os.getenv('APP_ENV', 'development').strip().lower()
 QROK_API_KEY = os.getenv('QROK_API_KEY', os.getenv('GROQ_API_KEY', ''))
 QROK_API_URL = os.getenv('QROK_API_URL', os.getenv('GROQ_API_URL', 'https://api.groq.com/openai/v1/chat/completions'))
 QROK_MODEL = os.getenv('QROK_MODEL', os.getenv('GROQ_MODEL', 'openai/gpt-oss-20b'))

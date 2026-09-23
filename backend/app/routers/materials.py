@@ -9,8 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from app.core.security import get_current_claims, get_current_claims_optional, require_roles
-from app.core.authorization import require_course_mutation_access
+from app.core.security import get_current_principal, require_roles
+from app.core.authorization import require_course_access, require_course_mutation_access
 from app.core.supabase_client import ensure_supabase_enabled, supabase, supabase_failed, supabase_error_message
 from app.core.rate_limit import rate_limiter
 from app.services import office_convert
@@ -134,8 +134,23 @@ def _resolve_material_file(material: dict) -> Path | None:
     return _resolve_material_path(material) or _fetch_remote_material_copy(material)
 
 
+def _authorize_material(material_id: int, claims: dict[str, Any]) -> dict[str, Any]:
+    response = supabase.table('materials').select('*').eq('id', material_id).limit(1).execute()
+    if supabase_failed(response):
+        raise HTTPException(status_code=502, detail='Failed to verify material access')
+    if not response.data:
+        raise HTTPException(status_code=404, detail='Material not found')
+    material = response.data[0]
+    require_course_access(claims, material.get('course'))
+    return material
+
+
 @router.get('')
-def list_materials(course: str | None = None, lecturer: str | None = None) -> dict[str, Any]:
+def list_materials(
+    course: str | None = None,
+    lecturer: str | None = None,
+    claims: dict[str, Any] = Depends(get_current_principal),
+) -> dict[str, Any]:
     ensure_supabase_enabled()
     query = supabase.table('materials').select('*')
     if lecturer:
@@ -163,7 +178,15 @@ def list_materials(course: str | None = None, lecturer: str | None = None) -> di
             )
         ]
 
-    return {'materials': materials}
+    authorized = []
+    for material in materials:
+        try:
+            require_course_access(claims, material.get('course'))
+            authorized.append(material)
+        except HTTPException as exc:
+            if exc.status_code not in (403, 404):
+                raise
+    return {'materials': authorized}
 
 
 # ─────────────────────────────────────────────
@@ -172,11 +195,23 @@ def list_materials(course: str | None = None, lecturer: str | None = None) -> di
 # ─────────────────────────────────────────────
 
 @router.get('/reading-progress')
-def get_reading_progress(student_id: str | None = None, course: str | None = None) -> dict[str, Any]:
+def get_reading_progress(
+    student_id: str | None = None,
+    course: str | None = None,
+    claims: dict[str, Any] = Depends(get_current_principal),
+) -> dict[str, Any]:
     """Return which material IDs a student has genuinely completed (per scroll-depth +
     time-on-page telemetry, not merely opened), and per-course reading progress."""
-    if not student_id:
-        return {'read_ids': [], 'course_progress': {}}
+    if str(claims.get('role')) == 'student':
+        if student_id and str(student_id) != str(claims.get('sub')):
+            raise HTTPException(status_code=403, detail='You can only view your own reading progress')
+        student_id = str(claims.get('sub'))
+    elif not student_id:
+        raise HTTPException(status_code=400, detail='student_id is required')
+    if str(claims.get('role')) == 'lecturer' and not course:
+        raise HTTPException(status_code=400, detail='course is required for lecturer progress access')
+    if course:
+        require_course_access(claims, course)
 
     ensure_supabase_enabled()
 
@@ -252,7 +287,7 @@ class MarkReadRequest(BaseModel):
 def mark_material_read(
     material_id: int,
     payload: MarkReadRequest,
-    claims: dict[str, Any] | None = Depends(get_current_claims_optional),
+    claims: dict[str, Any] = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """Records that a student has opened/read a material, so reading-progress endpoints
     (student-facing and the lecturer's per-student course monitor) have real data to show.
@@ -268,6 +303,7 @@ def mark_material_read(
     if not response.data:
         raise HTTPException(status_code=404, detail='Material not found')
     material = response.data[0]
+    require_course_access(claims, material.get('course'))
 
     record = {
         'student_id': payload.student_id,
@@ -304,7 +340,7 @@ class MaterialProgressRequest(BaseModel):
 def update_material_progress(
     material_id: int,
     payload: MaterialProgressRequest,
-    claims: dict[str, Any] | None = Depends(get_current_claims_optional),
+    claims: dict[str, Any] = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """Scroll-depth + time-on-page telemetry, reported periodically while a student has a
     material open. `time_spent_delta` is the active seconds since the previous report (not
@@ -326,6 +362,7 @@ def update_material_progress(
     if not response.data:
         raise HTTPException(status_code=404, detail='Material not found')
     material = response.data[0]
+    require_course_access(claims, material.get('course'))
 
     existing_scroll = 0
     existing_time = 0
@@ -362,12 +399,13 @@ def update_material_progress(
 def get_material_progress(
     material_id: int,
     student_id: str,
-    claims: dict[str, Any] | None = Depends(get_current_claims_optional),
+    claims: dict[str, Any] = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """Lets the reader resume showing a student's real progress on a material they've
     already partially read, instead of restarting the telemetry display from zero."""
     ensure_supabase_enabled()
     _verify_acting_as_self_if_authenticated(claims, student_id)
+    _authorize_material(material_id, claims)
     if not student_id:
         return {'scroll_percent': 0, 'time_spent_seconds': 0, 'completed': False}
     try:
@@ -395,7 +433,7 @@ class PageReadRequest(BaseModel):
 def record_page_read(
     material_id: int,
     payload: PageReadRequest,
-    claims: dict[str, Any] | None = Depends(get_current_claims_optional),
+    claims: dict[str, Any] = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """Granular per-page telemetry for the paginated PDF reader (PdfReader.tsx), on top of
     the existing scroll/time model in update_material_progress — lets a lecturer eventually
@@ -416,6 +454,7 @@ def record_page_read(
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase get material failed'))
     if not response.data:
         raise HTTPException(status_code=404, detail='Material not found')
+    require_course_access(claims, response.data[0].get('course'))
 
     from app.routers.quizzes import _is_missing_table_error
 
@@ -453,13 +492,14 @@ def record_page_read(
 def get_material_last_page(
     material_id: int,
     student_id: str,
-    claims: dict[str, Any] | None = Depends(get_current_claims_optional),
+    claims: dict[str, Any] = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """Lets the PDF reader resume at the student's last-viewed page instead of always
     reopening at page 1. Returns nulls (never errors) if there's nothing to resume from yet,
     or if this deployment hasn't run the migration adding `last_page`/`total_pages`."""
     ensure_supabase_enabled()
     _verify_acting_as_self_if_authenticated(claims, student_id)
+    _authorize_material(material_id, claims)
     if not student_id:
         return {'last_page': None, 'total_pages': None}
     try:
@@ -486,6 +526,8 @@ async def upload_materials(
     if not course or not lecturer:
         raise HTTPException(status_code=400, detail='Course and lecturer are required')
     require_course_mutation_access(claims, course, allow_admin=True)
+    if str(claims.get('role') or '').lower() == 'lecturer':
+        lecturer = str(claims.get('name') or lecturer).strip()
 
     if not files:
         raise HTTPException(status_code=400, detail='No files uploaded')
@@ -635,6 +677,7 @@ def mark_material_processed(
         raise HTTPException(status_code=502, detail=supabase_error_message(response, 'Supabase get material failed'))
     if not response.data:
         raise HTTPException(status_code=404, detail='Material not found')
+    require_course_access(claims, response.data[0].get('course'))
     require_course_mutation_access(claims, response.data[0].get('course'), allow_admin=True)
 
     update_resp = supabase.table('materials').update({'status': 'Processed'}).eq('id', material_id).execute()
@@ -645,7 +688,7 @@ def mark_material_processed(
 
 
 @router.api_route('/{material_id}/download', methods=['GET', 'HEAD'])
-def download_material(material_id: int):
+def download_material(material_id: int, claims: dict[str, Any] = Depends(get_current_principal)):
     ensure_supabase_enabled()
     response = supabase.table('materials').select('*').eq('id', material_id).limit(1).execute()
     if supabase_failed(response):
@@ -654,6 +697,7 @@ def download_material(material_id: int):
         raise HTTPException(status_code=404, detail='Material not found')
 
     material = response.data[0]
+    require_course_access(claims, material.get('course'))
     resolved_path = _resolve_material_path(material)
 
     if not resolved_path:
@@ -669,7 +713,7 @@ def download_material(material_id: int):
 
 
 @router.api_route('/{material_id}/pdf', methods=['GET', 'HEAD'])
-def download_material_pdf(material_id: int):
+def download_material_pdf(material_id: int, claims: dict[str, Any] = Depends(get_current_principal)):
     """Serves a PPTX/PPT's converted PDF (see office_convert.py) so the frontend can read it
     through PdfReader instead of the client-side PPTX approximation. 404s if this material
     was never converted (uploaded before the feature existed, not a PPTX, or converted on a
@@ -680,7 +724,7 @@ def download_material_pdf(material_id: int):
         # Named column select (not '*') fails outright if `pdf_url` doesn't exist yet on
         # this deployment — treated the same as "not converted" rather than a 502, since
         # either way there's no converted PDF to serve.
-        response = supabase.table('materials').select('pdf_url').eq('id', material_id).limit(1).execute()
+        response = supabase.table('materials').select('pdf_url,course').eq('id', material_id).limit(1).execute()
     except postgrest.exceptions.APIError:
         raise HTTPException(status_code=404, detail='No converted PDF available for this material')
     if supabase_failed(response):
@@ -688,6 +732,7 @@ def download_material_pdf(material_id: int):
     if not response.data:
         raise HTTPException(status_code=404, detail='Material not found')
 
+    require_course_access(claims, response.data[0].get('course'))
     pdf_url = response.data[0].get('pdf_url')
     if not pdf_url:
         raise HTTPException(status_code=404, detail='No converted PDF available for this material')
@@ -697,7 +742,7 @@ def download_material_pdf(material_id: int):
 
 
 @router.get('/{material_id}/content')
-def get_material_content(material_id: int):
+def get_material_content(material_id: int, claims: dict[str, Any] = Depends(get_current_principal)):
     ensure_supabase_enabled()
     response = supabase.table('materials').select('*').eq('id', material_id).limit(1).execute()
     if supabase_failed(response):
@@ -706,6 +751,7 @@ def get_material_content(material_id: int):
         raise HTTPException(status_code=404, detail='Material not found')
 
     material = response.data[0]
+    require_course_access(claims, material.get('course'))
     material_name = str(material.get('name') or '').strip()
     course_name = str(material.get('course') or '').strip()
 
@@ -881,7 +927,7 @@ def ai_tutor(
     material_id: int,
     payload: TutorRequest,
     _rate_limit: None = Depends(rate_limiter('ai-tutor', 12, 60)),
-    claims: dict[str, Any] = Depends(get_current_claims),
+    claims: dict[str, Any] = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """Material-grounded AI Tutor integrated with the Material Reader. Direct context
     injection (current page from PdfReader.tsx, or the whole material as a fallback) — see
@@ -909,6 +955,7 @@ def ai_tutor(
         raise HTTPException(status_code=404, detail='Material not found')
     material = response.data[0]
     course = str(material.get('course') or '')
+    require_course_access(claims, course)
 
     # Course-access check — mirrors the level/program eligibility check quizzes.py already
     # enforces for a student's own course-restricted content; materials has no separate
