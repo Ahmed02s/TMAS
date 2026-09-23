@@ -34,9 +34,9 @@ test.describe("staging account workflows", () => {
     const login = await request.post("/api/auth/login", { data: { email, password } });
     expect(login.status()).toBe(200);
     const body = await login.json();
-    expect(body.access_token).toBeTruthy();
+    expect(body.token).toBeTruthy();
     const notifications = await request.get("/api/notifications?role=student", {
-      headers: { Authorization: `Bearer ${body.access_token}` },
+      headers: { Authorization: `Bearer ${body.token}` },
     });
     expect(notifications.status()).toBe(200);
   });
