@@ -154,8 +154,8 @@ def test_staging_authorization_matrix():
             )
 
         courses = client.table('courses').insert([
-            {'code': course_codes['a'], 'name': 'Integration Course A'},
-            {'code': course_codes['b'], 'name': 'Integration Course B'},
+            {'code': course_codes['a'], 'title': 'Integration Course A'},
+            {'code': course_codes['b'], 'title': 'Integration Course B'},
         ]).execute().data
         course_by_code = {row['code']: row['id'] for row in courses}
         course_ids.extend(int(row['id']) for row in courses)
