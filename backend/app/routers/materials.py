@@ -46,6 +46,9 @@ def _format_size(size: int) -> str:
 
 
 def _sanitize_filename(filename: str) -> str:
+    # Upload names can contain either POSIX or Windows separators regardless of
+    # which OS runs the API. Normalize both before taking the basename.
+    filename = filename.replace('\\\\', '/')
     filename = Path(filename).name
     return re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
 
