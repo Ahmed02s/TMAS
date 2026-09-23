@@ -22,6 +22,12 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt pytest
       - run: python -m pytest -q
+      - name: Run TMAS staging database security test
+        env:
+          TMAS_TEST_ENV: staging
+          TEST_SUPABASE_URL: https://tmibummobsgixleyabit.supabase.co
+          TEST_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.TEST_SUPABASE_SERVICE_ROLE_KEY }}
+        run: python -m pytest -q tests/integration/test_staging_database.py
 
   frontend:
     runs-on: ubuntu-latest
